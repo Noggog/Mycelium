@@ -17,7 +17,15 @@ public record DownloaderConfig(
     string DownloadDir,
     string RipBinary,
     string Quality,
-    string FallbackQuality,
+    /// <summary>
+    /// Qualities to retry at, best first, when <paramref name="Quality"/> doesn't yield every track.
+    /// A chain rather than a single step because Deezer's formats vary <i>per track</i>: an album can
+    /// have no FLAC at all, a 320 master for one track and only 128 for the rest. streamrip 2.1.0 has
+    /// no per-track downgrade of its own — when a format is missing it builds a URL on the retired
+    /// e-cdns-proxy CDN, which no longer resolves — so walking the chain here is what recovers those
+    /// tracks. Each pass keeps only what the previous ones missed, so quality never regresses.
+    /// </summary>
+    IReadOnlyList<string> FallbackQualities,
     string Codec,
     int BatchSize,
     TimeSpan ItemDelay,

@@ -92,9 +92,11 @@ public class StreamripDownloaderTests : IDisposable
         _deezer.GetAlbumTracks(AlbumId).Returns(Enumerable.Range(0, trackCount)
             .Select(i => new DeezerTrack { id = i, title = $"Track {i}" }).ToArray());
 
-    private StreamripDownloader Sut() =>
+    /// <summary>Null means the production default chain; an empty list means no fallback at all.</summary>
+    private StreamripDownloader Sut(IReadOnlyList<string>? fallbacks = null) =>
         new(new DownloaderConfig(
-                DownloadDir: _library, RipBinary: _rip, Quality: "2", FallbackQuality: "1",
+                DownloadDir: _library, RipBinary: _rip, Quality: "2",
+                FallbackQualities: fallbacks ?? new[] { "1", "0" },
                 Codec: "", BatchSize: 1, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
                 DownloadTimeout: TimeSpan.FromMinutes(1), SettleInterval: TimeSpan.Zero,
                 SettleWindow: TimeSpan.Zero),
@@ -125,6 +127,53 @@ public class StreamripDownloaderTests : IDisposable
         Landed().Should().Equal(
             "02. Prana Focus.mp3", "03. Manufracture.mp3",
             "04. Advanced Cool Down.mp3", "05. Shambhala.mp3");
+    }
+
+    // ---- The real Food Pyramid case: Deezer's formats vary per track, so one downgrade isn't enough ----
+
+    [Fact]
+    public async Task An_album_whose_tracks_have_different_best_formats_walks_the_whole_quality_chain()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(4);
+        // No FLAC for this album at all; exactly one track has a 320 master; the rest are 128 only.
+        // Stopping after quality 1 — as a single fallback does — abandons three tracks, because
+        // streamrip's own retry targets a CDN Deezer has retired.
+        Plan("1", "04. Advanced Cool Down.mp3");
+        Plan("0", "02. Prana Focus.mp3", "03. Manufracture.mp3",
+            "04. Advanced Cool Down.mp3", "05. Shambhala.mp3");
+
+        (await Sut().Request(Item())).Should().BeTrue();
+
+        Landed().Should().Equal(
+            "02. Prana Focus.mp3", "03. Manufracture.mp3",
+            "04. Advanced Cool Down.mp3", "05. Shambhala.mp3");
+    }
+
+    [Fact]
+    public async Task The_chain_stops_as_soon_as_the_album_is_whole()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(2);
+        Plan("1", "01. One.mp3", "02. Two.mp3");
+        // Quality 0 would overwrite both with different files; reaching it at all is the bug.
+        Plan("0", "01. One.mp3", "02. Two.mp3", "99. Should Never Appear.mp3");
+
+        (await Sut().Request(Item())).Should().BeTrue();
+
+        Landed().Should().Equal("01. One.mp3", "02. Two.mp3");
+    }
+
+    [Fact]
+    public async Task An_empty_fallback_chain_leaves_the_preferred_pass_as_the_only_attempt()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(4);
+        Plan("1", "02. Prana Focus.mp3");
+
+        (await Sut(Array.Empty<string>()).Request(Item())).Should().BeFalse();
+
+        Landed().Should().BeEmpty();
     }
 
     // ---- The mixed album: lossless tracks must survive the fallback pass ----

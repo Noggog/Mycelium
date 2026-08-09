@@ -121,13 +121,22 @@ in Mongo (not an env var), so it survives redeploys and takes effect without a r
 
 - **Logs:** the app writes rolling logs to the `app_logs` volume (`/app/logs`) and to stdout
   (`podman logs mycelium-app-1`).
-- **An album downloaded but no files appeared:** Deezer has no lossless for it. The app requests
-  FLAC (`DEEZER_QUALITY=2`), re-runs anything short at `DEEZER_FALLBACK_QUALITY=1` (320kbps MP3),
-  and merges the two per track, so this now resolves itself — grep the log for `PARTIAL` or
-  `No tracks downloaded` to see what a grab actually landed. Each attempt stages under
+- **An album downloaded but no files appeared, or only some tracks did:** Deezer's available formats
+  vary **per track**, not per album — one track can have a 320 master while the rest are 128 only.
+  The app requests FLAC (`DEEZER_QUALITY=2`) and then keeps downgrading — 320kbps, then 128 — while
+  the album is short of Deezer's own track count, merging results per track so lossless is never
+  downgraded. The ladder is derived from `DEEZER_QUALITY`, so `DEEZER_FALLBACK_QUALITY` should stay
+  unset unless you want to *stop* it downgrading (set it blank to accept incomplete albums instead
+  of 128kbps files). Grep the log for `PARTIAL` or `No tracks downloaded`; both now include streamrip's
+  output, which names each failing track and why. Each attempt stages under
   `/music/.mycelium-incoming/` and only promotes verified files, so a failed grab leaves the
   library untouched; a leftover directory there means the app was killed mid-download and is safe
   to delete.
+- **`Cannot connect to host e-cdns-proxy-N.dzcdn.net` in the log:** expected, and handled. Deezer
+  retired that CDN, and streamrip 2.1.0 still builds a URL on it whenever the media API returns no
+  URL for a track at the requested format. That track can only be recovered by retrying it at a
+  lower quality, which is exactly what the fallback chain above does — so these errors are normal
+  on the higher-quality passes and harmless as long as the album ends up complete.
 - **streamrip is pinned** (`streamrip==2.1.0` in the `Dockerfile`) because the downloader
   compensates for release-specific behaviour: it exits 0 even when every track failed, and has no
   per-track quality downgrade. Re-check `StreamripDownloader` when bumping it.

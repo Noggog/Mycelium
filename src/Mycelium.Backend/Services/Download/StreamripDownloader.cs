@@ -26,9 +26,17 @@ namespace Mycelium.Backend.Services.Download;
 ///
 /// To make that check possible each pass writes into its own staging tree (see
 /// <see cref="DownloadStaging"/>) rather than straight into the library. A pass that comes up short
-/// is retried at the configured fallback quality, and the two results are merged per-track — an album
-/// that is 80% lossless keeps its FLAC and gains MP3 only for the tracks that had none. Only the
-/// merged, verified tree is promoted into the library, so a half-finished grab never reaches Plex.
+/// is retried down the <see cref="DownloaderConfig.FallbackQualities"/> chain, and the results are
+/// merged per-track — an album that is 80% lossless keeps its FLAC and gains MP3 only for the tracks
+/// that had none. Only the merged, verified tree is promoted, so a half-finished grab never reaches
+/// Plex.
+///
+/// The chain matters because <b>Deezer's formats vary per track, not per album</b>. When a track has
+/// no master in the requested format, Deezer's media API returns no URL for it and streamrip 2.1.0
+/// falls back to building one on <c>e-cdns-proxy-*.dzcdn.net</c> — a CDN Deezer has since retired,
+/// which no longer resolves at all. So that track is simply lost unless something retries it lower.
+/// A real example: an album with no FLAC, a 320 master for exactly one track, and only 128 for the
+/// other three — FLAC yields 0, 320 yields 1, and only 128 recovers the rest.
 ///
 /// A pass that hangs is killed after <see cref="DownloaderConfig.DownloadTimeout"/>; its staging tree
 /// is discarded rather than promoted, because streamrip writes each track directly to its final name
@@ -120,7 +128,6 @@ public class StreamripDownloader : IDownloader
         var expected = (await _deezer.GetAlbumTracks(item.DeezerAlbumId!.Value)).Length;
 
         var preferredDir = Path.Combine(staging, "preferred");
-        var fallbackDir = Path.Combine(staging, "fallback");
         DownloadStaging.Reset(staging);
 
         var first = await RunAt(_config.Quality, url, item, preferredDir);
@@ -134,28 +141,43 @@ public class StreamripDownloader : IDownloader
         }
 
         var got = DownloadStaging.AudioFiles(preferredDir).Count;
-        var complete = expected > 0 ? got >= expected : got > 0;
-
-        var fallback = _config.FallbackQuality;
         var last = first;
-        if (!complete && !string.IsNullOrWhiteSpace(fallback) && fallback != _config.Quality)
+
+        // Walk down the quality chain until the album is whole. Deezer's formats are per-track, so a
+        // single downgrade isn't enough: an album with no FLAC can still serve a 320 master for one
+        // track and only 128 for the rest, and stopping at 320 abandons those.
+        var step = 0;
+        foreach (var fallback in _config.FallbackQualities)
         {
+            if (IsComplete(got, expected) || fallback == _config.Quality)
+            {
+                continue;
+            }
+
             _logger.LogInformation(
-                "Quality {Q} pass got {Got}/{Expected} tracks for {Artist} — {Album}; re-running at "
-                + "fallback {Fallback} and keeping only the tracks the first pass missed",
+                "Quality {Q} has {Got}/{Expected} tracks for {Artist} — {Album}; trying {Fallback} "
+                + "and keeping only the tracks the earlier passes missed",
                 _config.Quality, got, expected > 0 ? expected.ToString() : "?",
                 item.Artist.ArtistName, item.Album, fallback);
 
-            // A fallback that hangs still leaves whatever the first pass got — that tree was written
-            // by a process that exited on its own, so those files are complete and worth keeping.
+            // Indexed, not named by quality: the value comes from an env var and must never be able
+            // to steer the path we hand streamrip.
+            var fallbackDir = Path.Combine(staging, $"fallback-{++step}");
             last = await RunAt(fallback, url, item, fallbackDir);
-            if (last.Result != RunResult.TimedOut)
+
+            // A hang is systemic (bad ARL, network) and later passes would only burn more timeouts —
+            // but whatever earlier passes wrote came from processes that exited on their own, so it's
+            // complete and worth keeping.
+            if (last.Result == RunResult.TimedOut)
             {
-                var grafted = DownloadStaging.Graft(preferredDir, fallbackDir);
-                _logger.LogInformation(
-                    "Fallback {Fallback} supplied {Grafted} track(s) for {Artist} — {Album}",
-                    fallback, grafted, item.Artist.ArtistName, item.Album);
+                break;
             }
+
+            var grafted = DownloadStaging.Graft(preferredDir, fallbackDir);
+            got = DownloadStaging.AudioFiles(preferredDir).Count;
+            _logger.LogInformation(
+                "Fallback {Fallback} supplied {Grafted} track(s) for {Artist} — {Album}; now at {Got}",
+                fallback, grafted, item.Artist.ArtistName, item.Album, got);
         }
 
         var landed = DownloadStaging.AudioFiles(preferredDir).Count;
@@ -164,9 +186,10 @@ public class StreamripDownloader : IDownloader
             // streamrip exits 0 having logged a reason per track, so its output is the only record of
             // why nothing arrived — dump it here rather than leaving the log saying merely "0 tracks".
             _logger.LogWarning(
-                "No tracks downloaded for {Artist} — {Album} at quality {Q} or fallback {Fallback} — "
+                "No tracks downloaded for {Artist} — {Album} at quality {Q} or fallbacks {Fallbacks} — "
                 + "nothing promoted to the library. Last streamrip pass said:\n{Output}",
-                item.Artist.ArtistName, item.Album, _config.Quality, fallback, last.Output);
+                item.Artist.ArtistName, item.Album, _config.Quality,
+                string.Join(", ", _config.FallbackQualities), last.Output);
             return false;
         }
 
@@ -189,27 +212,41 @@ public class StreamripDownloader : IDownloader
     }
 
     /// <summary>
-    /// The unstaged path used only when no library root is configured. Retries the whole album at the
-    /// fallback quality on a clean failure, which is all we can do without being able to see the files.
+    /// Whether a pass got the whole album. Without a track count from Deezer all we can say is that
+    /// something arrived — still a far better test than the exit code, which is always 0.
+    /// </summary>
+    private static bool IsComplete(int got, int expected) => expected > 0 ? got >= expected : got > 0;
+
+    /// <summary>
+    /// The unstaged path used only when no library root is configured. Walks the same quality chain on
+    /// a clean failure, but blind: with nowhere to stage, the exit code is the only signal, and it
+    /// can't see a pass that "succeeded" while fetching nothing.
     /// </summary>
     private async Task<bool> RunUnverified(string url, PurchaseItem item)
     {
-        var first = await RunAt(_config.Quality, url, item, folder: null);
-        if (first.Result == RunResult.Success)
+        var pass = await RunAt(_config.Quality, url, item, folder: null);
+        if (pass.Result == RunResult.Success)
         {
             return true;
         }
 
-        // A hang/timeout is a systemic problem (bad ARL, network) — retrying at MP3 would just burn
-        // another timeout. Only downgrade when the preferred quality cleanly failed.
-        var fallback = _config.FallbackQuality;
-        if (first.Result == RunResult.Failed
-            && !string.IsNullOrWhiteSpace(fallback) && fallback != _config.Quality)
+        foreach (var fallback in _config.FallbackQualities)
         {
+            // A hang/timeout is systemic (bad ARL, network) — downgrading would just burn another
+            // timeout. Only keep going while the previous quality cleanly failed.
+            if (pass.Result != RunResult.Failed || fallback == _config.Quality)
+            {
+                continue;
+            }
+
             _logger.LogInformation(
                 "Quality {Q} pass failed for {Artist} — {Album}; retrying at fallback {Fallback}",
                 _config.Quality, item.Artist.ArtistName, item.Album, fallback);
-            return (await RunAt(fallback, url, item, folder: null)).Result == RunResult.Success;
+            pass = await RunAt(fallback, url, item, folder: null);
+            if (pass.Result == RunResult.Success)
+            {
+                return true;
+            }
         }
 
         return false;

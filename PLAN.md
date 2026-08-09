@@ -214,10 +214,16 @@ Each is independently buildable and testable.
     its own staging tree under `{MUSIC_DOWNLOAD_DIR}/.mycelium-incoming/{albumId}` and the
     result is checked against Deezer's own track count (`IDeezerApi.GetAlbumTracks`, paged —
     Deezer caps a page at 25).
-  - **Per-track fallback:** a pass that comes up short is re-run at `DEEZER_FALLBACK_QUALITY`
-    into a second staging tree, and the two are merged *per track* — both passes name files from
-    the same `track_format` and differ only in extension, so a track present at FLAC keeps its
-    FLAC and only the genuinely missing ones are taken from MP3. Only the merged tree is promoted
+  - **Per-track fallback:** a pass that comes up short is re-run down the quality ladder — derived
+    from `DEEZER_QUALITY` as every step below it (2 → 1 → 0), so it can't be left half-written by a
+    stale `DEEZER_FALLBACK_QUALITY` — each into its own staging tree, and the
+    results are merged *per track* — every pass names files from the same `track_format` and they
+    differ only in extension, so a track present at FLAC keeps its FLAC and only the genuinely
+    missing ones drop to MP3. A **chain** rather than one step because Deezer's formats vary per
+    track: when a track has no master in the requested format the media API returns no URL and
+    streamrip 2.1.0 falls back to `e-cdns-proxy-*.dzcdn.net`, a CDN Deezer retired (NXDOMAIN), so
+    that track is lost unless something retries it lower. Observed case: no FLAC at all, a 320
+    master for one of four tracks, 128 for the other three. Only the merged tree is promoted
     into the library, so a half-finished grab never reaches Plex. A short-but-nonempty result is
     promoted anyway (a geo-blocked track is unfixable by quality) and logged as PARTIAL. A
     timeout discards its staging tree rather than promoting it — streamrip writes each track

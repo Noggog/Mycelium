@@ -22,7 +22,7 @@ public class PurchaseServiceTests
     private readonly PurchaseService _sut;
 
     private static readonly DownloaderConfig Config = new(
-        DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQuality: "1",
+        DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQualities: new[] { "1", "0" },
         Codec: "", BatchSize: 3, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
         DownloadTimeout: TimeSpan.FromMinutes(15), SettleInterval: TimeSpan.FromMinutes(15),
         SettleWindow: TimeSpan.FromHours(6));

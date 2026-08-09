@@ -99,6 +99,34 @@ public class MainModule : Autofac.Module
             .SingleInstance();
     }
 
+    /// <summary>
+    /// The quality ladder to walk when the preferred quality doesn't yield every track.
+    ///
+    /// Unset (the normal case) derives the full ladder from <paramref name="preferred"/> — every step
+    /// below it, down to 0 — so "keep downgrading until Deezer will actually serve the track" needs no
+    /// configuration and can't be left half-written. A stale hand-listed chain is the failure mode
+    /// worth designing out: stopping at 320 on an album whose remaining tracks are 128-only loses them
+    /// silently, because streamrip's own retry targets a CDN Deezer retired.
+    ///
+    /// An explicit <c>DEEZER_FALLBACK_QUALITY</c> still wins (comma-separated, best first); set it to
+    /// blank to refuse downgrades entirely and accept the gaps instead.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseQualities(string? raw, string preferred)
+    {
+        if (raw is not null)
+        {
+            return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        // Non-numeric preferred quality (a typo, or a future streamrip naming things differently):
+        // no ladder can be inferred, so don't invent one.
+        return int.TryParse(preferred, out var top) && top > 0
+            ? Enumerable.Range(0, top).Reverse().Select(q => q.ToString()).ToArray()
+            : Array.Empty<string>();
+    }
+
     private static DownloaderConfig BuildDownloaderConfig()
     {
         static string Env(string name) => Environment.GetEnvironmentVariable(name) ?? "";
@@ -107,11 +135,16 @@ public class MainModule : Autofac.Module
         static int EnvInt(string name, int fallback) =>
             int.TryParse(Environment.GetEnvironmentVariable(name), out var i) ? i : fallback;
 
+        var quality = Environment.GetEnvironmentVariable("DEEZER_QUALITY") ?? "2"; // streamrip: 2 = FLAC
+
         return new DownloaderConfig(
             DownloadDir: Env("MUSIC_DOWNLOAD_DIR"),
             RipBinary: Environment.GetEnvironmentVariable("STREAMRIP_BIN") ?? "rip",
-            Quality: Environment.GetEnvironmentVariable("DEEZER_QUALITY") ?? "2",          // streamrip: 2 = FLAC
-            FallbackQuality: Environment.GetEnvironmentVariable("DEEZER_FALLBACK_QUALITY") ?? "1", // 1 = 320kbps MP3
+            Quality: quality,
+            // Unset: every step below the preferred quality, best first (2 -> "1","0"). See
+            // ParseQualities for why the ladder is derived rather than listed.
+            FallbackQualities: ParseQualities(
+                Environment.GetEnvironmentVariable("DEEZER_FALLBACK_QUALITY"), quality),
             Codec: Env("DEEZER_CODEC"), // empty = streamrip default (keep source codec)
             BatchSize: EnvInt("DOWNLOAD_BATCH_SIZE", 3),
             ItemDelay: TimeSpan.FromSeconds(EnvDouble("DOWNLOAD_ITEM_DELAY_SECONDS", 60)),

@@ -44,7 +44,7 @@ public class DownloadServiceTests
     }
 
     private static DownloaderConfig Config(TimeSpan? settleWindow = null) =>
-        new(DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQuality: "1",
+        new(DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQualities: new[] { "1", "0" },
             Codec: "", BatchSize: 10, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
             DownloadTimeout: TimeSpan.FromMinutes(15), SettleInterval: TimeSpan.FromMinutes(15),
             SettleWindow: settleWindow ?? TimeSpan.FromHours(6));
