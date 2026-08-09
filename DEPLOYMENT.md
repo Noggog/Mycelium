@@ -121,6 +121,16 @@ in Mongo (not an env var), so it survives redeploys and takes effect without a r
 
 - **Logs:** the app writes rolling logs to the `app_logs` volume (`/app/logs`) and to stdout
   (`podman logs mycelium-app-1`).
+- **An album downloaded but no files appeared:** Deezer has no lossless for it. The app requests
+  FLAC (`DEEZER_QUALITY=2`), re-runs anything short at `DEEZER_FALLBACK_QUALITY=1` (320kbps MP3),
+  and merges the two per track, so this now resolves itself — grep the log for `PARTIAL` or
+  `No tracks downloaded` to see what a grab actually landed. Each attempt stages under
+  `/music/.mycelium-incoming/` and only promotes verified files, so a failed grab leaves the
+  library untouched; a leftover directory there means the app was killed mid-download and is safe
+  to delete.
+- **streamrip is pinned** (`streamrip==2.1.0` in the `Dockerfile`) because the downloader
+  compensates for release-specific behaviour: it exits 0 even when every track failed, and has no
+  per-track quality downgrade. Re-check `StreamripDownloader` when bumping it.
 - **External Mongo:** point `MONGO_URI` at an existing instance and remove the bundled `mongo`
   service.
 - **Rebuild after code changes:** redeploy the Stack in Komodo (it rebuilds the image), or

@@ -543,14 +543,6 @@ function ArtistAlbums({ artist }: { artist: string }) {
       queryClient.invalidateQueries({ queryKey: ['feed'] })
     },
   })
-  const confirmBlock = (a: ArtistAlbumItem) => {
-    const ok = window.confirm(
-      `Block "${a.album}" for everyone?\n\n` +
-        'No user will be offered this album again. To just hide it from your own feed, use the ' +
-        'thumbs-down ("meh") instead.',
-    )
-    if (ok) setBlocked.mutate({ a, blocked: true })
-  }
   const busy = rateAlbum.isPending || clearAlbum.isPending || setBlocked.isPending
 
   if (isPending) {
@@ -575,7 +567,7 @@ function ArtistAlbums({ artist }: { artist: string }) {
           onRate={(album, verdict) => rateAlbum.mutate({ a: album, verdict })}
           onClear={(album) => clearAlbum.mutate(album)}
           onMerge={setMerging}
-          onBlock={confirmBlock}
+          onBlock={(album) => setBlocked.mutate({ a: album, blocked: true })}
           onUnblock={(album) => setBlocked.mutate({ a: album, blocked: false })}
         />
       ))}

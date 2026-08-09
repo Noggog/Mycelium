@@ -29,10 +29,14 @@ WORKDIR /app
 # streamrip (Deezer downloader, https://github.com/nathom/streamrip) lives in an isolated venv so
 # it doesn't collide with Debian's externally-managed system Python (PEP 668). ffmpeg is used by
 # streamrip for codec conversion/tagging.
+# Pinned: StreamripDownloader compensates for behaviour specific to this release (it exits 0 even
+# when every track failed, and has no per-track quality downgrade — that landed on streamrip's dev
+# branch after 2.1.0). An unpinned install would change the download path on any image rebuild, so
+# bump this deliberately and re-check StreamripDownloader's verification when you do.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg ca-certificates \
     && python3 -m venv /opt/streamrip \
-    && /opt/streamrip/bin/pip install --no-cache-dir streamrip \
+    && /opt/streamrip/bin/pip install --no-cache-dir streamrip==2.1.0 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # STREAMRIP_BIN: where the backend finds `rip`. XDG_CONFIG_HOME: where streamrip reads its config

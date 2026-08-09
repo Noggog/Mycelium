@@ -961,8 +961,8 @@ export default function Discover() {
       queryClient.invalidateQueries({ queryKey: ['ratings'] })
     },
   })
-  // Blocking an album takes it off *everyone's* feed, so unlike a rating it isn't a private call —
-  // confirm before writing. Marked in place like any other decision (undo lifts the block again).
+  // Blocking an album takes it off *everyone's* feed. Marked in place like any other decision, and
+  // undo lifts the block again — so it writes straight through, no confirmation.
   const blockMutation = useMutation({
     mutationFn: (item: FeedItem) => blockAlbum(item.artist.artistName, item.album!),
     onMutate: (item) => {
@@ -982,15 +982,6 @@ export default function Discover() {
       queryClient.invalidateQueries({ queryKey: ['artist-albums'] })
     },
   })
-  const confirmBlock = (item: FeedItem) => {
-    const ok = window.confirm(
-      `Block "${item.album}" for everyone?\n\n` +
-        'No user will be offered this album again. To just hide it from your own feed, use the ' +
-        'thumbs-down ("meh") instead.',
-    )
-    if (ok) blockMutation.mutate(item)
-  }
-
   // The inline album decisions made under a just-liked brand-new artist (from its expanded panel),
   // read from the react-query cache. Used so undoing the artist also walks back those album picks.
   const decidedAlbumsFor = (artistName: string): FeedItem[] => {
@@ -1133,7 +1124,7 @@ export default function Discover() {
                     onSnooze={(it, duration) => snoozeMutation.mutate({ item: it, duration })}
                     onUndo={(it) => undo.mutate(it)}
                     onMerge={setMerging}
-                    onBlock={confirmBlock}
+                    onBlock={(item) => blockMutation.mutate(item)}
                   />
                 )
               })}
@@ -1162,7 +1153,7 @@ export default function Discover() {
             onSnooze={(item, duration) => snoozeMutation.mutate({ item, duration })}
             onUndo={(item) => undo.mutate(item)}
             onMerge={setMerging}
-            onBlock={confirmBlock}
+            onBlock={(item) => blockMutation.mutate(item)}
             onClose={() => setSelected(null)}
           />
         </div>

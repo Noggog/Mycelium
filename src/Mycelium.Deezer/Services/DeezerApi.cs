@@ -100,11 +100,34 @@ public class DeezerApi : IDeezerApi
         return await Get<DeezerAlbum>(url);
     }
 
+    // Deezer serves album tracks 25 at a time. Unpaged, a 33-track compilation silently arrives as 25
+    // — and the download verifier compares this count against the files that actually landed, so a
+    // short count would hide missing tracks instead of triggering the fallback pass. The cap keeps a
+    // malformed next/total pair from looping forever (25 * 20 = 500 tracks, far past any real album).
+    private const int MaxTrackPages = 20;
+
     public async Task<DeezerTrack[]> GetAlbumTracks(long albumId)
     {
-        var url = $"{_endpointInfo.BaseUri}/album/{albumId}/tracks";
-        var result = await Get<DeezerTrackList>(url);
-        return result?.data.ToArray() ?? Array.Empty<DeezerTrack>();
+        var tracks = new List<DeezerTrack>();
+        for (var page = 0; page < MaxTrackPages; page++)
+        {
+            var url = $"{_endpointInfo.BaseUri}/album/{albumId}/tracks?index={tracks.Count}";
+            var result = await Get<DeezerTrackList>(url);
+            // A page that fails or comes back empty ends the walk — better a short list than none,
+            // since every caller already treats this as best-effort.
+            if (result is null || result.data.Count == 0)
+            {
+                break;
+            }
+
+            tracks.AddRange(result.data);
+            if (result.next is null || tracks.Count >= result.total)
+            {
+                break;
+            }
+        }
+
+        return tracks.ToArray();
     }
 
     private async Task<T?> Get<T>(string url) where T : class

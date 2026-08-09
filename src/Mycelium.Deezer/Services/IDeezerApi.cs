@@ -39,6 +39,11 @@ public interface IDeezerApi
     /// </summary>
     Task<DeezerAlbum?> GetAlbum(long albumId);
 
-    /// <summary>An album's tracks (for their ~30s preview URLs), in track order. Empty if none/error.</summary>
+    /// <summary>
+    /// An album's tracks, in track order. Empty if none/error. Two callers: preview URLs for the UI,
+    /// and the expected track count the download verifier checks a finished grab against. Deezer pages
+    /// this endpoint at 25, so the implementation walks the pages — a partial page-1 count would make
+    /// a long album look complete when it isn't.
+    /// </summary>
     Task<DeezerTrack[]> GetAlbumTracks(long albumId);
 }

@@ -204,10 +204,26 @@ Each is independently buildable and testable.
   - **Error handling:** every streamrip attempt logs its command up front; a pass that exceeds
     `DEEZER_DOWNLOAD_TIMEOUT_MINUTES` is killed (process tree) and the item marked `failed`
     rather than hanging in `downloading` forever; timeouts/non-zero exits log streamrip's
-    captured stdout+stderr. A timeout does not trigger the MP3 fallback (it's a systemic failure
-    — bad/empty ARL, network — so retrying would only burn another timeout); a clean non-zero
-    exit at FLAC still downgrades to MP3. (Empty ARL in streamrip's config makes it fall back to
+    captured stdout+stderr. (Empty ARL in streamrip's config makes it fall back to
     the unreliable deezloader, which hangs — the timeout is what rescues that case.)
+  - **Verification (why exit code isn't enough):** streamrip gathers an album's tracks with
+    `return_exceptions=True` and only *logs* per-track failures, so a pass where every track was
+    unavailable still exits 0. Released streamrip (pinned 2.1.0) also has no per-track quality
+    downgrade, so a FLAC request against an MP3-only album produces a folder holding just cover
+    art — and the old exit-code check marked that `sent`. Instead each quality pass writes into
+    its own staging tree under `{MUSIC_DOWNLOAD_DIR}/.mycelium-incoming/{albumId}` and the
+    result is checked against Deezer's own track count (`IDeezerApi.GetAlbumTracks`, paged —
+    Deezer caps a page at 25).
+  - **Per-track fallback:** a pass that comes up short is re-run at `DEEZER_FALLBACK_QUALITY`
+    into a second staging tree, and the two are merged *per track* — both passes name files from
+    the same `track_format` and differ only in extension, so a track present at FLAC keeps its
+    FLAC and only the genuinely missing ones are taken from MP3. Only the merged tree is promoted
+    into the library, so a half-finished grab never reaches Plex. A short-but-nonempty result is
+    promoted anyway (a geo-blocked track is unfixable by quality) and logged as PARTIAL. A
+    timeout discards its staging tree rather than promoting it — streamrip writes each track
+    straight to its final name with no partial marker, so a truncated track is indistinguishable
+    from a complete one — and does not trigger the fallback pass (systemic failure; retrying
+    would only burn another timeout).
   - _Why not Lidarr / a Deezer playlist:_ Deezer closed new API app registration, so the
     official playlist-write (OAuth) is unavailable; the ARL drives the unofficial API that
     streamrip uses. Lidarr's Deezer plugins exist but are flagged ban-risky and add a
