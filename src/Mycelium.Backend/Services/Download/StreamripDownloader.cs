@@ -42,6 +42,20 @@ public class StreamripDownloader : IDownloader
 {
     private enum RunResult { Success, Failed, TimedOut }
 
+    /// <summary>
+    /// One streamrip invocation. Carries the captured output alongside the outcome because the
+    /// interesting failures don't show up in either the exit code or the file count: streamrip logs a
+    /// per-track reason ("not available for stream", "Deezer HiFi is required", a geo-block) and then
+    /// exits 0. When a pass comes up short, that text is the only account of *why*.
+    /// </summary>
+    private readonly record struct Pass(RunResult Result, string Stdout, string Stderr)
+    {
+        public string Output =>
+            string.IsNullOrWhiteSpace(Stdout) && string.IsNullOrWhiteSpace(Stderr)
+                ? "<streamrip printed nothing>"
+                : $"stdout: {Stdout}\nstderr: {Stderr}";
+    }
+
     private readonly DownloaderConfig _config;
     private readonly IDeezerApi _deezer;
     private readonly ILogger<StreamripDownloader> _logger;
@@ -110,7 +124,7 @@ public class StreamripDownloader : IDownloader
         DownloadStaging.Reset(staging);
 
         var first = await RunAt(_config.Quality, url, item, preferredDir);
-        if (first == RunResult.TimedOut)
+        if (first.Result == RunResult.TimedOut)
         {
             _logger.LogWarning(
                 "Discarding staged files for {Artist} — {Album}: the pass timed out, and a killed "
@@ -123,6 +137,7 @@ public class StreamripDownloader : IDownloader
         var complete = expected > 0 ? got >= expected : got > 0;
 
         var fallback = _config.FallbackQuality;
+        var last = first;
         if (!complete && !string.IsNullOrWhiteSpace(fallback) && fallback != _config.Quality)
         {
             _logger.LogInformation(
@@ -133,7 +148,8 @@ public class StreamripDownloader : IDownloader
 
             // A fallback that hangs still leaves whatever the first pass got — that tree was written
             // by a process that exited on its own, so those files are complete and worth keeping.
-            if (await RunAt(fallback, url, item, fallbackDir) != RunResult.TimedOut)
+            last = await RunAt(fallback, url, item, fallbackDir);
+            if (last.Result != RunResult.TimedOut)
             {
                 var grafted = DownloadStaging.Graft(preferredDir, fallbackDir);
                 _logger.LogInformation(
@@ -145,20 +161,24 @@ public class StreamripDownloader : IDownloader
         var landed = DownloadStaging.AudioFiles(preferredDir).Count;
         if (landed == 0)
         {
+            // streamrip exits 0 having logged a reason per track, so its output is the only record of
+            // why nothing arrived — dump it here rather than leaving the log saying merely "0 tracks".
             _logger.LogWarning(
                 "No tracks downloaded for {Artist} — {Album} at quality {Q} or fallback {Fallback} — "
-                + "nothing promoted to the library",
-                item.Artist.ArtistName, item.Album, _config.Quality, fallback);
+                + "nothing promoted to the library. Last streamrip pass said:\n{Output}",
+                item.Artist.ArtistName, item.Album, _config.Quality, fallback, last.Output);
             return false;
         }
 
         if (expected > 0 && landed < expected)
         {
             // No quality helps a track Deezer won't serve at all (geo-blocking, a pulled master), so
-            // retrying forever is pointless — take the partial album and say so loudly.
+            // retrying forever is pointless — take the partial album and say so loudly. The output is
+            // attached for the same reason as above: the per-track reasons live only in there.
             _logger.LogWarning(
-                "Promoting a PARTIAL album: {Artist} — {Album} landed {Landed} of {Expected} tracks",
-                item.Artist.ArtistName, item.Album, landed, expected);
+                "Promoting a PARTIAL album: {Artist} — {Album} landed {Landed} of {Expected} tracks. "
+                + "Last streamrip pass said:\n{Output}",
+                item.Artist.ArtistName, item.Album, landed, expected, last.Output);
         }
 
         DownloadStaging.Promote(preferredDir, _config.DownloadDir);
@@ -175,7 +195,7 @@ public class StreamripDownloader : IDownloader
     private async Task<bool> RunUnverified(string url, PurchaseItem item)
     {
         var first = await RunAt(_config.Quality, url, item, folder: null);
-        if (first == RunResult.Success)
+        if (first.Result == RunResult.Success)
         {
             return true;
         }
@@ -183,18 +203,19 @@ public class StreamripDownloader : IDownloader
         // A hang/timeout is a systemic problem (bad ARL, network) — retrying at MP3 would just burn
         // another timeout. Only downgrade when the preferred quality cleanly failed.
         var fallback = _config.FallbackQuality;
-        if (first == RunResult.Failed && !string.IsNullOrWhiteSpace(fallback) && fallback != _config.Quality)
+        if (first.Result == RunResult.Failed
+            && !string.IsNullOrWhiteSpace(fallback) && fallback != _config.Quality)
         {
             _logger.LogInformation(
                 "Quality {Q} pass failed for {Artist} — {Album}; retrying at fallback {Fallback}",
                 _config.Quality, item.Artist.ArtistName, item.Album, fallback);
-            return await RunAt(fallback, url, item, folder: null) == RunResult.Success;
+            return (await RunAt(fallback, url, item, folder: null)).Result == RunResult.Success;
         }
 
         return false;
     }
 
-    private async Task<RunResult> RunAt(string quality, string url, PurchaseItem item, string? folder)
+    private async Task<Pass> RunAt(string quality, string url, PurchaseItem item, string? folder)
     {
         var args = new List<string>();
         // We own dedup (purchase status), so streamrip's download-history DB must never skip a track —
@@ -259,7 +280,7 @@ public class StreamripDownloader : IDownloader
                 var (to, te) = await Capture(stdoutTask, stderrTask);
                 _logger.LogWarning("streamrip output before timeout for {Id}:\nstdout: {Out}\nstderr: {Err}",
                     item.Id, to, te);
-                return RunResult.TimedOut;
+                return new Pass(RunResult.TimedOut, to, te);
             }
 
             var (stdout, stderr) = await Capture(stdoutTask, stderrTask);
@@ -270,18 +291,18 @@ public class StreamripDownloader : IDownloader
                 _logger.LogInformation(
                     "streamrip finished for {Artist} — {Album} (quality {Quality})",
                     item.Artist.ArtistName, item.Album, quality);
-                return RunResult.Success;
+                return new Pass(RunResult.Success, stdout, stderr);
             }
 
             _logger.LogWarning(
                 "streamrip exited {Code} for {Artist} — {Album}. {Cmd}\nstdout: {Out}\nstderr: {Err}",
                 process.ExitCode, item.Artist.ArtistName, item.Album, cmd, stdout, stderr);
-            return RunResult.Failed;
+            return new Pass(RunResult.Failed, stdout, stderr);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to launch streamrip ({Bin}) for {Id}", _config.RipBinary, item.Id);
-            return RunResult.Failed;
+            return new Pass(RunResult.Failed, "", ex.Message);
         }
     }
 
