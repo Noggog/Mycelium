@@ -28,6 +28,7 @@
   --cyan-hover: #a3f9ff;
   --blue: #51bcfa;
   --yellow: #f7b992;
+  --plum: #d98fc0;
 
   /* --- Semantic --- */
   --bg: var(--abyss);
@@ -1750,6 +1751,13 @@ a.detail-chip.via:hover {
   background: rgba(225, 96, 99, 0.12);
   border-color: rgba(250, 115, 118, 0.42);
 }
+/* "Second Thoughts" — plum: next door to the salmon it mirrors (both re-litigate a verdict), but
+   clearly its own hue, since this one is questioning a thumbs-*up*. */
+.feed-badge-SecondThoughtsArtist {
+  color: var(--plum);
+  background: rgba(217, 143, 192, 0.12);
+  border-color: rgba(217, 143, 192, 0.42);
+}
 
 /* Filter chips: the per-kind badge styling made into a clickable on/off toggle. */
 .feed-chip {
@@ -1782,6 +1790,9 @@ a.detail-chip.via:hover {
 }
 .feed-chip.feed-badge-ReconsiderArtist:not(.off) {
   box-shadow: 0 0 12px rgba(250, 115, 118, 0.32), inset 0 0 12px rgba(255, 255, 255, 0.04);
+}
+.feed-chip.feed-badge-SecondThoughtsArtist:not(.off) {
+  box-shadow: 0 0 12px rgba(217, 143, 192, 0.32), inset 0 0 12px rgba(255, 255, 255, 0.04);
 }
 /* Off chip: desaturated, dashed, dimmed — clearly toggled out. */
 .feed-chip.off {

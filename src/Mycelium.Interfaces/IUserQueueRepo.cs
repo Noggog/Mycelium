@@ -38,7 +38,8 @@ public interface IUserQueueRepo
     /// Records a verdict (Liked/Disliked) on an artist, upserting the row if it doesn't exist yet
     /// (so an owned artist with no prior candidate row can be rated directly). Returns the affected
     /// row — the engine reads its depth when growing the frontier. Only sets the image when one is
-    /// supplied, never clobbering an existing one with null.
+    /// supplied, never clobbering an existing one with null. Any sweep flag on the row is dropped: the
+    /// evidence was weighed against the <em>old</em> verdict, and the next sweep re-decides.
     /// </summary>
     Task<DiscoveryCandidate?> Rate(string userId, string artistName, DiscoveryStatus status, string? imageUrl);
 
@@ -47,6 +48,7 @@ public interface IUserQueueRepo
     /// <see cref="Rate"/>). The row stays <see cref="DiscoveryStatus.Snoozed"/> until re-rated;
     /// expiry is transparent — <see cref="GetPending"/> resurfaces it once <paramref name="until"/>
     /// has passed. Only sets the image when supplied, never clobbering an existing one with null.
+    /// Drops any sweep flag with the old verdict, same as <see cref="Rate"/>.
     /// </summary>
     Task Snooze(string userId, string artistName, DateTimeOffset until, string? imageUrl);
 
@@ -66,37 +68,43 @@ public interface IUserQueueRepo
     Task<ArtistRating[]> GetRated(string userId);
 
     /// <summary>
-    /// The artists this user thumbed down whose dislike hasn't been confirmed by a second thumbs-down,
-    /// each with the reconsider flag it currently carries — the working set for the periodic sweep.
-    /// Once <see cref="TryConfirmDislike"/> has stuck on a row it drops out of here permanently, so a
-    /// re-rejected artist is never weighed (or offered back) again.
+    /// The artists this user gave <paramref name="status"/> (Liked or Disliked) whose verdict hasn't
+    /// been confirmed by a repeat of the same thumb, each with the reconsider flag it currently
+    /// carries — the working set for the periodic sweep. Once <see cref="TryConfirmVerdict"/> has stuck
+    /// on a row it drops out of here permanently, so a re-affirmed verdict is never weighed (or
+    /// questioned) again.
     /// </summary>
-    Task<DislikedArtist[]> GetUnconfirmedDislikes(string userId);
+    Task<SweptArtist[]> GetUnconfirmedVerdicts(string userId, DiscoveryStatus status);
 
     /// <summary>
-    /// Records (or, with a null <paramref name="signal"/>, clears) the sweep's verdict that a
-    /// thumbed-down artist looks like a keeper. Only touches rows that are still Disliked, so a
-    /// verdict the user changed mid-sweep can't be re-flagged. Fills <paramref name="imageUrl"/> when
-    /// supplied — an artist rated straight from the library has no art on its row, and stamping it here
-    /// keeps serving the feed to a single query.
+    /// Records (or, with a null <paramref name="signal"/>, clears) the sweep's verdict that the user's
+    /// song ratings contradict how they thumbed an artist. Only touches rows still sitting at
+    /// <paramref name="status"/> — the verdict the sweep weighed — so one the user changed mid-sweep
+    /// can't be flagged from stale evidence. Fills <paramref name="imageUrl"/> when supplied — an
+    /// artist rated straight from the library has no art on its row, and stamping it here keeps serving
+    /// the feed to a single query.
     /// </summary>
-    Task SetReconsider(string userId, string artistName, ReconsiderSignal? signal, string? imageUrl);
+    Task SetReconsider(
+        string userId, string artistName, DiscoveryStatus status, ReconsiderSignal? signal, string? imageUrl);
 
     /// <summary>
-    /// The flagged artists to serve as "second chance" cards: thumbed down, not re-rejected, and
-    /// carrying a sweep verdict. One indexed read — all the judgement already happened in the sweep.
+    /// The flagged artists to serve as second-guessing cards for <paramref name="status"/>: thumbed
+    /// that way, not re-affirmed, and carrying a sweep verdict. Disliked yields the "second chance"
+    /// cards, Liked the "second thoughts" ones. One indexed read — all the judgement already happened
+    /// in the sweep.
     /// </summary>
-    Task<ReconsiderCandidate[]> GetReconsiderable(string userId);
+    Task<ReconsiderCandidate[]> GetReconsiderable(string userId, DiscoveryStatus status);
 
     /// <summary>
-    /// Marks a thumbs-down as final, but <em>only</em> when the artist was already Disliked — i.e.
-    /// this is the user rejecting it a second time, after it came back for reconsideration. Returns
-    /// true when the flag was set (the verdict is now remembered forever), false for a first-time
-    /// dislike, which stays eligible to resurface. Must be called <em>before</em> <see cref="Rate"/>
-    /// records the new verdict, while the row still holds the previous one. Clearing the verdict
-    /// (<see cref="ClearVerdict"/>) drops the flag with the row — a full reset means a clean slate.
+    /// Marks a thumb as final, but <em>only</em> when the artist already sat at
+    /// <paramref name="status"/> — i.e. this is the user giving the same verdict a second time, after
+    /// the sweep offered it back for a rethink. Returns true when the flag was set (the verdict is now
+    /// remembered forever), false for a first-time verdict, which stays eligible to be questioned. Must
+    /// be called <em>before</em> <see cref="Rate"/> records the new verdict, while the row still holds
+    /// the previous one. Clearing the verdict (<see cref="ClearVerdict"/>) drops the flag with the row
+    /// — a full reset means a clean slate. Only Liked/Disliked are meaningful.
     /// </summary>
-    Task<bool> TryConfirmDislike(string userId, string artistName);
+    Task<bool> TryConfirmVerdict(string userId, string artistName, DiscoveryStatus status);
 
     /// <summary>Clears pending candidates (keeps Liked/Disliked) so the queue can be rebuilt from likes.</summary>
     Task DeletePending(string userId);

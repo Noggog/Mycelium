@@ -138,6 +138,7 @@ export type FeedKind =
   | 'RecommendedLibraryArtist'
   | 'SeedLibraryArtist'
   | 'ReconsiderArtist'
+  | 'SecondThoughtsArtist'
 export type DiscoveryStatus = 'Pending' | 'Liked' | 'Disliked' | 'Snoozed'
 
 // One thing to react to in the discovery feed. `album` is set only for MissingAlbum items;
@@ -153,13 +154,14 @@ export interface FeedItem {
   deezerAlbumId: number | null
   // Release year for album items, null when Deezer supplied no date (or for artist items).
   year: number | null
-  // The evidence behind a ReconsiderArtist card (why a thumbed-down band is being offered back),
-  // snapshotted by the weekly sweep that flagged it. Null for every other kind.
+  // The evidence behind a ReconsiderArtist / SecondThoughtsArtist card (why a thumbed verdict is
+  // being questioned), snapshotted by the weekly sweep that flagged it. Null for every other kind.
   reconsider: ReconsiderSignal | null
 }
 
-// Mirror ReconsiderSignal (Discovery.cs) — the Plex rating snapshot that got a thumbed-down artist
-// flagged for a second chance. Stored on the queue row by the sweep, not computed per request.
+// Mirror ReconsiderSignal (Discovery.cs) — the Plex rating snapshot that got a thumbed artist flagged,
+// either as a well-rated dislike (second chance) or a poorly-rated like (second thoughts). Stored on
+// the queue row by the sweep, not computed per request.
 export interface ReconsiderSignal {
   average: number
   ratedCount: number

@@ -51,6 +51,7 @@ const BADGE: Record<FeedKind, string> = {
   SeedLibraryArtist: 'Rate Unfamiliar Artist',
   LibraryArtist: 'Mark existing artist',
   ReconsiderArtist: 'Second Chance',
+  SecondThoughtsArtist: 'Second Thoughts',
 }
 
 // The category filters, shown up top as toggle-able tag chips styled exactly like the per-row
@@ -61,16 +62,19 @@ const FILTER_CHIPS: { kind: FeedKind; tip: string }[] = [
   { kind: 'SeedLibraryArtist', tip: "Rate artists not yet recommended to grow the frontier" },
   { kind: 'MissingAlbum', tip: 'Missing albums for artists you like' },
   { kind: 'ReconsiderArtist', tip: 'Bands you thumbed down but rated highly in Plex' },
+  { kind: 'SecondThoughtsArtist', tip: 'Bands you thumbed up but rated poorly in Plex' },
 ]
 
 const ALL_KINDS: FeedKind[] = [
   'RecommendedArtist', 'MissingAlbum', 'RecommendedLibraryArtist', 'SeedLibraryArtist', 'ReconsiderArtist',
+  'SecondThoughtsArtist',
 ]
 // Default to everything on: the recommended sections (new + existing owned), missing albums, the
-// seed section (owned artists nothing recommends yet) — rating those grows the frontier — and the
-// second-chance section (dislikes the user's own song ratings argue with).
+// seed section (owned artists nothing recommends yet) — rating those grows the frontier — and the two
+// second-guessing sections (verdicts the user's own song ratings argue with, either way).
 const DEFAULT_KINDS: FeedKind[] = [
   'RecommendedArtist', 'MissingAlbum', 'RecommendedLibraryArtist', 'SeedLibraryArtist', 'ReconsiderArtist',
+  'SecondThoughtsArtist',
 ]
 
 const newSeed = () => Math.floor(Math.random() * 1_000_000_000)
@@ -80,6 +84,16 @@ const newSeed = () => Math.floor(Math.random() * 1_000_000_000)
 // any malformed/missing value falls back to the all-on default.
 const SHOWN_PREF_KEY = 'mc.discover.shown'
 
+// Bumped whenever a category is added, with the new kinds listed under the bump. A list stored before
+// a kind existed can't have meant "off" for it, so on the first read after a bump those kinds are
+// switched on and the new version is stamped — after which unchecking one sticks like any other.
+// Without this a new section would stay invisible to everyone who has ever touched the chips.
+const SHOWN_VERSION_KEY = 'mc.discover.shown.version'
+const SHOWN_VERSION = 2
+const KINDS_ADDED_IN: Record<number, FeedKind[]> = {
+  2: ['SecondThoughtsArtist'],
+}
+
 function readShownKinds(): Set<FeedKind> {
   try {
     const stored = localStorage.getItem(SHOWN_PREF_KEY)
@@ -87,7 +101,18 @@ function readShownKinds(): Set<FeedKind> {
       const parsed = JSON.parse(stored)
       if (Array.isArray(parsed)) {
         const kinds = parsed.filter((k): k is FeedKind => ALL_KINDS.includes(k as FeedKind))
-        return new Set(kinds)
+        const shown = new Set(kinds)
+        // Anything unstamped predates the versioning, i.e. version 1.
+        const storedVersion = Number(localStorage.getItem(SHOWN_VERSION_KEY)) || 1
+        for (let v = storedVersion + 1; v <= SHOWN_VERSION; v++) {
+          for (const kind of KINDS_ADDED_IN[v] ?? []) {
+            shown.add(kind)
+          }
+        }
+        if (storedVersion < SHOWN_VERSION) {
+          writeShownKinds(shown)
+        }
+        return shown
       }
     }
   } catch {
@@ -99,6 +124,7 @@ function readShownKinds(): Set<FeedKind> {
 function writeShownKinds(shown: Set<FeedKind>) {
   try {
     localStorage.setItem(SHOWN_PREF_KEY, JSON.stringify([...shown]))
+    localStorage.setItem(SHOWN_VERSION_KEY, String(SHOWN_VERSION))
   } catch {
     // Ignore — the in-memory state still reflects the choice for this session.
   }
@@ -387,9 +413,10 @@ function Provenance({ sources }: { sources: string[] }) {
   )
 }
 
-// Why a "Second Chance" card is in the feed: nothing recommended it — the user's own Plex song
-// ratings did, by contradicting the thumbs-down they gave the band. Stands in for the provenance line.
-// The numbers come off the feed item (snapshotted by the sweep that flagged it), so no per-row fetch.
+// Why a "Second Chance" / "Second Thoughts" card is in the feed: nothing recommended it — the user's
+// own Plex song ratings did, by contradicting the thumb they gave the band (too high for the
+// thumbs-down, too low for the thumbs-up). Stands in for the provenance line. The numbers come off the
+// feed item (snapshotted by the sweep that flagged it), so no per-row fetch.
 function ReconsiderWhy({ signal }: { signal: ReconsiderSignal | null }) {
   if (!signal) return null
   return (
@@ -527,6 +554,7 @@ function ArtistAlbumsPanel({
 // sense. RecommendedArtist (not yet owned) and MissingAlbum (an album, not the artist) are excluded.
 const IN_LIBRARY_KINDS = new Set<FeedKind>([
   'RecommendedLibraryArtist', 'SeedLibraryArtist', 'LibraryArtist', 'ReconsiderArtist',
+  'SecondThoughtsArtist',
 ])
 
 // Deep links to open an owned artist where it lives (Plex now, Navidrome later) — the same per-library
@@ -636,6 +664,16 @@ function DetailPanel({
               <p className="detail-why">
                 You thumbed this band down, but your song ratings say otherwise. Thumb it down again to
                 settle it for good — it won't come back a third time.
+              </p>
+            </>
+          ) : item.kind === 'SecondThoughtsArtist' ? (
+            // The mirror: a thumbs-up the song ratings argue against. Worth saying that the like is
+            // still growing the queue, since that's the cost of leaving it in place.
+            <>
+              <div className="detail-section-label">Why this is back</div>
+              <p className="detail-why">
+                You thumbed this band up, but your song ratings are poor — and the like is still seeding
+                recommendations. Thumb it down to drop it, or up again to settle it for good.
               </p>
             </>
           ) : item.sources.length > 0 ? (
@@ -781,7 +819,7 @@ function DiscRow({
               {name}
               {item.year && <> · {item.year}</>}
             </span>
-          ) : item.kind === 'ReconsiderArtist' ? (
+          ) : item.kind === 'ReconsiderArtist' || item.kind === 'SecondThoughtsArtist' ? (
             <ReconsiderWhy signal={item.reconsider} />
           ) : (
             <Provenance sources={item.sources} />

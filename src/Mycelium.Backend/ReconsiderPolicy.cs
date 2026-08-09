@@ -1,34 +1,55 @@
+using Mycelium.Interfaces;
+
 namespace Mycelium.Backend;
 
 /// <summary>
-/// When a thumbed-down artist is worth offering back for reconsideration, and how often to go looking.
+/// When a thumbed artist is worth offering back for a rethink, and how often to go looking. It cuts
+/// both ways: a thumbed-<em>down</em> artist the ratings say is a keeper (a "second chance"), and a
+/// thumbed-<em>up</em> one they say is a dud (a "second thoughts").
 ///
-/// <paramref name="MinAverage"/> is the average star rating (0–5) the rated songs must reach, and
-/// <paramref name="MinRatedFraction"/> the share of the artist's tracks they must actually have rated —
-/// the second guard is what stops a single 5★ song on a 40-track discography from reading as "they
-/// liked this band". <paramref name="Interval"/> is the sweep cadence: this exists to resurrect artists
-/// buried years ago, so it's a slow background pass (default weekly), never a per-request computation.
+/// <paramref name="MinAverage"/> is the average star rating (0–5) a dislike's rated songs must reach to
+/// contradict it; <paramref name="MaxAverage"/> the average a like's must fall to. Between the two the
+/// ratings agree with the verdict closely enough to leave it alone. <paramref name="MinRatedFraction"/>
+/// is the share of the artist's tracks that must actually be rated either way — the guard that stops a
+/// single 5★ song on a 40-track discography from reading as "they liked this band" (or one 1★ from
+/// condemning it). <paramref name="Interval"/> is the sweep cadence: this exists to re-litigate verdicts
+/// made years ago, so it's a slow background pass (default weekly), never a per-request computation.
 /// <paramref name="StartupDelay"/> offsets the first run past the catalog + album syncs so the boot
 /// isn't three Plex/Deezer-heavy passes at once.
 ///
-/// Read from the RECONSIDER_MIN_AVG_STARS / RECONSIDER_MIN_RATED_FRACTION /
+/// Read from the RECONSIDER_MIN_AVG_STARS / RECONSIDER_MAX_AVG_STARS / RECONSIDER_MIN_RATED_FRACTION /
 /// RECONSIDER_SWEEP_INTERVAL_DAYS env vars in <see cref="MainModule"/>, so the thresholds are
 /// configurable and the sweep stays env-free and unit-testable.
 /// </summary>
 public record ReconsiderPolicy(
     double MinAverage,
+    double MaxAverage,
     double MinRatedFraction,
     TimeSpan Interval,
     TimeSpan StartupDelay)
 {
     /// <summary>
-    /// Whether these ratings clear both bars. False when the artist isn't in Plex, has no tracks, or
-    /// has nothing rated — an unrated artist carries no signal either way, so it stays rejected.
+    /// Whether these ratings contradict <paramref name="verdict"/> hard enough to offer it back: a
+    /// dislike needs a high average, a like a low one, and both need enough of the discography rated.
     /// </summary>
-    public bool Qualifies(Interfaces.ArtistRatingStats stats) =>
+    public bool Contradicts(ArtistRatingStats stats, DiscoveryStatus verdict) =>
+        HasEnoughEvidence(stats)
+        && verdict switch
+        {
+            DiscoveryStatus.Disliked => stats.Average >= MinAverage,
+            DiscoveryStatus.Liked => stats.Average <= MaxAverage,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(verdict), verdict, "Only Liked/Disliked verdicts can be contradicted"),
+        };
+
+    /// <summary>
+    /// Whether there's enough rated music here to argue with a verdict at all. False when the artist
+    /// isn't in Plex, has no tracks, or has nothing rated — an unrated artist carries no signal either
+    /// way, so the verdict stands.
+    /// </summary>
+    private bool HasEnoughEvidence(ArtistRatingStats stats) =>
         stats.Present
         && stats.TrackCount > 0
         && stats.RatedCount > 0
-        && stats.Average >= MinAverage
         && stats.RatedCount >= stats.TrackCount * MinRatedFraction;
 }

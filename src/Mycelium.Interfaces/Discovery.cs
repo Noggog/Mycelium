@@ -82,6 +82,14 @@ public enum FeedKind
     /// offers it back once. Thumbing it down a second time confirms the verdict and it never returns.
     /// </summary>
     ReconsiderArtist,
+
+    /// <summary>
+    /// The mirror of <see cref="ReconsiderArtist"/>: an owned artist the user thumbed <em>up</em> whose
+    /// own Plex song ratings argue against it — a low average across a decent share of the tracks. The
+    /// like is still growing the frontier off a band they apparently don't rate, so the card offers the
+    /// thumbs-down. Thumbing it up a second time confirms the like and it never returns.
+    /// </summary>
+    SecondThoughtsArtist,
 }
 
 /// <summary>
@@ -91,8 +99,8 @@ public enum FeedKind
 /// and explain recommended artists (0/empty for the other kinds). <paramref name="Year"/> is the
 /// album's release year (album kinds only, null when Deezer supplied no date).
 /// <paramref name="Reconsider"/> is the stored rating evidence behind a
-/// <see cref="FeedKind.ReconsiderArtist"/> card, so the UI can show why it's being offered back.
-/// Null for every other kind.
+/// <see cref="FeedKind.ReconsiderArtist"/> or <see cref="FeedKind.SecondThoughtsArtist"/> card, so the
+/// UI can show why the verdict is being questioned. Null for every other kind.
 /// </summary>
 public record FeedItem(
     FeedKind Kind,
@@ -106,20 +114,24 @@ public record FeedItem(
     ReconsiderSignal? Reconsider = null);
 
 /// <summary>
-/// Why the weekly sweep thinks a thumbed-down artist was actually a keeper: a snapshot of the user's
-/// Plex song ratings for it, taken when the artist was flagged. Persisted on the queue row so serving
-/// the feed is one Mongo read — no Plex round-trip, and nothing to recompute per request.
+/// Why the weekly sweep thinks a verdict was wrong — a keeper thumbed down, or a dud thumbed up: a
+/// snapshot of the user's Plex song ratings for the artist, taken when it was flagged. Which way it
+/// cuts is read off the row's own verdict, so one shape serves both directions. Persisted on the queue
+/// row so serving the feed is one Mongo read — no Plex round-trip, nothing to recompute per request.
 /// </summary>
 public record ReconsiderSignal(double Average, int RatedCount, int TrackCount);
 
 /// <summary>
-/// One thumbed-down artist for the sweep to weigh, carrying the flag it currently holds
-/// (<paramref name="Reconsider"/> null = not currently flagged) so the sweep only writes when the
-/// verdict actually changes.
+/// One already-thumbed artist for the sweep to weigh (a like or a dislike, per the status it was
+/// fetched by), carrying the flag it currently holds (<paramref name="Reconsider"/> null = not
+/// currently flagged) so the sweep only writes when the verdict actually changes.
 /// </summary>
-public record DislikedArtist(ArtistKey Artist, string? ImageUrl, ReconsiderSignal? Reconsider);
+public record SweptArtist(ArtistKey Artist, string? ImageUrl, ReconsiderSignal? Reconsider);
 
-/// <summary>A flagged artist ready to serve as a "second chance" card — artist, art, and the evidence.</summary>
+/// <summary>
+/// A flagged artist ready to serve as a "second chance" / "second thoughts" card — artist, art, and
+/// the evidence. Which card it becomes follows from the status it was fetched by.
+/// </summary>
 public record ReconsiderCandidate(ArtistKey Artist, string? ImageUrl, ReconsiderSignal Signal);
 
 /// <summary>A paged feed section for a single <see cref="FeedKind"/>.</summary>

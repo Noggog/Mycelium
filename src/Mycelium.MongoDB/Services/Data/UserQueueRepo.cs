@@ -25,9 +25,13 @@ public class UserQueueRepo : IUserQueueRepo
     // Sticky "this thumbs-down is final" flag, set when a dislike lands on an already-disliked row.
     // Absent on every legacy doc, which reads as false — so old dislikes stay eligible to resurface.
     private const string FieldDislikeConfirmed = "dislikeConfirmed";
-    // The periodic sweep's verdict that this thumbed-down artist looks like a keeper, as a subdocument
-    // holding the rating snapshot behind it. Present = flagged; the sweep $unsets it to withdraw the
-    // verdict, so "is it flagged" and "why" can never disagree.
+    // The mirror: "this thumbs-up is final", set when a like lands on an already-liked row. Same
+    // absent-reads-as-false rule, so every pre-existing like is still open to being second-guessed.
+    private const string FieldLikeConfirmed = "likeConfirmed";
+    // The periodic sweep's verdict that this artist's song ratings contradict how it was thumbed, as a
+    // subdocument holding the rating snapshot behind it. Present = flagged; the sweep $unsets it to
+    // withdraw the verdict, so "is it flagged" and "why" can never disagree. Which way it cuts follows
+    // from the row's status, so one field serves both the like and dislike sides.
     private const string FieldReconsider = "reconsider";
     private const string FieldReconsiderAverage = "average";
     private const string FieldReconsiderRatedCount = "ratedCount";
@@ -175,6 +179,10 @@ public class UserQueueRepo : IUserQueueRepo
             Builders<BsonDocument>.Update.SetOnInsert(FieldDepth, 0),
             Builders<BsonDocument>.Update.Set(FieldStatus, status.ToString()),
             Builders<BsonDocument>.Update.Set(FieldDecidedAt, now),
+            // The flag was the sweep's argument against the verdict this call is replacing, so it dies
+            // with it — otherwise thumbing a "second thoughts" card down would carry its low-rating
+            // evidence onto the new dislike and serve it straight back as a "second chance".
+            Builders<BsonDocument>.Update.Unset(FieldReconsider),
         };
         if (imageUrl != null)
         {
@@ -207,6 +215,8 @@ public class UserQueueRepo : IUserQueueRepo
             Builders<BsonDocument>.Update.Set(FieldStatus, StatusSnoozed),
             Builders<BsonDocument>.Update.Set(FieldSnoozeUntil, until.UtcDateTime),
             Builders<BsonDocument>.Update.Set(FieldDecidedAt, now),
+            // Same as Rate: the sweep's flag argued against the verdict this snooze replaces.
+            Builders<BsonDocument>.Update.Unset(FieldReconsider),
         };
         if (imageUrl != null)
         {
@@ -265,34 +275,47 @@ public class UserQueueRepo : IUserQueueRepo
         }).ToArray();
     }
 
-    /// <summary>Dislikes that haven't been re-rejected: the sweep's working set.</summary>
-    private static FilterDefinition<BsonDocument> UnconfirmedDislikes(string userId)
+    /// <summary>
+    /// The stored status string and its sticky "final" flag for a swept verdict. Anything but
+    /// Liked/Disliked is a caller bug — the sweep only ever second-guesses a thumb.
+    /// </summary>
+    private static (string Status, string ConfirmField) Verdict(DiscoveryStatus status) => status switch
     {
+        DiscoveryStatus.Disliked => (StatusDisliked, FieldDislikeConfirmed),
+        DiscoveryStatus.Liked => (StatusLiked, FieldLikeConfirmed),
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(status), status, "Only Liked/Disliked verdicts can be confirmed or reconsidered"),
+    };
+
+    /// <summary>Verdicts of one kind that haven't been re-affirmed: the sweep's working set.</summary>
+    private static FilterDefinition<BsonDocument> UnconfirmedVerdicts(string userId, DiscoveryStatus status)
+    {
+        var (stored, confirmField) = Verdict(status);
         var f = Builders<BsonDocument>.Filter;
-        // $ne also matches docs where the field is absent, so every pre-existing dislike counts as
-        // unconfirmed — exactly right: none of them has been re-rejected yet.
+        // $ne also matches docs where the field is absent, so every pre-existing verdict counts as
+        // unconfirmed — exactly right: none of them has been given the same thumb twice yet.
         return f.Eq(FieldUserId, userId)
-               & f.Eq(FieldStatus, StatusDisliked)
-               & f.Ne(FieldDislikeConfirmed, true);
+               & f.Eq(FieldStatus, stored)
+               & f.Ne(confirmField, true);
     }
 
-    public async Task<DislikedArtist[]> GetUnconfirmedDislikes(string userId)
+    public async Task<SweptArtist[]> GetUnconfirmedVerdicts(string userId, DiscoveryStatus status)
     {
-        var cursor = await Collection.FindAsync(UnconfirmedDislikes(userId), new FindOptions<BsonDocument>
-        {
-            Sort = Builders<BsonDocument>.Sort.Descending(FieldDecidedAt),
-        });
+        var cursor = await Collection.FindAsync(
+            UnconfirmedVerdicts(userId, status),
+            new FindOptions<BsonDocument> { Sort = Builders<BsonDocument>.Sort.Descending(FieldDecidedAt) });
 
         return (await cursor.ToListAsync())
             .Select(doc =>
             {
                 var c = ToCandidate(doc);
-                return new DislikedArtist(c.Artist, c.ImageUrl, ToSignal(doc));
+                return new SweptArtist(c.Artist, c.ImageUrl, ToSignal(doc));
             })
             .ToArray();
     }
 
-    public async Task SetReconsider(string userId, string artistName, ReconsiderSignal? signal, string? imageUrl)
+    public async Task SetReconsider(
+        string userId, string artistName, DiscoveryStatus status, ReconsiderSignal? signal, string? imageUrl)
     {
         var updates = new List<UpdateDefinition<BsonDocument>>
         {
@@ -311,17 +334,17 @@ public class UserQueueRepo : IUserQueueRepo
             updates.Add(Builders<BsonDocument>.Update.Set(FieldImageUrl, imageUrl));
         }
 
-        // Status-scoped (never an upsert): if the user liked or cleared the artist while the sweep was
-        // running, this matches nothing rather than resurrecting a stale verdict.
+        // Status-scoped (never an upsert): if the user re-thumbed or cleared the artist while the sweep
+        // was running, this matches nothing rather than stamping evidence onto the new verdict.
         await Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", DocId(userId, artistName))
-            & Builders<BsonDocument>.Filter.Eq(FieldStatus, StatusDisliked),
+            & Builders<BsonDocument>.Filter.Eq(FieldStatus, Verdict(status).Status),
             Builders<BsonDocument>.Update.Combine(updates));
     }
 
-    public async Task<ReconsiderCandidate[]> GetReconsiderable(string userId)
+    public async Task<ReconsiderCandidate[]> GetReconsiderable(string userId, DiscoveryStatus status)
     {
-        var filter = UnconfirmedDislikes(userId)
+        var filter = UnconfirmedVerdicts(userId, status)
                      & Builders<BsonDocument>.Filter.Exists(FieldReconsider);
         var cursor = await Collection.FindAsync(filter);
 
@@ -353,14 +376,16 @@ public class UserQueueRepo : IUserQueueRepo
         return new ReconsiderSignal(avg.ToDouble(), rated, tracks);
     }
 
-    public async Task<bool> TryConfirmDislike(string userId, string artistName)
+    public async Task<bool> TryConfirmVerdict(string userId, string artistName, DiscoveryStatus status)
     {
+        var (stored, confirmField) = Verdict(status);
         var f = Builders<BsonDocument>.Filter;
-        // The status predicate is the whole point: it only matches when the row is *already* Disliked,
-        // making this a no-op on a first-time thumbs-down. One atomic update — no read-then-write race.
+        // The status predicate is the whole point: it only matches when the row *already* holds this
+        // same verdict, making this a no-op on a first-time thumb. One atomic update — no
+        // read-then-write race.
         var result = await Collection.UpdateOneAsync(
-            f.Eq("_id", DocId(userId, artistName)) & f.Eq(FieldStatus, StatusDisliked),
-            Builders<BsonDocument>.Update.Set(FieldDislikeConfirmed, true));
+            f.Eq("_id", DocId(userId, artistName)) & f.Eq(FieldStatus, stored),
+            Builders<BsonDocument>.Update.Set(confirmField, true));
 
         return result.MatchedCount > 0;
     }

@@ -102,6 +102,7 @@ public class DiscoveryEngine : IQueueReplenisher
         FeedKind.RecommendedLibraryArtist => LibraryItemsBySection(userId, recommended: true),
         FeedKind.SeedLibraryArtist => LibraryItemsBySection(userId, recommended: false),
         FeedKind.ReconsiderArtist => ReconsiderItems(userId),
+        FeedKind.SecondThoughtsArtist => SecondThoughtsItems(userId),
         FeedKind.MissingAlbum => MissingAlbumItems(userId),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown feed kind"),
     };
@@ -205,7 +206,7 @@ public class DiscoveryEngine : IQueueReplenisher
     /// those are is decided out of band by the weekly <c>ReconsiderSweepService</c> and stored on the
     /// queue row, so serving this category is one read with no Plex traffic and nothing to recompute.
     /// A second thumbs-down confirms the rejection for good (see
-    /// <see cref="IUserQueueRepo.TryConfirmDislike"/>), which drops the row out of the sweep too.
+    /// <see cref="IUserQueueRepo.TryConfirmVerdict"/>), which drops the row out of the sweep too.
     ///
     /// Snoozing one of these cards is a plain snooze, not a soft rejection: it stops being Disliked, so
     /// when the window lapses it comes back through the ordinary unrated-owned-artist sections rather
@@ -214,11 +215,30 @@ public class DiscoveryEngine : IQueueReplenisher
     private async Task<List<FeedItem>> ReconsiderItems(string userId) =>
         // Strongest contradiction first — the higher you rated it, the more the thumbs-down looks like
         // the mistake. Ties break by name so the order is stable across loads.
-        (await _queue.GetReconsiderable(userId))
+        (await _queue.GetReconsiderable(userId, DiscoveryStatus.Disliked))
         .OrderByDescending(r => r.Signal.Average)
         .ThenBy(r => r.Artist.ArtistName, StringComparer.OrdinalIgnoreCase)
         .Select(r => new FeedItem(
             FeedKind.ReconsiderArtist, r.Artist, null, r.ImageUrl,
+            0, Array.Empty<string>(), null, Reconsider: r.Signal))
+        .ToList();
+
+    /// <summary>
+    /// The mirror of <see cref="ReconsiderItems"/>: liked artists whose own Plex song ratings are poor
+    /// enough to argue the thumbs-up was wrong. Same sweep, same stored evidence, opposite direction —
+    /// and it matters more than a stale dislike, because a like still feeds the frontier, so every
+    /// recommendation grown off a band the user actually rates 2★ is wasted queue.
+    ///
+    /// Thumbing one down here does what any dislike does (prunes what it seeded); thumbing it up again
+    /// confirms the like for good and it never comes back.
+    /// </summary>
+    private async Task<List<FeedItem>> SecondThoughtsItems(string userId) =>
+        // Worst-rated first — the lower the average, the more the thumbs-up looks like the mistake.
+        (await _queue.GetReconsiderable(userId, DiscoveryStatus.Liked))
+        .OrderBy(r => r.Signal.Average)
+        .ThenBy(r => r.Artist.ArtistName, StringComparer.OrdinalIgnoreCase)
+        .Select(r => new FeedItem(
+            FeedKind.SecondThoughtsArtist, r.Artist, null, r.ImageUrl,
             0, Array.Empty<string>(), null, Reconsider: r.Signal))
         .ToList();
 
@@ -361,18 +381,20 @@ public class DiscoveryEngine : IQueueReplenisher
     /// too, if it isn't owned); a dislike records the verdict and prunes the recommendations that
     /// artist alone had seeded, so the queue tracks current taste without a manual rebuild.
     ///
-    /// A dislike landing on an <em>already</em>-disliked artist is the user re-rejecting something the
-    /// reconsider category offered back — that confirms the verdict permanently, so the artist is never
-    /// second-guessed again.
+    /// A thumb landing on an artist that <em>already</em> holds that same verdict is the user standing
+    /// by something the sweep offered back for a rethink — a re-rejection of a "second chance" card, or
+    /// a re-affirmed like on a "second thoughts" one. Either confirms the verdict permanently, so that
+    /// artist is never second-guessed again.
     /// </summary>
     public async Task RateArtist(string userId, string artistName, DiscoveryStatus status)
     {
         // Before Rate overwrites the previous verdict, while the row still carries it.
-        if (status == DiscoveryStatus.Disliked && await _queue.TryConfirmDislike(userId, artistName))
+        if (status is DiscoveryStatus.Disliked or DiscoveryStatus.Liked
+            && await _queue.TryConfirmVerdict(userId, artistName, status))
         {
             _logger.LogInformation(
-                "{User} thumbed {Artist} down a second time — the rejection is now permanent",
-                userId, artistName);
+                "{User} thumbed {Artist} {Direction} a second time — the verdict is now permanent",
+                userId, artistName, status == DiscoveryStatus.Liked ? "up" : "down");
         }
 
         var rated = await _queue.Rate(userId, artistName, status, imageUrl: null);

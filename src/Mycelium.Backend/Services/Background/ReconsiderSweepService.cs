@@ -4,15 +4,16 @@ using Mycelium.Interfaces;
 namespace Mycelium.Backend.Services.Background;
 
 /// <summary>
-/// Periodically re-reads the user's Plex song ratings for every band they thumbed down and flags the
-/// ones the ratings contradict — a high average across a decent share of the songs (see
-/// <see cref="ReconsiderPolicy"/>). Those flagged rows are what the "second chance" discovery category
-/// serves, so the feed itself is a single Mongo read: all the judgement happens here, out of band.
+/// Periodically re-reads the user's Plex song ratings for every band they've thumbed and flags the
+/// ones the ratings contradict, in both directions (see <see cref="ReconsiderPolicy"/>): a dislike the
+/// ratings rate highly becomes a "second chance" card, a like they rate poorly a "second thoughts" one.
+/// Those flagged rows are what the two discovery categories serve, so each feed is a single Mongo read:
+/// all the judgement happens here, out of band.
 ///
-/// The point is to resurrect artists buried years ago, so a slow cadence is the feature, not a
-/// compromise — a thumbs-down isn't second-guessed seconds after it's made, and a rating made in Plex
-/// today surfaces on the next weekly pass. Each pass also *withdraws* flags that no longer hold (the
-/// user rated more songs down, say), so the category can't drift out of sync with the ratings.
+/// The point is to re-litigate verdicts made years ago, so a slow cadence is the feature, not a
+/// compromise — a thumb isn't second-guessed seconds after it's made, and a rating made in Plex today
+/// surfaces on the next weekly pass. Each pass also *withdraws* flags that no longer hold (the user
+/// rated more songs down, say), so the categories can't drift out of sync with the ratings.
 ///
 /// Per-user failures are logged and skipped so one bad user doesn't abort the pass; a failed pass
 /// simply retries at the next interval.
@@ -50,9 +51,10 @@ public class ReconsiderSweepService : BackgroundService
     {
         string[] userIds;
         // Owned artist -> its catalog art. Only owned artists have songs in Plex to have been rated, so
-        // a rejected recommendation the library doesn't hold can't produce a contradicting signal. The
-        // art comes along because an artist rated straight from the library has none on its queue row,
-        // and stamping it while we're here keeps serving the feed to a single query.
+        // an artist the library doesn't hold (a rejected recommendation, or a like still on the to-buy
+        // list) can't produce a contradicting signal. The art comes along because an artist rated
+        // straight from the library has none on its queue row, and stamping it while we're here keeps
+        // serving the feed to a single query.
         var owned = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -80,38 +82,43 @@ public class ReconsiderSweepService : BackgroundService
         {
             try
             {
-                foreach (var disliked in await _queue.GetUnconfirmedDislikes(userId))
+                // Both directions off the same per-artist stats: a dislike the ratings praise, a like
+                // they pan. Confirmed verdicts (the same thumb given twice) never come back from here.
+                foreach (var verdict in new[] { DiscoveryStatus.Disliked, DiscoveryStatus.Liked })
                 {
-                    var name = disliked.Artist.ArtistName;
-                    if (!owned.TryGetValue(name, out var art))
+                    foreach (var rated in await _queue.GetUnconfirmedVerdicts(userId, verdict))
                     {
-                        continue;
-                    }
+                        var name = rated.Artist.ArtistName;
+                        if (!owned.TryGetValue(name, out var art))
+                        {
+                            continue;
+                        }
 
-                    if (!statsByArtist.TryGetValue(name, out var stats))
-                    {
-                        statsByArtist[name] = stats = await _ratings.Get(disliked.Artist);
-                    }
+                        if (!statsByArtist.TryGetValue(name, out var stats))
+                        {
+                            statsByArtist[name] = stats = await _ratings.Get(rated.Artist);
+                        }
 
-                    var signal = _policy.Qualifies(stats)
-                        ? new ReconsiderSignal(stats.Average!.Value, stats.RatedCount, stats.TrackCount)
-                        : null;
+                        var signal = _policy.Contradicts(stats, verdict)
+                            ? new ReconsiderSignal(stats.Average!.Value, stats.RatedCount, stats.TrackCount)
+                            : null;
 
-                    // Records compare by value, so this skips the write whenever nothing changed —
-                    // including the steady state where the same artists stay flagged week after week.
-                    if (signal == disliked.Reconsider)
-                    {
-                        continue;
-                    }
+                        // Records compare by value, so this skips the write whenever nothing changed —
+                        // including the steady state where the same artists stay flagged week after week.
+                        if (signal == rated.Reconsider)
+                        {
+                            continue;
+                        }
 
-                    await _queue.SetReconsider(userId, name, signal, imageUrl: art);
-                    if (signal is null)
-                    {
-                        withdrawn++;
-                    }
-                    else
-                    {
-                        flagged++;
+                        await _queue.SetReconsider(userId, name, verdict, signal, imageUrl: art);
+                        if (signal is null)
+                        {
+                            withdrawn++;
+                        }
+                        else
+                        {
+                            flagged++;
+                        }
                     }
                 }
             }

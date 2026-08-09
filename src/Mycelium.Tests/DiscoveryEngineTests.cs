@@ -44,7 +44,7 @@ public class DiscoveryEngineTests
         _queue.GetLikedArtistNames(User).Returns(Array.Empty<string>());
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _queue.GetDecidedArtists(User).Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        _queue.GetReconsiderable(User).Returns(Array.Empty<ReconsiderCandidate>());
+        _queue.GetReconsiderable(User, Arg.Any<DiscoveryStatus>()).Returns(Array.Empty<ReconsiderCandidate>());
         _queue.CountPending(User).Returns(0);
         _queue.GetPending(User, Arg.Any<int>(), Arg.Any<int>())
             .Returns(new DiscoveryPage(Array.Empty<DiscoveryCandidate>(), 0, 20, 0));
@@ -449,7 +449,7 @@ public class DiscoveryEngineTests
     {
         // The engine does no judging here — the sweep decided, and the row carries both the verdict and
         // the numbers behind it, so the card needs no Plex round-trip to explain itself.
-        _queue.GetReconsiderable(User).Returns(new[]
+        _queue.GetReconsiderable(User, DiscoveryStatus.Disliked).Returns(new[]
         {
             new ReconsiderCandidate(new ArtistKey("Low"), "low-img", new ReconsiderSignal(4.0, 4, 6)),
         });
@@ -465,7 +465,7 @@ public class DiscoveryEngineTests
     [Fact]
     public async Task Reconsider_ranks_the_strongest_contradiction_first()
     {
-        _queue.GetReconsiderable(User).Returns(new[]
+        _queue.GetReconsiderable(User, DiscoveryStatus.Disliked).Returns(new[]
         {
             new ReconsiderCandidate(new ArtistKey("Slint"), null, new ReconsiderSignal(3.25, 4, 4)),
             new ReconsiderCandidate(new ArtistKey("Low"), null, new ReconsiderSignal(4.0, 4, 4)),
@@ -482,12 +482,63 @@ public class DiscoveryEngineTests
         (await Reconsidered()).Items.Should().BeEmpty();
     }
 
+    // ---- Second thoughts: the same evidence read against a like ----
+
+    private Task<DiscoveryFeedPage> SecondThoughts() =>
+        _sut.GetFeed(User, FeedKind.SecondThoughtsArtist, 0, 20);
+
+    [Fact]
+    public async Task Second_thoughts_serves_the_flagged_likes_with_their_stored_evidence()
+    {
+        _queue.GetReconsiderable(User, DiscoveryStatus.Liked).Returns(new[]
+        {
+            new ReconsiderCandidate(new ArtistKey("Nickelback"), "nb-img", new ReconsiderSignal(1.5, 4, 6)),
+        });
+
+        var item = (await SecondThoughts()).Items.Single();
+
+        item.Kind.Should().Be(FeedKind.SecondThoughtsArtist);
+        item.Artist.ArtistName.Should().Be("Nickelback");
+        item.ImageUrl.Should().Be("nb-img");
+        item.Reconsider.Should().Be(new ReconsiderSignal(1.5, 4, 6));
+    }
+
+    [Fact]
+    public async Task Second_thoughts_ranks_the_worst_rated_first()
+    {
+        // The opposite order to the second-chance section: down there a high average is the strongest
+        // argument, here it's a low one.
+        _queue.GetReconsiderable(User, DiscoveryStatus.Liked).Returns(new[]
+        {
+            new ReconsiderCandidate(new ArtistKey("Creed"), null, new ReconsiderSignal(2.0, 4, 4)),
+            new ReconsiderCandidate(new ArtistKey("Nickelback"), null, new ReconsiderSignal(1.25, 4, 4)),
+        });
+
+        var page = await SecondThoughts();
+
+        page.Items.Select(i => i.Artist.ArtistName).Should().Equal("Nickelback", "Creed");
+    }
+
+    [Fact]
+    public async Task The_two_second_guessing_sections_never_bleed_into_each_other()
+    {
+        // Each reads only the rows sitting at its own verdict, so a flagged like can't show up as a
+        // second chance (or vice versa) just because both use the same stored signal.
+        _queue.GetReconsiderable(User, DiscoveryStatus.Liked).Returns(new[]
+        {
+            new ReconsiderCandidate(new ArtistKey("Nickelback"), null, new ReconsiderSignal(1.5, 4, 6)),
+        });
+
+        (await Reconsidered()).Items.Should().BeEmpty();
+        (await SecondThoughts()).Items.Single().Artist.ArtistName.Should().Be("Nickelback");
+    }
+
     [Fact]
     public async Task First_dislike_records_the_verdict_without_confirming_it()
     {
-        // TryConfirmDislike is a no-op unless the row was *already* disliked — the repo enforces that,
-        // so the engine may call it unconditionally, but nothing else about a first dislike changes.
-        _queue.TryConfirmDislike(User, "Low").Returns(false);
+        // TryConfirmVerdict is a no-op unless the row *already* held that verdict — the repo enforces
+        // that, so the engine may call it unconditionally, but nothing else about a first dislike changes.
+        _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Disliked).Returns(false);
 
         await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked);
 
@@ -499,14 +550,31 @@ public class DiscoveryEngineTests
     {
         // The confirm must land while the row still holds the previous verdict, i.e. before Rate
         // overwrites it — otherwise every dislike would look like a repeat.
-        _queue.TryConfirmDislike(User, "Low").Returns(true);
+        _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Disliked).Returns(true);
 
         await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked);
 
         Received.InOrder(() =>
         {
-            _queue.TryConfirmDislike(User, "Low");
+            _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Disliked);
             _queue.Rate(User, "Low", DiscoveryStatus.Disliked, null);
+        });
+    }
+
+    [Fact]
+    public async Task Second_like_confirms_the_like_before_recording_it()
+    {
+        // The mirror: standing by a thumbs-up the "second thoughts" section questioned settles it, so
+        // the sweep stops weighing that artist for good.
+        Relates("Low", ("Codeine", null, 1)); // a like expands the frontier, which reads the graph
+        _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Liked).Returns(true);
+
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked);
+
+        Received.InOrder(() =>
+        {
+            _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Liked);
+            _queue.Rate(User, "Low", DiscoveryStatus.Liked, null);
         });
     }
 
@@ -517,6 +585,16 @@ public class DiscoveryEngineTests
 
         await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked);
 
-        await _queue.DidNotReceive().TryConfirmDislike(Arg.Any<string>(), Arg.Any<string>());
+        await _queue.DidNotReceive().TryConfirmVerdict(
+            Arg.Any<string>(), Arg.Any<string>(), DiscoveryStatus.Disliked);
+    }
+
+    [Fact]
+    public async Task Disliking_an_artist_never_confirms_a_like()
+    {
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked);
+
+        await _queue.DidNotReceive().TryConfirmVerdict(
+            Arg.Any<string>(), Arg.Any<string>(), DiscoveryStatus.Liked);
     }
 }
