@@ -221,6 +221,10 @@ public class StreamripDownloader : IDownloader
         // We own dedup (purchase status), so streamrip's download-history DB must never skip a track —
         // otherwise re-downloading after a deleted/partial grab silently fetches only the cover.
         args.Add("--no-db");
+        // We capture stdout rather than showing it, and streamrip draws rich progress bars there even
+        // with no TTY attached. Left on, the redraws bury the per-track error lines that are the whole
+        // point of logging this output when a pass comes up short.
+        args.Add("--no-progress");
         if (!string.IsNullOrWhiteSpace(folder))
         {
             Directory.CreateDirectory(folder);
