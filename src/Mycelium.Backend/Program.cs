@@ -667,9 +667,11 @@ api.MapPost("/purchases/unsend", async (string id, PurchaseService purchases) =>
 // The library albums a (near-miss titled) album can be merged into: the suggestions for this album
 // by default, or a whole-library search when `q` is supplied. Feeds the "Already in library?" pane,
 // which is offered wherever a missing album shows — the Download queue, the Browse discography and
-// the Discover feed. Query params so names with '/' survive.
-api.MapGet("/albums/merge-candidates", async (string artist, string album, string? q, PurchaseService purchases) =>
-        Results.Ok(await purchases.MergeCandidates(artist, album, q)))
+// the Discover feed. Each option carries an "open in Plex" link (best-effort) so the copy being
+// merged into can be checked first. Query params so names with '/' survive.
+api.MapGet("/albums/merge-candidates", async (
+            string artist, string album, string? q, PurchaseService purchases, PlexAlbumLinker links) =>
+        Results.Ok(await links.WithLinks(await purchases.MergeCandidates(artist, album, q))))
     .RequireAuthorization()
     .WithName("AlbumMergeCandidates");
 

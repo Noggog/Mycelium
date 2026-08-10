@@ -66,20 +66,10 @@ public class PlexLibraryLinker : ILibraryLinker
         var links = keys
             .Select((key, i) => new LibraryLink(
                 keys.Count > 1 ? $"Open in Plex ({i + 1})" : "Open in Plex",
-                BuildDeepLink(machineId, key)))
+                PlexDeepLink.ToItem(machineId, key)))
             .ToArray();
 
         return new LibrarySource(Source, Label, Present: true, links);
-    }
-
-    /// <summary>
-    /// app.plex.tv deep link to one item: the server segment + the url-encoded /library/metadata/{key}
-    /// path. Opens the artist in the Plex web app (and hands off to the desktop/mobile app if installed).
-    /// </summary>
-    private static string BuildDeepLink(string machineId, int ratingKey)
-    {
-        var key = Uri.EscapeDataString($"/library/metadata/{ratingKey}");
-        return $"https://app.plex.tv/desktop/#!/server/{machineId}/details?key={key}";
     }
 }
 

@@ -211,6 +211,9 @@ export interface ArtistAlbumItem {
 export interface LibraryAlbumOption {
   artist: string
   album: string
+  // Deep link to the album in Plex, so a near-miss title can be checked before merging into it. Null
+  // when the album's Plex rating key isn't captured yet, or Plex couldn't be reached.
+  plexUrl: string | null
 }
 
 // Mirror PurchaseStatus / PurchaseItem (IPurchaseRepo.cs) — the shared "to buy" list with a

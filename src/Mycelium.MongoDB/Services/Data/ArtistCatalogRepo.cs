@@ -12,6 +12,12 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     private const string FieldLastSeenAt = "lastSeenAt";
     private const string FieldPresent = "present";
     private const string FieldAlbums = "albums";
+    // The same albums with the Plex item each lives in: [{ title, key }, ...]. Kept beside the plain
+    // title array rather than replacing it — the missing-album diff only ever wants the titles, and
+    // docs synced before keys were captured stay readable.
+    private const string FieldAlbumKeys = "albumKeys";
+    private const string FieldAlbumKeyTitle = "title";
+    private const string FieldAlbumKeyRatingKey = "key";
     private const string FieldGenres = "genres";
     private const string FieldPlexRatingKeys = "plexRatingKeys";
     private const string FieldDeezerId = "deezerId";
@@ -124,7 +130,9 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         {
             writes.Add(new UpdateOneModel<BsonDocument>(
                 Builders<BsonDocument>.Filter.Eq("_id", entry.Artist.ArtistName),
-                Builders<BsonDocument>.Update.Set(FieldAlbums, new BsonArray(entry.Albums)))
+                Builders<BsonDocument>.Update
+                    .Set(FieldAlbums, new BsonArray(entry.Albums.Select(a => a.Title)))
+                    .Set(FieldAlbumKeys, new BsonArray(entry.Albums.Select(ToAlbumKeyDoc))))
             {
                 // Albums come from the same Plex pull as the artist list, so the doc already exists;
                 // never create phantom entries for an artist not in the catalog.
@@ -163,6 +171,46 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         return result;
     }
 
+    public async Task<Dictionary<string, Dictionary<string, int>>> GetAlbumPlexRatingKeys(
+        IReadOnlyCollection<string> artists)
+    {
+        var result = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+        if (artists.Count == 0) return result;
+
+        var cursor = await Collection.FindAsync(
+            Builders<BsonDocument>.Filter.In("_id", artists),
+            new FindOptions<BsonDocument>
+            {
+                Projection = Builders<BsonDocument>.Projection.Include(FieldName).Include(FieldAlbumKeys),
+            });
+
+        foreach (var doc in await cursor.ToListAsync())
+        {
+            var name = doc.TryGetValue(FieldName, out var n) && !n.IsBsonNull ? n.AsString : doc["_id"].AsString;
+            var keys = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (doc.TryGetValue(FieldAlbumKeys, out var a) && a.IsBsonArray)
+            {
+                foreach (var entry in a.AsBsonArray.OfType<BsonDocument>())
+                {
+                    if (entry.TryGetValue(FieldAlbumKeyTitle, out var title) && title.IsString
+                        && entry.TryGetValue(FieldAlbumKeyRatingKey, out var key) && key.IsNumeric)
+                    {
+                        keys[title.AsString] = key.ToInt32();
+                    }
+                }
+            }
+            result[name] = keys;
+        }
+
+        return result;
+    }
+
+    private static BsonDocument ToAlbumKeyDoc(OwnedAlbum album) => new()
+    {
+        { FieldAlbumKeyTitle, album.Title },
+        { FieldAlbumKeyRatingKey, album.PlexRatingKey },
+    };
+
     public async Task<string[]> FindCombinedArtistNames()
     {
         var filter = Builders<BsonDocument>.Filter.And(
@@ -188,6 +236,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         var albums = combined != null && combined.TryGetValue(FieldAlbums, out var a) && a.IsBsonArray
             ? a.AsBsonArray.Where(x => !x.IsBsonNull).Select(x => x.AsString).ToArray()
             : Array.Empty<string>();
+        // The album -> Plex item pairs travel with the titles, so a split artist keeps its deep links.
+        var albumKeys = combined != null && combined.TryGetValue(FieldAlbumKeys, out var k) && k.IsBsonArray
+            ? k.AsBsonArray.OfType<BsonDocument>().ToArray()
+            : Array.Empty<BsonDocument>();
 
         var writes = new List<WriteModel<BsonDocument>>(parts.Count + 1);
         foreach (var part in parts)
@@ -199,6 +251,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             if (albums.Length > 0)
             {
                 update = update.AddToSetEach(FieldAlbums, albums);
+            }
+            if (albumKeys.Length > 0)
+            {
+                update = update.AddToSetEach(FieldAlbumKeys, albumKeys);
             }
 
             writes.Add(new UpdateOneModel<BsonDocument>(

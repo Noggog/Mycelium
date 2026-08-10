@@ -39,6 +39,14 @@ public interface IArtistCatalogRepo
     Task<Dictionary<string, HashSet<string>>> GetOwnedAlbums();
 
     /// <summary>
+    /// The Plex rating key of each owned album title, for the named artists only — outer key artist,
+    /// inner key album title, both case-insensitive. Stored by the same sync as the titles; artists
+    /// (or albums) whose keys predate that sync are simply absent, so callers must treat a miss as
+    /// "no link available". Used to deep link a merge suggestion into Plex.
+    /// </summary>
+    Task<Dictionary<string, Dictionary<string, int>>> GetAlbumPlexRatingKeys(IReadOnlyCollection<string> artists);
+
+    /// <summary>
     /// Names of present catalog artists that encode multiple artists joined by ';' (a Plex
     /// multi-value artifact, e.g. "Nina Simone;Hot Chip") — candidates for cleanup.
     /// </summary>

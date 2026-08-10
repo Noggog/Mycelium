@@ -4,7 +4,14 @@ public record AlbumKey(string AlbumName);
 public record Album(AlbumKey Key, string? AlbumArt);
 
 /// <summary>The owned albums for one artist, as pulled from the Plex library catalog.</summary>
-public record ArtistAlbums(ArtistKey Artist, IReadOnlyList<string> Albums);
+public record ArtistAlbums(ArtistKey Artist, IReadOnlyList<OwnedAlbum> Albums);
+
+/// <summary>
+/// One album the library holds: the title the missing-album diff matches against, plus the Plex
+/// rating key it lives under so the UI can deep link straight to it (see PlexDeepLink). Captured on
+/// the same pull as the titles, so a library rebuild that shifts keys self-heals on the next sync.
+/// </summary>
+public record OwnedAlbum(string Title, int PlexRatingKey);
 
 /// <summary>
 /// An album that exists on Deezer for an artist the user owns, but isn't in the library — a
@@ -36,8 +43,12 @@ public record MissingAlbum(
 /// One album already in the library, offered as a merge target for a release the diff calls missing.
 /// Carries the artist because the copy we own can be filed under a different act than the one whose
 /// discography surfaced it (e.g. Plex's "Matthewdavid's Mindflight" vs. Deezer's "Matthewdavid").
+///
+/// <see cref="PlexUrl"/> opens the suggestion in Plex so a near-miss title can be checked against the
+/// real thing before merging; null when the album's rating key isn't captured yet (synced before keys
+/// were stored) or Plex couldn't be reached to identify the server.
 /// </summary>
-public record LibraryAlbumOption(string Artist, string Album);
+public record LibraryAlbumOption(string Artist, string Album, string? PlexUrl = null);
 
 /// <summary>
 /// Canonical (artist, album) identity used to match a user's album verdict against a missing album.

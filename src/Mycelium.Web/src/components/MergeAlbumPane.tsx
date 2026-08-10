@@ -81,6 +81,21 @@ export function MergeAlbumPane({
                 <span className="picker-name">{o.album}</span>
                 <span className="picker-sub">{o.artist}</span>
               </div>
+              {/* Check the suggestion against the copy you actually own before merging into it — a
+                  near-miss title is only worth merging if it really is the same record. A new tab so
+                  the pane (and everything behind it) stays put. Absent when the album's Plex key
+                  isn't captured yet, or Plex couldn't be reached. */}
+              {o.plexUrl && (
+                <a
+                  className="deezer-link"
+                  href={o.plexUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Open “${o.album}” in Plex`}
+                >
+                  Plex ↗
+                </a>
+              )}
               <button
                 className="disc-btn up"
                 title="Merge into this album"

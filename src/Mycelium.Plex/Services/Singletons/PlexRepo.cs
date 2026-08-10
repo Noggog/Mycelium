@@ -60,11 +60,16 @@ public class PlexRepo : ILibraryQuery
         // regroup by the real artist name (matching the split done in QueryAllArtistMetadata).
         return (await _plexApi.GetMusicAlbums(plexLibrary.Key))
             .Where(a => !string.IsNullOrWhiteSpace(a.ParentTitle) && !string.IsNullOrWhiteSpace(a.Title))
-            .SelectMany(a => ArtistNames.Split(a.ParentTitle).Select(name => (Name: name, a.Title)))
+            .SelectMany(a => ArtistNames.Split(a.ParentTitle).Select(name => (Name: name, a.Title, a.RatingKey)))
             .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .Select(g => new ArtistAlbums(
                 new ArtistKey(g.Key),
-                g.Select(x => x.Title).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()))
+                // Keep each title once (as before), now paired with the Plex item it came from so the
+                // merge picker can link the album itself. A repeated title (a second copy of the same
+                // record) keeps the first key — either opens the album in Plex.
+                g.GroupBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
+                    .Select(t => new OwnedAlbum(t.First().Title, t.First().RatingKey))
+                    .ToArray()))
             .ToArray();
     }
 }
