@@ -550,6 +550,12 @@ function ArtistAlbumsPanel({
   )
 }
 
+// The two owned-artist categories that ask "do you like this band?" without showing you what you own
+// by them. Their readouts get a link into Browse focused on the artist, so the answer is one click
+// away. The second-guessing kinds are left out: those cards carry their own evidence (the Plex song
+// ratings that contradict the verdict), which is the thing to judge on there.
+const BROWSE_LINK_KINDS = new Set<FeedKind>(['RecommendedLibraryArtist', 'SeedLibraryArtist'])
+
 // Discover kinds whose artist is already in the library (owned), so a "open where it lives" link makes
 // sense. RecommendedArtist (not yet owned) and MissingAlbum (an album, not the artist) are excluded.
 const IN_LIBRARY_KINDS = new Set<FeedKind>([
@@ -699,6 +705,22 @@ function DetailPanel({
               </div>
             </>
           ) : null}
+
+          {/* Owned artists you're being asked to rate: jump to them in Browse to see what of theirs
+              the library actually holds before thumbing. A new tab (plain anchor — target "_blank"
+              needs a real navigation) so the feed and the running preview stay put, same as the
+              "Recommended via" chips above. */}
+          {BROWSE_LINK_KINDS.has(item.kind) && (
+            <a
+              className="deezer-link detail-goartist"
+              href={`/browse?artist=${encodeURIComponent(name)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Open ${name} in Browse in a new tab`}
+            >
+              Go to artist ↗
+            </a>
+          )}
 
           <div className="detail-actions">
             {verdict ? (

@@ -1624,10 +1624,16 @@ a.detail-chip.via:hover {
   gap: 0.5rem;
 }
 
-/* "Go to artist" link on a missing-album card — sits between the album chips and the rate buttons.
-   Pulled up under the chips' 1rem gap and given a little breathing room before the actions. */
+/* "Go to artist" link on a missing-album card, and on the owned-artist cards asking for a rating —
+   sits between the chips above and the rate buttons. Pulled up under the chips' 1rem gap and given a
+   little breathing room before the actions. */
 .detail-goartist {
   margin: -0.5rem 0 0.85rem;
+}
+/* The seed section's cards have no chip row (nothing recommended them), so the link follows the title
+   directly — the pull-up meant for tucking under chips would leave it hugging the name. */
+.detail-name + .detail-goartist {
+  margin-top: 0.1rem;
 }
 
 .detail-actions {
