@@ -233,6 +233,36 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
+    public async Task Expansion_excludes_compilation_placeholder_artists()
+    {
+        _queue.GetLikedArtistNames(User).Returns(new[] { "boygenius" });
+        Relates("boygenius", ("Various Artists", null, 1), ("Phoebe Bridgers", null, 1));
+
+        await Recommended();
+
+        Captured(_queue).Select(c => c.Artist.ArtistName).Should().Equal("Phoebe Bridgers");
+    }
+
+    [Fact]
+    public async Task Feed_drops_placeholder_artists_already_queued_or_owned()
+    {
+        // A row written before the rule existed, and Plex's own compilation bucket.
+        _queue.CountPending(User).Returns(1);
+        _queue.GetPending(User, Arg.Any<int>(), Arg.Any<int>()).Returns(new DiscoveryPage(
+            new[] { new DiscoveryCandidate(new ArtistKey("various artists"), null, 3, Array.Empty<string>(), 1) },
+            0, 20, 1));
+        _library.GetAllArtistMetadata().Returns(new[]
+        {
+            new ArtistMetadata(new ArtistKey("Various Artists"), null),
+            new ArtistMetadata(new ArtistKey("Big Thief"), null),
+        });
+
+        (await Recommended()).Items.Should().BeEmpty();
+        var owned = await _sut.GetFeed(User, FeedKind.LibraryArtist, 0, 20);
+        owned.Items.Select(i => i.Artist.ArtistName).Should().Equal("Big Thief");
+    }
+
+    [Fact]
     public async Task Library_feed_shows_owned_artists_not_yet_rated()
     {
         _library.GetAllArtistMetadata().Returns(new[]

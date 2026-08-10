@@ -4,6 +4,26 @@ public record Recommendation(ArtistKey ArtistKey, ArtistKey[] SourceArtists);
 
 public record ArtistKey(string ArtistName);
 
+/// <summary>
+/// Names that stand in for "no single act" rather than naming one — the bucket a library files
+/// compilations and soundtracks under. They're not something a user can have taste about, so they
+/// must never be offered to rate or grown from, however they got into the graph or the library.
+/// Deliberately a short, exact list: anything fuzzier would swallow real acts (there is a band
+/// called "Various", and "VA" is a real artist name).
+/// </summary>
+public static class PlaceholderArtist
+{
+    private static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Various Artists",
+        "Various Artist",
+        "Unknown Artist",
+    };
+
+    public static bool Is(string? artistName) =>
+        artistName != null && Names.Contains(artistName.Trim());
+}
+
 public record ArtistMetadata(
     ArtistKey ArtistKey,
     string? ArtistImageUrl,

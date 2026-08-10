@@ -94,8 +94,21 @@ public class DiscoveryEngine : IQueueReplenisher
         return new DiscoveryFeedPage(headerKind, pageItems, page, pageSize, mixed.Count);
     }
 
-    /// <summary>The full (unpaged) list of feed items for one category.</summary>
-    private Task<List<FeedItem>> ItemsForKind(string userId, FeedKind kind) => kind switch
+    /// <summary>
+    /// The full (unpaged) list of feed items for one category, with compilation placeholders
+    /// ("Various Artists" and friends) dropped. Filtering here rather than per-category catches every
+    /// way one can reach a card — a stale queue row written before this rule existed, an owned Plex
+    /// "Various Artists" bucket, a soundtrack's missing albums — so no card ever asks the user to have
+    /// an opinion about a non-act.
+    /// </summary>
+    private async Task<List<FeedItem>> ItemsForKind(string userId, FeedKind kind)
+    {
+        var items = await KindItems(userId, kind);
+        items.RemoveAll(i => PlaceholderArtist.Is(i.Artist.ArtistName));
+        return items;
+    }
+
+    private Task<List<FeedItem>> KindItems(string userId, FeedKind kind) => kind switch
     {
         FeedKind.RecommendedArtist => RecommendedItems(userId),
         FeedKind.LibraryArtist => LibraryItems(userId),
@@ -613,6 +626,7 @@ public class DiscoveryEngine : IQueueReplenisher
             {
                 var name = candidate.ArtistKey.ArtistName;
                 if (string.IsNullOrWhiteSpace(name)
+                    || PlaceholderArtist.Is(name)
                     || name.Equals(frontierArtist, StringComparison.OrdinalIgnoreCase)
                     || library.Contains(name)
                     || decided.Contains(name))
