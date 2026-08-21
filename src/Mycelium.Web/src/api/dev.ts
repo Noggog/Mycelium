@@ -1,4 +1,4 @@
-// Dev-panel endpoints for the per-user Plex like/dislike labels. All are gated server-side by the
+// Dev-panel endpoints for the per-user Plex like/dislike mood tags. All are gated server-side by the
 // "DevUser" policy (DEV_USERNAMES), so a non-dev hitting them gets a 403 regardless of the UI.
 
 export interface ClearResult {
@@ -14,7 +14,8 @@ export interface RebuildResult {
   applied: number
 }
 
-// Strip every managed ("_liked"/"_disliked") label from every artist — clean slate.
+// Strip every managed ("_liked"/"_disliked") tag from every artist — moods, plus the legacy
+// same-named collections — for a clean slate.
 export async function clearPlexTags(): Promise<ClearResult> {
   const res = await fetch('/api/dev/plex-tags/clear', { method: 'POST' })
   if (!res.ok) {

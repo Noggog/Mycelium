@@ -57,8 +57,8 @@ public class PlexApi : IPlexApi
 
     public async Task<PlexMusicArtist[]> GetMusicArtists(int library)
     {
-        // includeCollections=1 so each artist's Collection tags come back inline (Plex omits them from
-        // the bare listing); the per-user like/dislike tagging reads these to merge writes additively.
+        // Mood tags come back inline on the bare listing; includeCollections=1 additionally pulls each
+        // artist's Collection tags, which only the legacy-collection cleanup in PlexTagMaintenance reads.
         string url = $"{_endpointInfo.BaseUri}/library/sections/{library}/all?includeCollections=1";
         _logger.LogDebug("Plex GetMusicArtists from library {Library}: {Url}", library, url);
         var response = await httpClient.GetStringAsync(url);
@@ -70,14 +70,14 @@ public class PlexApi : IPlexApi
     /// Fetches a single artist by its rating key (the targeted GET mirror of the whole-section
     /// listing). Returns <c>null</c> when the key no longer resolves (e.g. the item was removed or the
     /// library was rebuilt and keys shifted), so callers can fall back to a name scan. The
-    /// <c>/library/metadata/{ratingKey}</c> response carries the same inline <c>Collection</c> array as
-    /// the section listing (with includeCollections=1), so the tagger can merge the artist's current
-    /// collections without a full scan.
+    /// <c>/library/metadata/{ratingKey}</c> response carries the same inline <c>Mood</c> (and, with
+    /// includeCollections=1, <c>Collection</c>) arrays as the section listing, so the tagger can merge the
+    /// artist's current tags without a full scan.
     ///
     /// <para>Unlike the section listing — which serializes <c>Guid</c> as a single string — the detail
     /// endpoint returns it as an <em>array</em> of external-id objects (mbid/etc.). That shape collides
     /// with <see cref="PlexMusicArtist.Guid"/> (a string), so we drop the field before deserializing; the
-    /// tagger only needs RatingKey/Title/Collection and nothing reads Guid here.</para>
+    /// tagger only needs RatingKey/Title/Mood and nothing reads Guid here.</para>
     /// </summary>
     public async Task<PlexMusicArtist?> GetMusicArtist(int ratingKey)
     {
@@ -157,16 +157,37 @@ public class PlexApi : IPlexApi
     }
 
     /// <summary>
-    /// Edits an artist's Collection set in section <paramref name="library"/>: adds every tag in
+    /// Edits an artist's Mood set in section <paramref name="library"/>: adds every tag in
     /// <paramref name="add"/> and removes every tag in <paramref name="remove"/> in a single edit.
-    /// Plex's tag edit is <b>not</b> a whole-field replace — listing <c>collection[i].tag.tag</c> only
-    /// adds, and a tag is dropped only via the explicit <c>collection[].tag.tag-</c> parameter — so
-    /// callers pass the delta, not the desired final set. Removed tags must be spelled exactly as Plex
-    /// stores them (case included), so read them off the current item. <c>type=8</c> is the artist
-    /// metadata type; <c>collection.locked=1</c> pins the field so a later refresh won't drop the tags.
+    /// Mood is where this app's per-user like/dislike verdicts live: of the artist fields Plex will filter
+    /// on (genre, mood, style, country, collection), it's the one that tags the artist without creating a
+    /// library object — a Collection would show up in the library's Collections tab, which no Plex setting
+    /// can hide, and a Label isn't filterable for artists at all.
     /// </summary>
-    public async Task SetArtistCollections(
-        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove)
+    public Task SetArtistMoods(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
+        SetArtistTags("mood", library, ratingKey, add, remove);
+
+    /// <summary>
+    /// The Collection-field twin of <see cref="SetArtistMoods"/>. Only the cleanup path uses it, to strip
+    /// the "&lt;user&gt;_liked"/"_disliked" collections an earlier version of the tagger wrote.
+    /// </summary>
+    public Task SetArtistCollections(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
+        SetArtistTags("collection", library, ratingKey, add, remove);
+
+    /// <summary>
+    /// Edits one tag field (<c>mood</c>/<c>collection</c>) on an artist. Plex's tag edit is <b>not</b> a
+    /// whole-field replace — listing <c>{field}[i].tag.tag</c> only adds, and a tag is dropped only via the
+    /// explicit <c>{field}[].tag.tag-</c> parameter — so callers pass the delta, not the desired final set.
+    /// That's what keeps hand-applied tags on the same field (e.g. the "ambient"/"heavy" moods driving
+    /// existing smart collections) intact. Removed tags must be spelled exactly as Plex stores them (case
+    /// included), so read them off the current item. <c>type=8</c> is the artist metadata type;
+    /// <c>{field}.locked=1</c> pins the field so a later refresh won't drop the tags.
+    /// </summary>
+    private async Task SetArtistTags(
+        string field, int library, int ratingKey,
+        IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove)
     {
         if (add.Count == 0 && remove.Count == 0)
         {
@@ -178,19 +199,19 @@ public class PlexApi : IPlexApi
         var i = 0;
         foreach (var tag in add)
         {
-            url.Append($"&collection[{i}].tag.tag={Uri.EscapeDataString(tag)}");
+            url.Append($"&{field}[{i}].tag.tag={Uri.EscapeDataString(tag)}");
             i++;
         }
         if (remove.Count > 0)
         {
             // Plex drops tags only via the "-" suffix param: a comma-separated list, each value escaped.
             var dropped = string.Join(",", remove.Select(Uri.EscapeDataString));
-            url.Append($"&collection[].tag.tag-={dropped}");
+            url.Append($"&{field}[].tag.tag-={dropped}");
         }
-        url.Append("&collection.locked=1");
+        url.Append($"&{field}.locked=1");
 
         _logger.LogDebug(
-            "Plex SetArtistCollections for {RatingKey}: +{Add} -{Remove}", ratingKey, add.Count, remove.Count);
+            "Plex artist {RatingKey} {Field} edit: +{Add} -{Remove}", ratingKey, field, add.Count, remove.Count);
         var response = await httpClient.PutAsync(url.ToString(), content: null);
         response.EnsureSuccessStatusCode();
     }
@@ -253,11 +274,19 @@ public record PlexMusicArtist
     // Plex returns genre tags inline on the section listing, e.g. "Genre":[{"tag":"Pop/Rock"}].
     public PlexTag[]? Genre { get; set; }
 
-    // Collection memberships. Returned inline on the section listing when includeCollections=1 is set
-    // (see GetMusicArtists), in a field separate from Genre/Mood/Style — so editing collections never
-    // disturbs those. The per-user like/dislike tags live here because, unlike Label, "Artist Collection"
-    // is a field Plex music smart playlists can actually filter on.
+    // Mood tags, returned inline on the section listing like Genre, e.g. "Mood":[{"tag":"Melancholy"}].
+    // The per-user like/dislike verdicts live here — filterable by a music smart playlist, and unlike a
+    // Collection it doesn't create a library object. Provider-supplied moods share the field, so writes
+    // must stay delta-based.
+    public PlexTag[]? Mood { get; set; }
+
+    // Collection memberships, returned inline when includeCollections=1 is set (see GetMusicArtists).
+    // Read only by the cleanup that strips the like/dislike collections an earlier tagger wrote.
     public PlexTag[]? Collection { get; set; }
+
+    /// <summary>The artist's current mood tags; empty when it has none.</summary>
+    public string[] Moods() =>
+        Mood?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
 
     /// <summary>The artist's current collection names; empty when it belongs to none.</summary>
     public string[] Collections() =>

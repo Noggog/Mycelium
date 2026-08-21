@@ -445,10 +445,10 @@ api.MapPost("/discovery/rate", async (
         if (string.IsNullOrEmpty(album))
         {
             await engine.RateArtist(userId, artist, status);
-            // Mirror the verdict into Plex as a per-user collection ("<username>_liked"/"_disliked"),
-            // which a music smart playlist can filter on via "Artist Collection". Stamp the new verdict
-            // and strip the opposite so the latest rating is the only tag left (a like→dislike flip drops
-            // "_liked"). Best-effort (never throws), so a Plex hiccup can't fail the rating.
+            // Mirror the verdict into Plex as a per-user mood tag ("<username>_liked"/"_disliked"), which
+            // a music smart playlist can filter on via "Artist Mood". Stamp the new verdict and strip the
+            // opposite so the latest rating is the only tag left (a like→dislike flip drops "_liked").
+            // Best-effort (never throws), so a Plex hiccup can't fail the rating.
             var username = http.User.FindFirst("preferred_username")?.Value;
             var tag = ArtistTag.For(username, status);
             if (tag != null)
@@ -556,7 +556,7 @@ api.MapDelete("/discovery/rate", async (
         if (string.IsNullOrEmpty(album))
         {
             await engine.ClearArtistRating(userId, artist);
-            // Undo the Plex collection too — a cleared verdict shouldn't leave its "<username>_liked"/
+            // Undo the Plex tag too — a cleared verdict shouldn't leave its "<username>_liked"/
             // "_disliked" tag behind. We don't know which verdict it was, so strip both (the user holds
             // at most one); best-effort, so a Plex hiccup can't fail the clear.
             var username = http.User.FindFirst("preferred_username")?.Value;
@@ -585,9 +585,9 @@ api.MapGet("/discovery/ratings", async (HttpContext http, DiscoveryEngine engine
     .WithName("GetRatings");
 
 // --- Dev panel: Plex tag maintenance ---
-// Wipe and/or rebuild the per-user like/dislike labels so we can iterate on the tagging logic
+// Wipe and/or rebuild the per-user like/dislike mood tags so we can iterate on the tagging logic
 // without leaving orphaned tags scattered across the library. Gated by the "DevUser" policy
-// (DEV_USERNAMES) — the clear is destructive (it nukes every "_liked"/"_disliked" label), so these
+// (DEV_USERNAMES) — the clear is destructive (it nukes every "_liked"/"_disliked" tag), so these
 // stay restricted to dev users rather than any signed-in user.
 var dev = api.MapGroup("/dev/plex-tags").RequireAuthorization("DevUser");
 

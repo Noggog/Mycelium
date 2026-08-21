@@ -27,12 +27,12 @@ public class PlexArtistTaggerTests
         _plex.GetMusicArtists(Arg.Any<int>()).Returns(Array.Empty<PlexMusicArtist>());
     }
 
-    private static PlexMusicArtist ArtistItem(int ratingKey, string title, params string[] collections) =>
+    private static PlexMusicArtist ArtistItem(int ratingKey, string title, params string[] moods) =>
         new()
         {
             RatingKey = ratingKey,
             Title = title,
-            Collection = collections.Select(l => new PlexTag { Tag = l }).ToArray(),
+            Mood = moods.Select(l => new PlexTag { Tag = l }).ToArray(),
         };
 
     private void StoredKeys(params int[] keys) =>
@@ -40,30 +40,32 @@ public class PlexArtistTaggerTests
 
     /// <summary>Asserts exactly one edit of item <paramref name="ratingKey"/> with the given add/remove delta.</summary>
     private Task ReceivedEdit(int ratingKey, string[] add, string[] remove) =>
-        _plex.Received(1).SetArtistCollections(1, ratingKey,
+        _plex.Received(1).SetArtistMoods(1, ratingKey,
             Arg.Is<IReadOnlyCollection<string>>(a => a.SequenceEqual(add)),
             Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(remove)));
 
-    // --- ReconcileCollections (pure) -----------------------------------------------------------
+    // --- ReconcileMoods (pure) ------------------------------------------------------------------
 
     [Fact]
     public void Reconcile_adds_when_absent_and_preserves_others()
     {
-        PlexArtistTagger.ReconcileCollections(new[] { "rock" }, Liked, Array.Empty<string>())
-            .Should().Equal("rock", Liked);
+        // "ambient" stands in for a hand-applied mood an existing smart collection filters on — a verdict
+        // write must never disturb it.
+        PlexArtistTagger.ReconcileMoods(new[] { "ambient" }, Liked, Array.Empty<string>())
+            .Should().Equal("ambient", Liked);
     }
 
     [Fact]
     public void Reconcile_removes_case_insensitively_and_preserves_others()
     {
-        PlexArtistTagger.ReconcileCollections(new[] { "rock", "NOGGOG_LIKED" }, null, new[] { Liked })
+        PlexArtistTagger.ReconcileMoods(new[] { "rock", "NOGGOG_LIKED" }, null, new[] { Liked })
             .Should().Equal("rock");
     }
 
     [Fact]
     public void Reconcile_flip_drops_opposite_and_adds_new()
     {
-        PlexArtistTagger.ReconcileCollections(new[] { "rock", Liked }, Disliked, new[] { Liked })
+        PlexArtistTagger.ReconcileMoods(new[] { "rock", Liked }, Disliked, new[] { Liked })
             .Should().Equal("rock", Disliked);
     }
 
@@ -71,10 +73,10 @@ public class PlexArtistTaggerTests
     public void Reconcile_returns_null_when_already_in_desired_state()
     {
         // Add already present, nothing to remove.
-        PlexArtistTagger.ReconcileCollections(new[] { "rock", Liked }, Liked, new[] { Disliked })
+        PlexArtistTagger.ReconcileMoods(new[] { "rock", Liked }, Liked, new[] { Disliked })
             .Should().BeNull();
         // Add present (case-insensitive), remove tag absent.
-        PlexArtistTagger.ReconcileCollections(new[] { "NOGGOG_LIKED" }, Liked, new[] { Disliked })
+        PlexArtistTagger.ReconcileMoods(new[] { "NOGGOG_LIKED" }, Liked, new[] { Disliked })
             .Should().BeNull();
     }
 
@@ -135,7 +137,7 @@ public class PlexArtistTaggerTests
 
         await _sut.SetTags(Artist, Liked, new[] { Disliked });
 
-        await _plex.DidNotReceive().SetArtistCollections(
+        await _plex.DidNotReceive().SetArtistMoods(
             Arg.Any<int>(), Arg.Any<int>(),
             Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<IReadOnlyCollection<string>>());
     }

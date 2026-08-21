@@ -5,16 +5,23 @@ using Mycelium.Plex.Services.Singletons;
 namespace Mycelium.Backend.Services.Singletons;
 
 /// <summary>
-/// <see cref="IArtistTagger"/> over Plex. Stamps a user's like/dislike onto the artist in Plex as a
-/// Collection membership (e.g. "noggog_liked"), so a taste verdict made in the app is visible in Plex
-/// and — unlike a Label — filterable by a music smart playlist via the "Artist Collection" field.
+/// <see cref="IArtistTagger"/> over Plex. Stamps a user's like/dislike onto the artist in Plex as a Mood
+/// tag (e.g. "noggog_liked"), so a taste verdict made in the app is visible in Plex and filterable by a
+/// music smart playlist via the "Artist Mood" field.
 ///
-/// <para><b>Reconciling, one pass.</b> Plex's metadata edit replaces the whole Collection field, so we
-/// read the artist's current collections and PUT them back with the keeper added and the drops removed —
-/// preserving genres (a separate field) and any other user's tags. Doing the add and remove in the same
-/// scan means a rating (which both stamps the new verdict and strips the opposite) costs one read, not
-/// two. A name can map to more than one Plex item (Plex joins collaborators into a single ';'-delimited
-/// title), so every item the name appears in is updated, matching how the rest of the app reads names.</para>
+/// <para><b>Why Mood.</b> Plex will filter artists on genre, mood, style, country and collection — and
+/// nothing else; Label isn't among them, so a label can't drive a smart playlist. Of the five, Mood is the
+/// one that tags the artist without creating a library object: a Collection appears in the library's
+/// Collections tab, and no Plex setting hides it there (the per-collection display mode only governs
+/// inline display in the main library view).</para>
+///
+/// <para><b>Reconciling, one pass.</b> We read the artist's current moods and write back the keeper added
+/// and the drops removed — preserving genres (a separate field) and any other user's tags. Critically it
+/// also preserves hand-applied moods on the same field, which existing smart collections filter on. Doing
+/// the add and remove in the same scan means a rating (which both stamps the new verdict and strips the
+/// opposite) costs one read, not two. A name can map to more than one Plex item (Plex joins collaborators
+/// into a single ';'-delimited title), so every item the name appears in is updated, matching how the rest
+/// of the app reads names.</para>
 ///
 /// <para><b>Targeted, with a scan fallback.</b> The catalog stores each artist's Plex rating key(s)
 /// (captured on every refresh), so the hot path reads those keys and fetches just those items instead
@@ -39,11 +46,11 @@ public class PlexArtistTagger : IArtistTagger
     }
 
     /// <summary>
-    /// Computes the collection set to PUT for one Plex item: drops every tag in <paramref name="remove"/>
-    /// (case-insensitively) and ensures <paramref name="add"/> is present, leaving all other collections
+    /// Computes the mood set for one Plex item: drops every tag in <paramref name="remove"/>
+    /// (case-insensitively) and ensures <paramref name="add"/> is present, leaving all other moods
     /// untouched. Returns <c>null</c> when the item is already in the desired state (nothing to write).
     /// </summary>
-    internal static IReadOnlyList<string>? ReconcileCollections(
+    internal static IReadOnlyList<string>? ReconcileMoods(
         string[] existing, string? add, IReadOnlyCollection<string> remove)
     {
         var removedAny = existing.Any(l => remove.Contains(l, StringComparer.OrdinalIgnoreCase));
@@ -96,12 +103,12 @@ public class PlexArtistTagger : IArtistTagger
                     return;
                 }
 
-                await ApplyCollections(library.Key, item, addTag, remove);
+                await ApplyMoods(library.Key, item, addTag, remove);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to update Plex collections on {Artist}", artistName);
+            _logger.LogWarning(ex, "Failed to update Plex moods on {Artist}", artistName);
         }
     }
 
@@ -125,15 +132,15 @@ public class PlexArtistTagger : IArtistTagger
 
         foreach (var artist in matches)
         {
-            await ApplyCollections(library.Key, artist, addTag, remove);
+            await ApplyMoods(library.Key, artist, addTag, remove);
         }
     }
 
-    private async Task ApplyCollections(
+    private async Task ApplyMoods(
         int libraryKey, PlexMusicArtist artist, string? addTag, IReadOnlyCollection<string> remove)
     {
-        var existing = artist.Collections();
-        var next = ReconcileCollections(existing, addTag, remove);
+        var existing = artist.Moods();
+        var next = ReconcileMoods(existing, addTag, remove);
         if (next == null)
         {
             return; // already in the desired state on this item
@@ -145,9 +152,9 @@ public class PlexArtistTagger : IArtistTagger
         var toAdd = next.Where(c => !existing.Contains(c, StringComparer.OrdinalIgnoreCase)).ToArray();
         var toRemove = existing.Where(c => !next.Contains(c, StringComparer.OrdinalIgnoreCase)).ToArray();
 
-        await _plexApi.SetArtistCollections(libraryKey, artist.RatingKey, toAdd, toRemove);
+        await _plexApi.SetArtistMoods(libraryKey, artist.RatingKey, toAdd, toRemove);
         _logger.LogInformation(
-            "Updated Plex collections on {Artist} ({Key}): +[{Add}] -[{Remove}]",
+            "Updated Plex moods on {Artist} ({Key}): +[{Add}] -[{Remove}]",
             artist.Title, artist.RatingKey, string.Join(", ", toAdd), string.Join(", ", toRemove));
     }
 }

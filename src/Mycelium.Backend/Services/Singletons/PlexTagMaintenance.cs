@@ -5,14 +5,18 @@ using Mycelium.Plex.Services.Singletons;
 namespace Mycelium.Backend.Services.Singletons;
 
 /// <summary>
-/// Dev/maintenance for the per-user Plex like/dislike collections written by <see cref="PlexArtistTagger"/>.
+/// Dev/maintenance for the per-user Plex like/dislike mood tags written by <see cref="PlexArtistTagger"/>.
 /// Lets us wipe the managed tags back to a clean slate and rebuild them from the stored ratings, so
 /// iterating on the tagging logic doesn't leave orphaned tags scattered across the Plex library.
 ///
-/// <para>"Managed" tags are exactly those collections with the "_liked"/"_disliked" suffix (see
-/// <see cref="ArtistTag.IsManaged"/>); every other collection — hand-made groupings and other apps' tags —
-/// is left alone. Current collections are read from the section listing (Plex returns them inline when
-/// includeCollections=1 is set), and each write merges so a PUT never drops collections it didn't intend to.</para>
+/// <para>"Managed" tags are exactly those with the "_liked"/"_disliked" suffix (see
+/// <see cref="ArtistTag.IsManaged"/>); every other mood — provider-supplied descriptors, hand-applied tags
+/// like the "ambient"/"heavy" moods driving existing smart collections — is left alone. The clear also
+/// strips managed <em>collections</em>, since an earlier version of the tagger wrote the verdicts as
+/// collection memberships; that's how those get swept out of the library (a collection Plex empties this
+/// way is deleted). Current tags are read from the section listing (Plex returns moods inline, and
+/// collections with includeCollections=1), and each write sends only a delta so it never drops tags it
+/// didn't intend to.</para>
 /// </summary>
 public class PlexTagMaintenance
 {
@@ -42,8 +46,10 @@ public class PlexTagMaintenance
     }
 
     /// <summary>
-    /// Strips every managed ("_liked"/"_disliked") collection from every artist in the library, preserving
-    /// all other collections. Returns the number of artists changed.
+    /// Strips every managed ("_liked"/"_disliked") tag from every artist in the library — moods, plus the
+    /// collections the pre-mood tagger left behind — preserving all other moods and collections. A
+    /// collection emptied this way is deleted by Plex, which is what clears them out of the library's
+    /// Collections tab. Returns the number of artists changed.
     /// </summary>
     public async Task<int> ClearManagedTags()
     {
@@ -51,16 +57,24 @@ public class PlexTagMaintenance
         var changed = 0;
         foreach (var artist in await _plexApi.GetMusicArtists(library.Key))
         {
-            var current = artist.Collections();
-            var managed = current.Where(ArtistTag.IsManaged).ToArray();
-            if (managed.Length == 0)
+            var moods = artist.Moods().Where(ArtistTag.IsManaged).ToArray();
+            var collections = artist.Collections().Where(ArtistTag.IsManaged).ToArray();
+            if (moods.Length == 0 && collections.Length == 0)
             {
                 continue; // nothing managed on this artist
             }
 
             // Plex only drops tags via an explicit removal, so strip the managed ones by name (their
-            // stored casing), leaving every other collection untouched.
-            await _plexApi.SetArtistCollections(library.Key, artist.RatingKey, Array.Empty<string>(), managed);
+            // stored casing), leaving every other tag in both fields untouched.
+            if (moods.Length > 0)
+            {
+                await _plexApi.SetArtistMoods(library.Key, artist.RatingKey, Array.Empty<string>(), moods);
+            }
+            if (collections.Length > 0)
+            {
+                await _plexApi.SetArtistCollections(
+                    library.Key, artist.RatingKey, Array.Empty<string>(), collections);
+            }
             changed++;
         }
 
@@ -69,11 +83,11 @@ public class PlexTagMaintenance
     }
 
     /// <summary>
-    /// Reapplies like/dislike collections from the stored ratings of every user that has any. The tag
-    /// prefix comes from each user's stored username (the same source the live rating path uses); users
-    /// with no usable username are skipped. Tags are accumulated per artist and merged with the artist's
-    /// current collections, so one PUT per artist carries every applicable tag (and an already-present tag
-    /// is a no-op). Returns the number of (artist, tag) applications.
+    /// Reapplies like/dislike moods from the stored ratings of every user that has any. The tag prefix
+    /// comes from each user's stored username (the same source the live rating path uses); users with no
+    /// usable username are skipped. Tags are accumulated per artist and diffed against the artist's current
+    /// moods, so one edit per artist carries every applicable tag (and an already-present tag is a no-op).
+    /// Returns the number of (artist, tag) applications.
     /// </summary>
     public async Task<int> ReapplyFromRatings()
     {
@@ -81,7 +95,7 @@ public class PlexTagMaintenance
         var artists = await _plexApi.GetMusicArtists(library.Key);
         var byName = BuildNameIndex(artists);
 
-        // ratingKey -> the managed collection tags that should be present on that artist.
+        // ratingKey -> the managed mood tags that should be present on that artist.
         var wanted = new Dictionary<int, HashSet<string>>();
         var applied = 0;
 
@@ -114,16 +128,16 @@ public class PlexTagMaintenance
         var byKey = artists.ToDictionary(a => a.RatingKey);
         foreach (var (ratingKey, tags) in wanted)
         {
-            var current = byKey[ratingKey].Collections();
+            var current = byKey[ratingKey].Moods();
             var toAdd = tags.Where(t => !current.Contains(t, StringComparer.OrdinalIgnoreCase)).ToArray();
             if (toAdd.Length > 0)
             {
-                await _plexApi.SetArtistCollections(library.Key, ratingKey, toAdd, Array.Empty<string>());
+                await _plexApi.SetArtistMoods(library.Key, ratingKey, toAdd, Array.Empty<string>());
             }
         }
 
         _logger.LogInformation(
-            "Reapplied {Applied} Plex collection tag(s) across {Artists} artist(s)", applied, wanted.Count);
+            "Reapplied {Applied} Plex mood tag(s) across {Artists} artist(s)", applied, wanted.Count);
         return applied;
     }
 

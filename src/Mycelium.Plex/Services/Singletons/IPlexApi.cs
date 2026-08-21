@@ -25,6 +25,12 @@ public interface IPlexApi
 
     Task<PlexRecentlyAddedItem[]> GetRecentlyAdded(int libraryKey, int maxResults = 5);
     Task RefreshLibrary(int libraryKey);
+    /// <summary>Adds/removes Mood tags on an artist in one edit — the app's like/dislike tagging.</summary>
+    Task SetArtistMoods(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
+
+    /// <summary>The Collection-field twin of <see cref="SetArtistMoods"/>, used only to strip the
+    /// like/dislike collections an earlier version of the tagger wrote.</summary>
     Task SetArtistCollections(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
     Task<PlexLibrary> ResolveLibrary();

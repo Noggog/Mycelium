@@ -351,9 +351,10 @@ function PlexTagTools() {
     <div className="dev-tool">
       <h2>Plex tags</h2>
       <p>
-        Per-user <code>&lt;username&gt;_liked</code> / <code>_disliked</code> labels mirrored onto
-        artists in Plex. Clear nukes every managed tag; reapply re-derives them from stored ratings;
-        rebuild does both (the true reset).
+        Per-user <code>&lt;username&gt;_liked</code> / <code>_disliked</code> mood tags mirrored onto
+        artists in Plex. Clear nukes every managed tag — moods, plus the same-named collections an
+        earlier version wrote; reapply re-derives the moods from stored ratings; rebuild does both (the
+        true reset).
       </p>
 
       <div className="controls">
