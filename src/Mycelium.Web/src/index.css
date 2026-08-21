@@ -2604,8 +2604,3 @@ a.detail-chip.via:hover {
   border-color: var(--cyan);
   box-shadow: var(--glow-cyan);
 }
-.tag-note {
-  font-size: 0.76rem;
-  color: var(--text-faint);
-  margin: 0.6rem 0 0;
-}

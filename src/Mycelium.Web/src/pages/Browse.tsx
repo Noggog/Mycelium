@@ -471,9 +471,6 @@ function TagsTab({ artist }: { artist: string }) {
         label="Moods" field="mood" tags={data.moods} placeholder="Add a mood…"
         onEdit={onEdit} busy={edit.isPending}
       />
-      <p className="tag-note">
-        Edits are written straight to Plex. Your like/dislike tags aren’t shown here — the thumbs above own those.
-      </p>
       {edit.isError && <p className="error">Tag edit failed: {(edit.error as Error).message}</p>}
     </div>
   )
