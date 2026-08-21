@@ -225,6 +225,36 @@ api.MapGet("/artists/ratings", async (string artist, ArtistRatingStatsService ra
     .RequireAuthorization()
     .WithName("GetArtistRatings");
 
+// The editable Plex descriptor tags (genres / styles / moods) for one artist, for the Browse page's
+// "Tags" tab. Reads live from Plex — those fields are where smart collections look — and hides the
+// app's own like/dislike verdict moods. present=false for artists that aren't in the library.
+api.MapGet("/artists/tags", async (string artist, ArtistTagsService tags) =>
+        Results.Ok(await tags.Get(new ArtistKey(artist))))
+    .RequireAuthorization()
+    .WithName("GetArtistTags");
+
+// Add and/or remove one tag on one field (genre|style|mood) of an artist, returning the artist's tags
+// as they now stand. The write is a delta, so the field's other tags — including the verdict moods the
+// tab never shows — are untouched. Auth-gated: this edits the shared Plex library.
+api.MapPost("/artists/tags", async (string artist, string field, string? add, string? remove,
+        ArtistTagsService tags) =>
+    {
+        try
+        {
+            return Results.Ok(await tags.Update(
+                new ArtistKey(artist), field,
+                add is null ? Array.Empty<string>() : new[] { add },
+                remove is null ? Array.Empty<string>() : new[] { remove }));
+        }
+        catch (ArgumentException ex)
+        {
+            // Unknown field, or an attempt to touch a "<user>_liked"/"_disliked" verdict tag.
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    })
+    .RequireAuthorization()
+    .WithName("EditArtistTags");
+
 // Free-text candidate search within one source, powering that source's "Correct association" picker.
 api.MapGet("/sources/{source}/search",
         async (string source, string q, int? limit, IEnumerable<ISourceIdentityCorrector> correctors) =>

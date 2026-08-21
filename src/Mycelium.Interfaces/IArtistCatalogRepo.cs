@@ -26,6 +26,13 @@ public interface IArtistCatalogRepo
     Task<int> BackfillImages(IReadOnlyList<ArtistMetadata> artists);
 
     /// <summary>
+    /// Replaces the stored genre tags for one artist — the mirror of a user genre edit made in Plex,
+    /// so the artist list reflects it without waiting for the next catalog sync. Only touches artists
+    /// already present (IsUpsert=false); the next sync overwrites this from Plex either way.
+    /// </summary>
+    Task SetGenres(ArtistKey artist, IReadOnlyList<string> genres);
+
+    /// <summary>
     /// Stores the owned album titles for each artist (from the same Plex pull as the artist list),
     /// so the missing-album diff can run against the local catalog. Only touches artists already
     /// present — never creates phantom entries.

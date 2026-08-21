@@ -81,6 +81,21 @@ export interface ArtistLibraries {
   sources: LibrarySource[]
 }
 
+// Mirror ArtistTags (Artist.cs) — the editable Plex descriptor tags for one library artist, behind
+// the Browse readout's "Tags" tab. `present` is false for artists that aren't in the library (nothing
+// to tag). `moods` never includes the app's own "<user>_liked"/"_disliked" verdict tags: the backend
+// strips them, and they're owned by the thumbs, not by this editor.
+export interface ArtistTags {
+  artist: ArtistKey
+  present: boolean
+  genres: string[]
+  styles: string[]
+  moods: string[]
+}
+
+// The Plex tag fields the editor writes, matching ArtistTagsService's field constants.
+export type TagField = 'genre' | 'style' | 'mood'
+
 // Mirror ArtistRatingStats (Artist.cs) — the user's per-song Plex rating summary (0–5 stars) for one
 // artist, shown in the detail readout. `present` is false for artists not in Plex; `ratedCount` is 0
 // when the artist is in Plex but nothing's rated. highest/lowest/average are null in both empty cases.

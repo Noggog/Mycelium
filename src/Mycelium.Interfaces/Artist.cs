@@ -97,6 +97,20 @@ public record LibrarySource(string Source, string Label, bool Present, IReadOnly
 public record ArtistLibraries(ArtistKey Artist, IReadOnlyList<LibrarySource> Sources);
 
 /// <summary>
+/// The editable descriptor tags a library artist carries in Plex — genres, styles and moods — for the
+/// Browse page's "Tags" tab. <see cref="Present"/> is false when the artist isn't in the library (no
+/// Plex item to tag). <see cref="Moods"/> excludes the app's own "&lt;user&gt;_liked"/"_disliked"
+/// verdict tags (see <see cref="ArtistTag.IsManaged"/>): those are rating state, not descriptors, and
+/// must never be shown or edited here — the thumbs own them.
+/// </summary>
+public record ArtistTags(
+    ArtistKey Artist,
+    bool Present,
+    IReadOnlyList<string> Genres,
+    IReadOnlyList<string> Styles,
+    IReadOnlyList<string> Moods);
+
+/// <summary>
 /// A compact summary of the user's per-song Plex ratings for one artist, on a 0–5 star scale, for the
 /// discovery readout. Plex only has songs for artists already in the library, so <see cref="Present"/>
 /// is false when the artist has no Plex rating keys. <see cref="RatedCount"/> is 0 when the artist is in

@@ -123,6 +123,16 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         return (int)result.ModifiedCount;
     }
 
+    public async Task SetGenres(ArtistKey artist, IReadOnlyList<string> genres)
+    {
+        await Collection.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName),
+            Builders<BsonDocument>.Update.Set(FieldGenres, new BsonArray(genres)),
+            // Never create entries for artists outside the library — a tag edit only mirrors what a
+            // Plex sync already put here.
+            new UpdateOptions { IsUpsert = false });
+    }
+
     public async Task SyncAlbums(IReadOnlyList<ArtistAlbums> artistAlbums)
     {
         var writes = new List<WriteModel<BsonDocument>>();

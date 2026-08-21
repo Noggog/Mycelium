@@ -169,6 +169,23 @@ public class PlexApi : IPlexApi
         SetArtistTags("mood", library, ratingKey, add, remove);
 
     /// <summary>
+    /// The Genre-field twin of <see cref="SetArtistMoods"/>, behind the tag editor. Genres are the
+    /// broad buckets Plex shows on an artist ("Rock", "Electronic"); the app also mirrors them into the
+    /// catalog so the artist list stays in step without waiting for the next Plex sync.
+    /// </summary>
+    public Task SetArtistGenres(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
+        SetArtistTags("genre", library, ratingKey, add, remove);
+
+    /// <summary>
+    /// The Style-field twin of <see cref="SetArtistMoods"/>, behind the tag editor. Styles are the
+    /// finer-grained descriptors Plex hangs under a genre ("Shoegaze", "Post-Punk").
+    /// </summary>
+    public Task SetArtistStyles(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
+        SetArtistTags("style", library, ratingKey, add, remove);
+
+    /// <summary>
     /// The Collection-field twin of <see cref="SetArtistMoods"/>. Only the cleanup path uses it, to strip
     /// the "&lt;user&gt;_liked"/"_disliked" collections an earlier version of the tagger wrote.
     /// </summary>
@@ -177,7 +194,7 @@ public class PlexApi : IPlexApi
         SetArtistTags("collection", library, ratingKey, add, remove);
 
     /// <summary>
-    /// Edits one tag field (<c>mood</c>/<c>collection</c>) on an artist. Plex's tag edit is <b>not</b> a
+    /// Edits one tag field (<c>genre</c>/<c>style</c>/<c>mood</c>/<c>collection</c>) on an artist. Plex's tag edit is <b>not</b> a
     /// whole-field replace — listing <c>{field}[i].tag.tag</c> only adds, and a tag is dropped only via the
     /// explicit <c>{field}[].tag.tag-</c> parameter — so callers pass the delta, not the desired final set.
     /// That's what keeps hand-applied tags on the same field (e.g. the "ambient"/"heavy" moods driving
@@ -280,6 +297,10 @@ public record PlexMusicArtist
     // must stay delta-based.
     public PlexTag[]? Mood { get; set; }
 
+    // Style tags — the finer-grained descriptors Plex hangs under a genre ("Shoegaze"), returned
+    // inline like Genre and Mood. Read/written by the tag editor only.
+    public PlexTag[]? Style { get; set; }
+
     // Collection memberships, returned inline when includeCollections=1 is set (see GetMusicArtists).
     // Read only by the cleanup that strips the like/dislike collections an earlier tagger wrote.
     public PlexTag[]? Collection { get; set; }
@@ -287,6 +308,14 @@ public record PlexMusicArtist
     /// <summary>The artist's current mood tags; empty when it has none.</summary>
     public string[] Moods() =>
         Mood?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
+
+    /// <summary>The artist's current genre tags; empty when it has none.</summary>
+    public string[] Genres() =>
+        Genre?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
+
+    /// <summary>The artist's current style tags; empty when it has none.</summary>
+    public string[] Styles() =>
+        Style?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
 
     /// <summary>The artist's current collection names; empty when it belongs to none.</summary>
     public string[] Collections() =>

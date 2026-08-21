@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getArtists } from '../api/artists'
 import { clearSource, getArtistSources, pinSource, searchSource, unlinkSource } from '../api/sources'
 import { getArtistLibraries } from '../api/library'
+import { editArtistTag, getArtistTags } from '../api/tags'
 import {
   blockAlbum,
   clearRating,
@@ -17,7 +18,16 @@ import {
 import { getRelated } from '../api/related'
 import { useArtAccent } from '../art/artColors'
 import { rateFeedback } from '../effects/effectsBus'
-import type { ArtistAlbumItem, ArtistListItem, DiscoveryStatus, FeedItem, SourceCandidate, SourceIdentity } from '../types'
+import type {
+  ArtistAlbumItem,
+  ArtistListItem,
+  ArtistTags,
+  DiscoveryStatus,
+  FeedItem,
+  SourceCandidate,
+  SourceIdentity,
+  TagField,
+} from '../types'
 import { useAuth } from '../auth/AuthContext'
 import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
@@ -29,7 +39,7 @@ import { IconApprove, IconBlock, IconCheck, IconClear, IconReject, IconWrench } 
 // for the Deezer link, genres, fans, correction); a related-artist card the user drills into may not
 // be in the library, so all we can carry is its name + photo — the tabs still work off the name.
 type SelectedArtist = { name: string; imageUrl: string | null }
-type DetailTab = 'albums' | 'related' | 'meta' | 'library'
+type DetailTab = 'albums' | 'related' | 'meta' | 'library' | 'tags'
 
 // Human labels for the source keys the backend emits.
 const SOURCE_LABELS: Record<string, string> = {
@@ -333,6 +343,138 @@ function LibraryTab({ artist }: { artist: string }) {
           ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+// One editable tag field (Genres / Styles / Moods) in the Tags tab: the artist's current tags as
+// removable chips plus an inline add box. Each edit is its own delta write to Plex, so a slow or failed
+// one never takes the rest of the field with it.
+function TagGroup({
+  label,
+  field,
+  tags,
+  placeholder,
+  onEdit,
+  busy,
+}: {
+  label: string
+  field: TagField
+  tags: string[]
+  placeholder: string
+  onEdit: (field: TagField, edit: { add?: string; remove?: string }) => void
+  busy: boolean
+}) {
+  const [draft, setDraft] = useState('')
+
+  const submit = () => {
+    const value = draft.trim()
+    if (!value) return
+    // Adding a tag the artist already has is a no-op server-side; drop it here so the box still clears.
+    if (!tags.some((t) => normalize(t) === normalize(value))) {
+      onEdit(field, { add: value })
+    }
+    setDraft('')
+  }
+
+  return (
+    <div className="tag-group">
+      <div className="detail-section-label">{label}</div>
+      <div className="tag-chips">
+        {tags.map((t) => (
+          <span className="tag-chip" key={t}>
+            {t}
+            <button
+              className="tag-chip-x"
+              title={`Remove ${t}`}
+              disabled={busy}
+              onClick={() => onEdit(field, { remove: t })}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        {tags.length === 0 && <em className="disc-sub-note">None</em>}
+      </div>
+      <div className="tag-add">
+        <input
+          className="tag-input"
+          type="text"
+          value={draft}
+          placeholder={placeholder}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              submit()
+            }
+          }}
+        />
+        <button className="auth-btn" disabled={busy || !draft.trim()} onClick={submit}>
+          Add
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// The "Tags" tab: edit the descriptor tags the artist carries in Plex — genres, styles and moods —
+// the same fields Plex smart collections filter on. The app's own "<user>_liked"/"_disliked" verdict
+// moods are stripped by the backend and can't be added or removed here: those are rating state, owned
+// by the thumbs in the header, and showing them would offer a second, desyncable way to change a rating.
+function TagsTab({ artist }: { artist: string }) {
+  const queryClient = useQueryClient()
+
+  const { data, isPending, isError } = useQuery({
+    queryKey: ['artist-tags', artist],
+    queryFn: () => getArtistTags(artist),
+  })
+
+  const edit = useMutation({
+    mutationFn: ({ field, ...rest }: { field: TagField; add?: string; remove?: string }) =>
+      editArtistTag(artist, field, rest),
+    onSuccess: (updated: ArtistTags, vars) => {
+      // The endpoint returns the artist's tags as they now stand — take them straight, no refetch.
+      queryClient.setQueryData(['artist-tags', artist], updated)
+      // The artist list (and the readout header chips) render genres off the catalog, which the
+      // backend mirrors on a genre edit — pull the row again so the change shows without a reload.
+      if (vars.field === 'genre') {
+        queryClient.invalidateQueries({ queryKey: ['artists'] })
+      }
+    },
+  })
+
+  if (isPending) return <div className="disc-sub-albums"><em className="disc-sub-note">Loading tags…</em></div>
+  if (isError) return <div className="disc-sub-albums"><em className="disc-sub-note">Failed to load tags.</em></div>
+  if (!data.present) {
+    return (
+      <div className="disc-sub-albums">
+        <em className="disc-sub-note">This artist isn’t in your Plex library, so there’s nothing to tag.</em>
+      </div>
+    )
+  }
+
+  const onEdit = (field: TagField, e: { add?: string; remove?: string }) => edit.mutate({ field, ...e })
+
+  return (
+    <div className="tag-editor">
+      <TagGroup
+        label="Genres" field="genre" tags={data.genres} placeholder="Add a genre…"
+        onEdit={onEdit} busy={edit.isPending}
+      />
+      <TagGroup
+        label="Styles" field="style" tags={data.styles} placeholder="Add a style…"
+        onEdit={onEdit} busy={edit.isPending}
+      />
+      <TagGroup
+        label="Moods" field="mood" tags={data.moods} placeholder="Add a mood…"
+        onEdit={onEdit} busy={edit.isPending}
+      />
+      <p className="tag-note">
+        Edits are written straight to Plex. Your like/dislike tags aren’t shown here — the thumbs above own those.
+      </p>
+      {edit.isError && <p className="error">Tag edit failed: {(edit.error as Error).message}</p>}
     </div>
   )
 }
@@ -885,6 +1027,16 @@ function DetailPane({
             Library
           </button>
         )}
+        {libItem && (
+          <button
+            role="tab"
+            aria-selected={tab === 'tags'}
+            className={tab === 'tags' ? 'artist-tab active' : 'artist-tab'}
+            onClick={() => onTab('tags')}
+          >
+            Tags
+          </button>
+        )}
       </div>
 
       {tab === 'meta' ? (
@@ -906,6 +1058,16 @@ function DetailPane({
           )
         ) : (
           <div className="disc-sub-albums"><em className="disc-sub-note">Library links apply to library artists.</em></div>
+        )
+      ) : tab === 'tags' ? (
+        libItem ? (
+          user ? (
+            <TagsTab artist={name} />
+          ) : (
+            <div className="disc-sub-albums"><em className="disc-sub-note">Log in to edit this artist’s tags.</em></div>
+          )
+        ) : (
+          <div className="disc-sub-albums"><em className="disc-sub-note">Tags apply to library artists.</em></div>
         )
       ) : tab === 'albums' ? (
         user ? (

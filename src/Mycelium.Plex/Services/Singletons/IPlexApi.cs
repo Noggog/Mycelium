@@ -29,6 +29,14 @@ public interface IPlexApi
     Task SetArtistMoods(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
 
+    /// <summary>The Genre-field twin of <see cref="SetArtistMoods"/>, for user tag editing.</summary>
+    Task SetArtistGenres(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
+
+    /// <summary>The Style-field twin of <see cref="SetArtistMoods"/>, for user tag editing.</summary>
+    Task SetArtistStyles(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
+
     /// <summary>The Collection-field twin of <see cref="SetArtistMoods"/>, used only to strip the
     /// like/dislike collections an earlier version of the tagger wrote.</summary>
     Task SetArtistCollections(

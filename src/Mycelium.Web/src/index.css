@@ -2533,3 +2533,79 @@ a.detail-chip.via:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ========================================================================== */
+/* Artists readout — Tags tab (editable Plex genres / styles / moods)          */
+/* ========================================================================== */
+
+.tag-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.25rem 0;
+}
+.tag-group + .tag-group {
+  margin-top: 0.35rem;
+}
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.45rem;
+}
+/* Reads as a .detail-chip, but with room for its own remove button. */
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--cyan-hover);
+  background: rgba(87, 241, 252, 0.1);
+  border: 1px solid rgba(87, 241, 252, 0.4);
+  border-radius: 999px;
+  padding: 0.15rem 0.3rem 0.15rem 0.65rem;
+}
+.tag-chip-x {
+  background: none;
+  border: none;
+  padding: 0 0.2rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.tag-chip-x:hover:not(:disabled) {
+  color: var(--salmon-white);
+}
+.tag-chip-x:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tag-add {
+  display: flex;
+  gap: 0.4rem;
+}
+.tag-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.6rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+.tag-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: var(--glow-cyan);
+}
+.tag-note {
+  font-size: 0.76rem;
+  color: var(--text-faint);
+  margin: 0.6rem 0 0;
+}
