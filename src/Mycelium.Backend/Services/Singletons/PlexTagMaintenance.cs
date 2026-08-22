@@ -104,6 +104,14 @@ public class PlexTagMaintenance
             var user = await _users.Get(userId);
             foreach (var rating in await _queue.GetRated(userId))
             {
+                // GetRated is "everything not pending", so it also carries snoozed rows — a deferred
+                // decision, which ArtistTag.For would otherwise fold into "_disliked". Only a thumb
+                // earns a tag, matching what the live rating path writes.
+                if (rating.Status is not (DiscoveryStatus.Liked or DiscoveryStatus.Disliked))
+                {
+                    continue;
+                }
+
                 var tag = ArtistTag.For(user?.Username, rating.Status);
                 if (tag == null || !byName.TryGetValue(rating.Artist.ArtistName, out var items))
                 {

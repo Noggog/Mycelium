@@ -16,16 +16,18 @@ public class CatalogSyncService : BackgroundService
 {
     private readonly CatalogRefresher _refresher;
     private readonly PurchaseService _purchases;
+    private readonly ArtistTagBackfill _tagBackfill;
     private readonly JitterPolicy _jitter;
     private readonly DailySyncSchedule _schedule;
     private readonly ILogger<CatalogSyncService> _logger;
 
     public CatalogSyncService(
-        CatalogRefresher refresher, PurchaseService purchases, JitterPolicy jitter,
-        DailySyncSchedule schedule, ILogger<CatalogSyncService> logger)
+        CatalogRefresher refresher, PurchaseService purchases, ArtistTagBackfill tagBackfill,
+        JitterPolicy jitter, DailySyncSchedule schedule, ILogger<CatalogSyncService> logger)
     {
         _refresher = refresher;
         _purchases = purchases;
+        _tagBackfill = tagBackfill;
         _jitter = jitter;
         _schedule = schedule;
         _logger = logger;
@@ -40,9 +42,12 @@ public class CatalogSyncService : BackgroundService
     {
         try
         {
-            await _refresher.Refresh();
+            var result = await _refresher.Refresh();
             // Newly-arrived artists close out their purchase rows (→ in-library, off the buy list).
             await _purchases.Reconcile();
+            // ...and finally get the verdict mood their rating couldn't write while they were outside
+            // the library. A no-op when this pass found no arrivals, which is most nights.
+            await _tagBackfill.Backfill(result.NewlyPresent);
         }
         catch (Exception ex)
         {

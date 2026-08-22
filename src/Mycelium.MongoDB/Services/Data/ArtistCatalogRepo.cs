@@ -47,6 +47,17 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         var collection = Collection;
         var syncedAtUtc = syncedAt.UtcDateTime;
 
+        // Snapshot who is present *before* the upsert, so the result can name the arrivals. Read first
+        // (the upsert below flips everything Plex returned to present, erasing the distinction) and by
+        // id only — the name is the _id, so this is an index-covered read of one field per artist.
+        var previouslyPresent = new HashSet<string>(
+            (await collection
+                .Find(Builders<BsonDocument>.Filter.Eq(FieldPresent, true))
+                .Project(Builders<BsonDocument>.Projection.Include("_id"))
+                .ToListAsync())
+            .Select(d => d["_id"].AsString),
+            StringComparer.OrdinalIgnoreCase);
+
         var writes = new List<WriteModel<BsonDocument>>(artists.Count);
         foreach (var artist in artists)
         {
@@ -94,10 +105,19 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         var totalPresent = await collection.CountDocumentsAsync(
             Builders<BsonDocument>.Filter.Eq(FieldPresent, true));
 
+        // Anything Plex returned that wasn't already present just arrived (a first sighting, or an
+        // artist an earlier sync marked absent coming back).
+        var newlyPresent = artists
+            .Select(a => a.ArtistKey.ArtistName)
+            .Where(name => !previouslyPresent.Contains(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         return new CatalogSyncResult(
             Upserted: writes.Count,
             MarkedAbsent: (int)absent.ModifiedCount,
-            TotalPresent: (int)totalPresent);
+            TotalPresent: (int)totalPresent,
+            NewlyPresent: newlyPresent);
     }
 
     public async Task<int> BackfillImages(IReadOnlyList<ArtistMetadata> artists)

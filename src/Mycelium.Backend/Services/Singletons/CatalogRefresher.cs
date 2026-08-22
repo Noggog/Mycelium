@@ -43,9 +43,9 @@ public class CatalogRefresher
             await _catalog.SyncAlbums(albums);
 
             _logger.LogInformation(
-                "Catalog refresh: {Upserted} upserted, {MarkedAbsent} marked absent, {TotalPresent} present, " +
-                "{AlbumArtists} artists with albums",
-                result.Upserted, result.MarkedAbsent, result.TotalPresent, albums.Length);
+                "Catalog refresh: {Upserted} upserted ({Arrived} newly present), {MarkedAbsent} marked absent, " +
+                "{TotalPresent} present, {AlbumArtists} artists with albums",
+                result.Upserted, result.NewlyPresent.Count, result.MarkedAbsent, result.TotalPresent, albums.Length);
             return result;
         }
         finally

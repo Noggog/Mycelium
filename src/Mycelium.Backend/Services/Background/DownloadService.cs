@@ -27,6 +27,7 @@ public class DownloadService : BackgroundService
     private readonly DownloadSettings _settings;
     private readonly PurchaseService _purchases;
     private readonly CatalogRefresher _catalog;
+    private readonly ArtistTagBackfill _tagBackfill;
     private readonly JitterPolicy _jitter;
     private readonly DownloadSchedule _schedule;
     private readonly ILibraryScanner _scanner;
@@ -42,6 +43,7 @@ public class DownloadService : BackgroundService
         DownloadSettings settings,
         PurchaseService purchases,
         CatalogRefresher catalog,
+        ArtistTagBackfill tagBackfill,
         JitterPolicy jitter,
         DownloadSchedule schedule,
         ILibraryScanner scanner,
@@ -53,6 +55,7 @@ public class DownloadService : BackgroundService
         _settings = settings;
         _purchases = purchases;
         _catalog = catalog;
+        _tagBackfill = tagBackfill;
         _jitter = jitter;
         _schedule = schedule;
         _scanner = scanner;
@@ -277,8 +280,11 @@ public class DownloadService : BackgroundService
 
             _logger.LogInformation(
                 "Settle pass: {Waiting} downloaded album(s) awaiting the library; refreshing the catalog", waiting);
-            await _catalog.Refresh();
+            var result = await _catalog.Refresh();
             await _purchases.Reconcile();
+            // This is the payoff moment for an artist liked before the library had it: the album just
+            // landed, so stamp the verdict mood the rating couldn't write back then.
+            await _tagBackfill.Backfill(result.NewlyPresent);
         }
         catch (Exception ex)
         {

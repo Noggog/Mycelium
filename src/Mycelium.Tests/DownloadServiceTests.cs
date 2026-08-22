@@ -23,6 +23,10 @@ public class DownloadServiceTests
     private readonly IUserQueueRepo _queue = Substitute.For<IUserQueueRepo>();
     private readonly IUserAlbumRatingRepo _albumRatings = Substitute.For<IUserAlbumRatingRepo>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
+    // The tagging side of the settle pass: a real ArtistTagBackfill over a substituted tagger, so a
+    // settle test can assert the verdict mood lands once the artist finally shows up in Plex.
+    private readonly IUserRepo _users = Substitute.For<IUserRepo>();
+    private readonly IArtistTagger _tagger = Substitute.For<IArtistTagger>();
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
     // No jitter in tests: waits stay exact (and zero), so nothing sleeps.
     private readonly JitterPolicy _jitter = new(0);
@@ -35,12 +39,13 @@ public class DownloadServiceTests
         _libraryQuery.QueryAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _libraryQuery.QueryAllAlbums().Returns(Array.Empty<ArtistAlbums>());
         _catalogRepo.SyncFromLibrary(Arg.Any<IReadOnlyList<ArtistMetadata>>(), Arg.Any<DateTimeOffset>())
-            .Returns(new CatalogSyncResult(0, 0, 0));
+            .Returns(new CatalogSyncResult(0, 0, 0, Array.Empty<string>()));
         _catalogRepo.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase));
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _queue.GetAllLiked().Returns(Array.Empty<DiscoveryCandidate>());
         _albumRatings.GetAllLiked().Returns(Array.Empty<AlbumRating>());
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
+        _queue.GetAllUserIds().Returns(Array.Empty<string>());
     }
 
     private static DownloaderConfig Config(TimeSpan? settleWindow = null) =>
@@ -57,8 +62,10 @@ public class DownloadServiceTests
             _repo, _queue, _albumRatings, _library, _catalogRepo, _missing, _overrides, _downloader,
             config, settings, _jitter, _schedule, NullLogger<PurchaseService>.Instance);
         var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);
-        return new DownloadService(_repo, _downloader, config, settings, purchases, catalog, _jitter,
-            _schedule, Substitute.For<ILibraryScanner>(), NullLogger<DownloadService>.Instance);
+        var tagBackfill = new ArtistTagBackfill(
+            _tagger, _queue, _users, NullLogger<ArtistTagBackfill>.Instance);
+        return new DownloadService(_repo, _downloader, config, settings, purchases, catalog, tagBackfill,
+            _jitter, _schedule, Substitute.For<ILibraryScanner>(), NullLogger<DownloadService>.Instance);
     }
 
     /// <summary>
@@ -247,6 +254,29 @@ public class DownloadServiceTests
 
         await _libraryQuery.Received(1).QueryAllArtistMetadata();
         _repo.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+    }
+
+    [Fact]
+    public async Task Settle_stamps_the_verdict_mood_on_an_artist_plex_has_only_just_picked_up()
+    {
+        // The whole after-the-fact case: the like was placed while Plex had no such artist, so the
+        // rating wrote no mood. The download lands, the refresh reports the artist newly present, and
+        // this pass finally stamps it.
+        _repo.Seed(Album("Big Thief", "Capacity", 1, PurchaseStatus.Sent) with { SentAt = DateTimeOffset.UtcNow });
+        _catalogRepo.SyncFromLibrary(Arg.Any<IReadOnlyList<ArtistMetadata>>(), Arg.Any<DateTimeOffset>())
+            .Returns(new CatalogSyncResult(1, 0, 1, new[] { "Big Thief" }));
+        _queue.GetAllUserIds().Returns(new[] { "user-1" });
+        _users.Get("user-1").Returns(new AppUser(
+            "user-1", "noggog", null, null, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch));
+        _queue.GetRated("user-1").Returns(new[]
+        {
+            new ArtistRating(new ArtistKey("Big Thief"), null, DiscoveryStatus.Liked),
+        });
+
+        await Sut().SettleOnce();
+
+        await _tagger.Received(1).SetTags("Big Thief", "noggog_liked",
+            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { "noggog_disliked" })));
     }
 
     [Fact]

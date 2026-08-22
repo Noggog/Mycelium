@@ -14,6 +14,11 @@ public interface IArtistCatalogRepo
     /// Upserts the catalog from a Plex pull: every supplied artist is marked present
     /// with <paramref name="syncedAt"/>; any artist not seen in this sync is marked absent
     /// (kept, not deleted, so taste state can still reference it).
+    ///
+    /// <para>The result names the artists that <em>became</em> present in this pass (see
+    /// <see cref="CatalogSyncResult.NewlyPresent"/>) — the hook every "the library just gained
+    /// something" follow-up hangs off, so those passes cost nothing on a sync that found no
+    /// arrivals.</para>
     /// </summary>
     Task<CatalogSyncResult> SyncFromLibrary(IReadOnlyList<ArtistMetadata> artists, DateTimeOffset syncedAt);
 
@@ -131,4 +136,12 @@ public interface IArtistCatalogRepo
     Task SetMusicBrainzUnlinked(ArtistKey artist);
 }
 
-public record CatalogSyncResult(int Upserted, int MarkedAbsent, int TotalPresent);
+/// <summary>
+/// What one <see cref="IArtistCatalogRepo.SyncFromLibrary"/> pass did. <paramref name="Upserted"/> counts
+/// every artist written (i.e. everything Plex returned), not just changes; <paramref name="NewlyPresent"/>
+/// is the far narrower set that went absent-or-unknown → present in this pass, which is what a caller
+/// reacting to arrivals wants. Both a first sighting and a re-appearance (an artist marked absent by an
+/// earlier sync, now back) count as newly present — either way the artist is newly actionable in Plex.
+/// </summary>
+public record CatalogSyncResult(
+    int Upserted, int MarkedAbsent, int TotalPresent, IReadOnlyList<string> NewlyPresent);
