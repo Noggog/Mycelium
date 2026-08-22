@@ -218,6 +218,10 @@ export interface ArtistAlbumItem {
   // Blocked for everyone (not just you) — filtered out of the feeds entirely, and surfaced here only
   // so the block can be lifted. Always false for owned albums.
   blocked: boolean
+  // Deezer's own classification: 'album' | 'ep' | 'single' | 'compilation'. This listing carries every
+  // type while the Discover feed takes only albums and EPs, so the badge built from this is what tells
+  // a single apart from an LP here. Null for an owned album Deezer doesn't list.
+  recordType: string | null
 }
 
 // Mirror LibraryAlbumOption (Album.cs) — one album already in the library, offered as a merge target

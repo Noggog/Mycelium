@@ -11,8 +11,12 @@ public record MissingAlbumSyncResult(int ArtistsScanned, int MissingTotal);
 /// One album from an artist's Deezer discography, flagged with whether the library owns it.
 /// <paramref name="Year"/> is Deezer's release year (null when it supplied no date, or for an owned
 /// album Deezer doesn't list at all).
+/// <paramref name="RecordType"/> is Deezer's <c>record_type</c> ("album" / "ep" / "single" /
+/// "compilation"), surfaced so the drill-down can label each row — the listing carries every type,
+/// so without the label a single would read as an album. Null for an owned album Deezer doesn't list.
 /// </summary>
-public record DiscographyAlbum(string Title, string? CoverUrl, long? DeezerAlbumId, bool Owned, int? Year = null);
+public record DiscographyAlbum(
+    string Title, string? CoverUrl, long? DeezerAlbumId, bool Owned, int? Year = null, string? RecordType = null);
 
 /// <summary>
 /// The missing-album sync job: for each owned artist, pulls its Deezer discography and diffs it
@@ -23,10 +27,17 @@ public record DiscographyAlbum(string Title, string? CoverUrl, long? DeezerAlbum
 /// </summary>
 public class MissingAlbumRefresher
 {
-    // Deezer marks records as record_type "album" / "ep" / "single" / "compilation". We keep LPs and
-    // EPs; "single"/"compilation" stay filtered out so the feed isn't drowned in singles and reissues.
-    private static readonly HashSet<string> AcceptedRecordTypes =
-        new(StringComparer.OrdinalIgnoreCase) { "album", "ep" };
+    // Deezer marks records as record_type "album" / "ep" / "single" / "compilation". The sync takes all
+    // four: a release Deezer files as a single (Ben Howard's 3-track "Another Friday Night / Hot Heavy
+    // Summer / Sister" is one) was previously dropped here and so was invisible everywhere in the app.
+    //
+    // This used to be where singles and compilations were held back from the Discover feed, but a row
+    // dropped here has no persisted MissingAlbum — and that row is what carries the Deezer id through
+    // reconcile to the downloader. Filtering at the sync would have made a single visible in the
+    // drill-down yet permanently un-downloadable if queued from it. So everything is persisted, tagged
+    // with its type, and the feed does its own filtering (AlbumRecordType.IsFeedEligible).
+    private static readonly HashSet<string> ListedRecordTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "album", "ep", "single", "compilation" };
 
     private readonly IArtistCatalogRepo _catalog;
     private readonly DeezerArtistResolver _resolver;
@@ -98,11 +109,13 @@ public class MissingAlbumRefresher
     }
 
     /// <summary>
-    /// One artist's full Deezer discography (every LP), each flagged with whether the library already
-    /// owns it — for the Artists-page drill-down. Persists the missing subset as a side effect (same as
-    /// <see cref="RefreshOne"/>) so a later like carries the Deezer id to the downloader. Owned albums the
-    /// library has that Deezer doesn't list as an LP are appended (without art/id) so the picture is
-    /// complete.
+    /// One artist's full Deezer discography (every record type — LPs, EPs, singles and compilations),
+    /// each flagged with whether the library already owns it and labelled with its type — for the
+    /// Artists-page drill-down. Persists the missing subset as a side effect (same as
+    /// <see cref="RefreshOne"/>) so a later like carries the Deezer id to the downloader — including for
+    /// singles and compilations, which are queueable from here even though the Discover feed passes over
+    /// them (<see cref="AlbumRecordType.IsFeedEligible"/>). Owned albums the library has that Deezer
+    /// doesn't list at all are appended (without art/id/type) so the picture is complete.
     /// </summary>
     public async Task<IReadOnlyList<DiscographyAlbum>> Discography(
         ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
@@ -114,7 +127,7 @@ public class MissingAlbumRefresher
         var ownedAlbumTitles = ownedAlbums.TryGetValue(artist.ArtistName, out var ownedSet)
             ? (IEnumerable<string>)ownedSet
             : Array.Empty<string>();
-        // Fold in owned albums Deezer didn't surface as LPs (singles/comps it filtered, or no match)
+        // Fold in owned albums Deezer didn't surface at all (no match, or a title too far off to pair)
         // so the library's view is the source of truth for what we have.
         var seen = all.Select(a => NormalizeTitle(a.Title)).ToHashSet(StringComparer.Ordinal);
         foreach (var title in ownedAlbumTitles)
@@ -129,7 +142,8 @@ public class MissingAlbumRefresher
 
     /// <summary>
     /// Resolves the artist on Deezer and walks its discography once, splitting it into the full
-    /// annotated list (every LP, flagged owned/missing) and the missing subset. Returns null when the
+    /// annotated list (every listed record type, flagged owned/missing) and the missing subset, each row
+    /// tagged with its record type so the feed can decide for itself what to push. Returns null when the
     /// artist has no Deezer match. Compares on a normalized title so punctuation/casing differences
     /// between Plex and Deezer (e.g. a typographic vs. straight apostrophe) don't make an owned album
     /// look missing; the original Deezer title is still what we surface.
@@ -170,7 +184,7 @@ public class MissingAlbumRefresher
             var key = NormalizeTitle(title);
             if (string.IsNullOrEmpty(key)
                 || album.record_type is null
-                || !AcceptedRecordTypes.Contains(album.record_type)
+                || !ListedRecordTypes.Contains(album.record_type)
                 || !seen.Add(key))
             {
                 continue;
@@ -198,11 +212,13 @@ public class MissingAlbumRefresher
                 }
             }
 
-            all.Add(new DiscographyAlbum(title, album.BestCoverUrl, album.id, isOwned, album.Year));
+            all.Add(new DiscographyAlbum(
+                title, album.BestCoverUrl, album.id, isOwned, album.Year, album.record_type));
             if (!isOwned)
             {
                 missing.Add(new MissingAlbum(
-                    artist, new AlbumKey(title), album.BestCoverUrl, album.id, albumArtist, album.Year));
+                    artist, new AlbumKey(title), album.BestCoverUrl, album.id, albumArtist, album.Year,
+                    album.record_type));
             }
         }
 

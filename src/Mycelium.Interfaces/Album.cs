@@ -25,6 +25,15 @@ public record OwnedAlbum(string Title, int PlexRatingKey);
 ///
 /// <see cref="Year"/> is the Deezer release year, surfaced beside the title so a recommendation can
 /// be placed in time; null when Deezer gave no date (or for rows written before year tracking).
+///
+/// <see cref="RecordType"/> is Deezer's classification of the release. Every type the sync lists is
+/// persisted, including the ones the Discover feed doesn't push (see
+/// <see cref="AlbumRecordType.IsFeedEligible"/>): the row is what carries
+/// <see cref="DeezerAlbumId"/> through reconcile to the downloader, so a single a user queues from the
+/// discography drill-down has to have one or it would sit on the to-buy list forever un-downloadable.
+/// The feed filters on this rather than the sync, so "browsable" and "pushed at you" stay separable.
+/// Null for rows written before record-type tracking — those are pre-existing LPs and EPs, so the feed
+/// treats an absent type as eligible.
 /// </summary>
 public record MissingAlbum(
     ArtistKey Artist,
@@ -32,11 +41,34 @@ public record MissingAlbum(
     string? AlbumArt,
     long DeezerAlbumId,
     ArtistKey? AlbumArtist = null,
-    int? Year = null)
+    int? Year = null,
+    string? RecordType = null)
 {
     /// <summary>The artist the library files this album under — <see cref="AlbumArtist"/> when known,
     /// else <see cref="Artist"/> (non-collaboration albums are filed under the listing artist).</summary>
     public ArtistKey MatchArtist => AlbumArtist ?? Artist;
+}
+
+/// <summary>
+/// Deezer's <c>record_type</c> values and which of them the Discover feed pushes. The missing-album
+/// sync persists every type it lists so each one carries a Deezer id the downloader can use; this is
+/// the gate that decides which of those are actually offered unprompted, applied where a feed is built
+/// rather than where the rows are written. Singles and compilations are browsable in an artist's
+/// discography (badged with their type) but never pushed — the feed would otherwise fill with radio
+/// edits and greatest-hits repackages.
+/// </summary>
+public static class AlbumRecordType
+{
+    private static readonly HashSet<string> FeedEligible =
+        new(StringComparer.OrdinalIgnoreCase) { "album", "ep" };
+
+    /// <summary>
+    /// Whether a release of this type belongs in the Discover feed. A null/absent type reads as
+    /// eligible: rows written before record-type tracking predate singles being listed at all, so they
+    /// can only be the LPs and EPs the old filter let through.
+    /// </summary>
+    public static bool IsFeedEligible(string? recordType) =>
+        recordType is null || FeedEligible.Contains(recordType);
 }
 
 /// <summary>

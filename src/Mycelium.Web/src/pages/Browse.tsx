@@ -520,6 +520,17 @@ const ALBUM_VERDICT_LABEL: Partial<Record<DiscoveryStatus, string>> = {
   Snoozed: 'Snoozed',
 }
 
+// Deezer's record_type → the badge shown beside the title. The drill-down lists every type but the
+// Discover feed only carries albums and EPs, so the badge is what marks a row as browse-only — and
+// why a 3-track release like Ben Howard's "Another Friday Night / Hot Heavy Summer / Sister" sits
+// here reading "Single" instead of being mistaken for an LP. Unknown/absent types get no badge.
+const ALBUM_TYPE_LABEL: Record<string, string> = {
+  album: 'Album',
+  ep: 'EP',
+  single: 'Single',
+  compilation: 'Compilation',
+}
+
 // A single album in the discography drill-down, themed from its cover art via `--art-accent` (the
 // shared `.disc-sub-album` styling turns that into the tinted card + the cover's glow). When the album
 // has a Deezer id, the whole row toggles a 30-second track-preview player below it (like Discover); the
@@ -548,6 +559,7 @@ function AlbumSubRow({
   const accent = useArtAccent(a.imageUrl)
   const accentStyle = accent ? ({ '--art-accent': accent } as CSSProperties) : undefined
   const label = a.verdict ? ALBUM_VERDICT_LABEL[a.verdict] : null
+  const typeLabel = a.recordType ? ALBUM_TYPE_LABEL[a.recordType.toLowerCase()] : undefined
   const canPlay = a.deezerAlbumId != null
   return (
     <div className="disc-sub-album-wrap">
@@ -559,6 +571,7 @@ function AlbumSubRow({
         <AlbumThumb item={a} />
         <div className="disc-sub-album-name">
           {a.album}
+          {typeLabel && <span className={`album-type ${a.recordType!.toLowerCase()}`}>{typeLabel}</span>}
           {a.year && <span className="album-year">{a.year}</span>}
         </div>
         <div className="disc-actions" onClick={(e) => e.stopPropagation()}>

@@ -998,6 +998,31 @@ input[type='checkbox'] {
   font-size: 0.92rem;
   font-weight: 500;
 }
+/* Deezer's record type beside an album title. The drill-down lists every type while the Discover feed
+   carries only albums and EPs, so this badge is what marks a row as browse-only — it has to read at a
+   glance without pulling focus off the title, hence the muted pill. Albums (the bulk of any listing)
+   stay the quietest; the types you're scanning *for* get a touch more contrast. */
+.album-type {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+  color: var(--text-faint);
+  background: rgba(116, 88, 219, 0.14);
+  border: 1px solid var(--border);
+}
+.album-type.ep,
+.album-type.single,
+.album-type.compilation {
+  color: var(--text-dim);
+  background: rgba(116, 88, 219, 0.26);
+}
+
 /* The release year beside an album title — quiet enough not to compete with the title itself. */
 .album-year {
   margin-left: 0.45rem;

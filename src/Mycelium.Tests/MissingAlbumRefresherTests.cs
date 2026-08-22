@@ -89,23 +89,72 @@ public class MissingAlbumRefresherTests
     }
 
     [Fact]
-    public async Task RefreshOne_with_no_owned_albums_surfaces_albums_and_eps_only()
+    public async Task RefreshOne_with_no_owned_albums_surfaces_every_record_type_tagged()
     {
-        // The brand-new-artist path: nothing is owned, so every album- and EP-type record should surface
-        // as acquirable — while singles/compilations stay filtered out.
+        // The brand-new-artist path: nothing is owned, so every record Deezer lists surfaces — singles
+        // and compilations included, each tagged with its type. They're persisted rather than dropped
+        // because the row is what carries the Deezer id to the downloader; the *feed* is what declines
+        // to push them (AlbumRecordType.IsFeedEligible), so a queued single can still be fetched.
         _deezer.GetAlbums(DeezerId).Returns(new[]
         {
             Album("first lp"),
             Album("second lp"),
             Album("a single", recordType: "single"),
+            Album("a comp", recordType: "compilation"),
             Album("an ep", recordType: "ep"),
         });
 
         var result = await _sut.RefreshOne(new ArtistKey(Artist), Owned());
 
-        result.Select(m => m.Album.AlbumName).Should().BeEquivalentTo("first lp", "second lp", "an ep");
+        result.Select(m => (m.Album.AlbumName, m.RecordType)).Should().BeEquivalentTo(new[]
+        {
+            ("first lp", "album"), ("second lp", "album"), ("an ep", "ep"),
+            ("a single", "single"), ("a comp", "compilation"),
+        });
+        // And each carries a Deezer id — the whole reason they're persisted rather than filtered here.
+        result.Should().OnlyContain(m => m.DeezerAlbumId != 0);
         CapturedMissing().Select(m => m.Album.AlbumName)
-            .Should().BeEquivalentTo("first lp", "second lp", "an ep");
+            .Should().BeEquivalentTo("first lp", "second lp", "an ep", "a single", "a comp");
+    }
+
+    [Fact]
+    public async Task Discography_lists_every_record_type_with_its_label()
+    {
+        // The drill-down shows everything Deezer lists — otherwise a release Deezer files as a single
+        // (Ben Howard's 3-track "Another Friday Night / Hot Heavy Summer / Sister" is one) is invisible
+        // in the app. Each row carries its type so the UI can badge it; without that a single would read
+        // as an LP, since the listing no longer implies "album".
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("an lp", id: 1),
+            Album("an ep", recordType: "ep", id: 2),
+            Album("a single", recordType: "single", id: 3),
+            Album("a comp", recordType: "compilation", id: 4),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Select(a => (a.Title, a.RecordType)).Should().BeEquivalentTo(new[]
+        {
+            ("an lp", "album"), ("an ep", "ep"), ("a single", "single"), ("a comp", "compilation"),
+        });
+    }
+
+    [Fact]
+    public async Task Owned_single_is_not_reported_missing()
+    {
+        // Singles are diffed against the library like anything else — one already ripped must not come
+        // back as acquirable just because Deezer files it as a single.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("a single", recordType: "single"),
+            Album("another single", recordType: "single", id: 2),
+        });
+
+        var result = await _sut.RefreshOne(
+            new ArtistKey(Artist), Owned((Artist, new[] { "A Single" })));
+
+        result.Select(m => m.Album.AlbumName).Should().Equal("another single");
     }
 
     [Fact]

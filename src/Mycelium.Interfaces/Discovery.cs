@@ -169,6 +169,10 @@ public record ArtistRating(ArtistKey Artist, string? ImageUrl, DiscoveryStatus S
 /// LP carry no Deezer id/art — nor a <paramref name="Year"/>, which comes from Deezer's release date.
 /// <paramref name="Blocked"/> marks an album blocked for everyone (see <see cref="IAlbumBlockRepo"/>);
 /// it's filtered out of the feeds entirely, and surfaced only here so the block can be lifted.
+/// <paramref name="RecordType"/> is Deezer's own classification ("album" / "ep" / "single" /
+/// "compilation"), shown as a badge on the row. This listing carries every type while the feed takes
+/// only LPs and EPs, so the badge is what tells a single apart from an album here; null for an owned
+/// album Deezer doesn't list.
 /// </summary>
 public record ArtistAlbumItem(
     ArtistKey Artist,
@@ -178,4 +182,5 @@ public record ArtistAlbumItem(
     bool Owned,
     DiscoveryStatus? Verdict,
     int? Year = null,
-    bool Blocked = false);
+    bool Blocked = false,
+    string? RecordType = null);

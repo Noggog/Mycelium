@@ -269,6 +269,9 @@ public class DiscoveryEngine : IQueueReplenisher
         var blocked = await BlockedKeys();
         return (await _missing.GetAll())
             .Where(m => liked.Contains(m.Artist.ArtistName))
+            // Singles and compilations are synced (so they're queueable from an artist's discography and
+            // carry a Deezer id) but never pushed here — the feed would fill with radio edits.
+            .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Where(m => !IsBlocked(blocked, m))
             .Select(m => new FeedItem(
@@ -301,8 +304,9 @@ public class DiscoveryEngine : IQueueReplenisher
     /// on a fresh discovery rather than just wishlisting the artist. Pulls the artist's Deezer
     /// discography, persists it into the global missing-album store (so a liked album carries its
     /// <see cref="MissingAlbum.DeezerAlbumId"/> through reconcile to the downloader — without that row
-    /// the album would be un-downloadable), and returns the not-yet-decided ones as missing-album feed
-    /// items to surface inline under the just-rated card. Whatever Plex already owns for the artist is
+    /// the album would be un-downloadable), and returns the not-yet-decided, feed-eligible ones as
+    /// missing-album feed items to surface inline under the just-rated card. Singles and compilations
+    /// are persisted but withheld from the cards; they stay reachable in the artist's discography. Whatever Plex already owns for the artist is
     /// diffed out, so a partly-owned artist only surfaces its gaps.
     /// </summary>
     public async Task<IReadOnlyList<FeedItem>> ArtistAlbums(string userId, string artistName)
@@ -312,6 +316,9 @@ public class DiscoveryEngine : IQueueReplenisher
         var decided = await _albumRatings.GetDecidedKeys(userId);
         var blocked = await BlockedKeys();
         return rows
+            // Same feed rule as the main missing-album section: LPs and EPs only, so a newly-liked
+            // artist offers their records rather than a wall of singles.
+            .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Where(m => !IsBlocked(blocked, m))
             .Select(m => new FeedItem(
@@ -321,10 +328,13 @@ public class DiscoveryEngine : IQueueReplenisher
     }
 
     /// <summary>
-    /// An owned artist's full Deezer discography for the Artists-page drill-down: every LP flagged with
-    /// whether the library owns it, missing ones overlaid with the user's verdict (queued/dismissed/
-    /// snoozed) so the listing matches the to-buy list. One Deezer call per expand; owned albums sort
-    /// first. Pulling the discography also refreshes the persisted missing-album rows for the artist.
+    /// An owned artist's full Deezer discography for the Artists-page drill-down: every release Deezer
+    /// lists — LPs, EPs, singles and compilations, each badged with its type — flagged with whether the
+    /// library owns it, missing ones overlaid with the user's verdict (queued/dismissed/snoozed) so the
+    /// listing matches the to-buy list. Singles and compilations appear here but never reach the feed,
+    /// so a row can be browsable and thumbable without the refresher having pushed it at anyone. One
+    /// Deezer call per expand; owned albums sort first. Pulling the discography also refreshes the
+    /// persisted missing-album rows for the artist.
     ///
     /// Globally blocked albums are <em>marked</em> here rather than dropped — this drill-down is the
     /// one place a block can be reviewed and lifted, so hiding them would make it a one-way door.
@@ -353,7 +363,8 @@ public class DiscoveryEngine : IQueueReplenisher
                     : null;
                 var isBlocked = !a.Owned && blocked.Contains(AlbumOverrideKey.For(artistName, a.Title));
                 return new ArtistAlbumItem(
-                    artist, a.Title, a.CoverUrl, a.DeezerAlbumId, a.Owned, verdict, a.Year, isBlocked);
+                    artist, a.Title, a.CoverUrl, a.DeezerAlbumId, a.Owned, verdict, a.Year, isBlocked,
+                    a.RecordType);
             })
             .ToList();
     }

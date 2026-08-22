@@ -336,6 +336,64 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
+    public async Task Missing_album_feed_withholds_singles_and_compilations()
+    {
+        // Singles and compilations are synced and persisted (so they're queueable from an artist's
+        // discography and carry a Deezer id the downloader can use) but never pushed at anyone here —
+        // a feed padded with radio edits and greatest-hits repackages is the reason this gate exists.
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Ben Howard" });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Noonday Dream"), "art1", 101,
+                RecordType: "album"),
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Variations Volume 1"), "art2", 102,
+                RecordType: "ep"),
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Heave Ho"), "art3", 103,
+                RecordType: "single"),
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Best Of"), "art4", 104,
+                RecordType: "compilation"),
+        });
+
+        var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+        page.Items.Select(i => i.Album).Should().BeEquivalentTo("Noonday Dream", "Variations Volume 1");
+    }
+
+    [Fact]
+    public async Task Missing_album_feed_still_surfaces_rows_written_before_record_types()
+    {
+        // Rows persisted before record-type tracking carry no type. They predate singles being synced at
+        // all, so they can only be the LPs/EPs the old sync filter admitted — dropping them would blank
+        // every user's feed until the next nightly sweep rewrote the collection.
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Big Thief" });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art1", 101),
+        });
+
+        var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+        page.Items.Select(i => i.Album).Should().Equal("Capacity");
+    }
+
+    [Fact]
+    public async Task ArtistAlbums_offers_records_not_a_wall_of_singles()
+    {
+        // The cards shown inline under a freshly-liked artist follow the same rule as the main feed —
+        // otherwise liking an artist buries their albums under every B-side they ever released.
+        _deezer.SearchArtist("Ben Howard").Returns(new DeezerArtist { id = 8, name = "Ben Howard" });
+        _deezer.GetAlbums(8).Returns(new[]
+        {
+            new DeezerAlbum { id = 301, title = "Noonday Dream", record_type = "album" },
+            new DeezerAlbum { id = 302, title = "Heave Ho", record_type = "single" },
+        });
+
+        var items = await _sut.ArtistAlbums(User, "Ben Howard");
+
+        items.Select(i => i.Album).Should().Equal("Noonday Dream");
+    }
+
+    [Fact]
     public async Task Missing_album_feed_only_surfaces_albums_from_liked_artists()
     {
         // A fresh user with no thumbs-up sees no missing albums, even though the global store has gaps
