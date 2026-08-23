@@ -826,6 +826,106 @@ api.MapDelete("/albums/block", async (string artist, string album, DiscoveryEngi
     .RequireAuthorization()
     .WithName("UnblockAlbum");
 
+// --- Plex account linking -------------------------------------------------------------------
+// Playlists, star ratings and play history are all per-Plex-account. Creating playlists with the
+// server's own token would file every user's playlists in the owner's sidebar and filter them by the
+// owner's ratings, so the playlist features act as the user's own linked account instead. Library
+// metadata (the mood tags a thumb writes) keeps using the server token — that's shared state.
+var plexLink = api.MapGroup("/plex/link").RequireAuthorization();
+
+plexLink.MapGet("", async (HttpContext http, PlexLinkService links) =>
+        Results.Ok(await links.Status(http.User.GetSubject()!)))
+    .WithName("GetPlexLink");
+
+// Starts the plex.tv PIN flow and hands back the URL to send the user to. The PIN is held server-side
+// against this user, so the poll below needs no arguments and the code never round-trips the browser.
+plexLink.MapPost("/start", async (HttpContext http, PlexLinkService links, string? forwardUrl) =>
+        Results.Ok(new { authUrl = await links.Start(http.User.GetSubject()!, forwardUrl) }))
+    .WithName("StartPlexLink");
+
+// Polled while the user approves in their browser. "pending" is the normal answer until they finish.
+plexLink.MapPost("/complete", async (HttpContext http, PlexLinkService links) =>
+    {
+        var completion = await links.Complete(http.User.GetSubject()!);
+        return Results.Ok(new
+        {
+            outcome = completion.Outcome.ToString().ToLowerInvariant(),
+            status = completion.Status,
+        });
+    })
+    .WithName("CompletePlexLink");
+
+// Forgets the account and its stored token. Playlists already created stay put — they're the user's.
+plexLink.MapDelete("", async (HttpContext http, PlexLinkService links) =>
+    {
+        await links.Unlink(http.User.GetSubject()!);
+        return Results.NoContent();
+    })
+    .WithName("UnlinkPlex");
+
+// --- Stock smart playlists ------------------------------------------------------------------
+// A page of ready-made smart playlists, so someone can get a working set without learning Plex's
+// filter editor. Whether one already exists is decided by comparing *rules*, never names.
+var playlists = api.MapGroup("/playlists").RequireAuthorization();
+
+static int FreshWindow(int? months) =>
+    months is not null && SmartPlaylistCatalog.FreshWindows.Contains(months.Value)
+        ? months.Value
+        : SmartPlaylistService.DefaultFreshMonths;
+
+playlists.MapGet("/stock", async (HttpContext http, SmartPlaylistService service, int? freshMonths) =>
+        Results.Ok(await service.Survey(
+            http.User.GetSubject()!,
+            http.User.FindFirst("preferred_username")?.Value,
+            FreshWindow(freshMonths))))
+    .WithName("SurveyStockPlaylists");
+
+playlists.MapPost("/stock/{id}", async (
+        string id, HttpContext http, SmartPlaylistService service, int? freshMonths) =>
+    {
+        try
+        {
+            return Results.Ok(await service.Create(
+                http.User.GetSubject()!,
+                http.User.FindFirst("preferred_username")?.Value,
+                id,
+                FreshWindow(freshMonths)));
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // No linked Plex account, or the server is unreachable — both are "can't act yet", not bugs.
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    })
+    .WithName("CreateStockPlaylist");
+
+// Rewrites the rules of a playlist that holds one of our names but selects something else.
+playlists.MapPut("/stock/{id}", async (
+        string id, HttpContext http, SmartPlaylistService service, int? freshMonths) =>
+    {
+        try
+        {
+            return Results.Ok(await service.UpdateRules(
+                http.User.GetSubject()!,
+                http.User.FindFirst("preferred_username")?.Value,
+                id,
+                FreshWindow(freshMonths)));
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    })
+    .WithName("UpdateStockPlaylist");
+
 app.MapDefaultEndpoints();
 
 // Any unmatched, non-API route serves the SPA shell so client-side deep links work.

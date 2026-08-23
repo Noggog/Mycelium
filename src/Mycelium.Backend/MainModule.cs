@@ -77,6 +77,13 @@ public class MainModule : Autofac.Module
             new PlexEndpointInfo(Environment.GetEnvironmentVariable("PLEX_ENDPOINT") ?? throw new InvalidOperationException()));
         builder.RegisterInstance(
             new PlexClientInfo(Environment.GetEnvironmentVariable("PLEX_TOKEN") ?? throw new InvalidOperationException()));
+
+        // How the app names itself to plex.tv when linking a user's own Plex account. The client
+        // identifier must be stable across restarts — plex.tv ties a link PIN to the device that created
+        // it, and a regenerated id would orphan any link the user was midway through approving.
+        builder.RegisterInstance(new PlexAppIdentity(
+            Product: Environment.GetEnvironmentVariable("PLEX_APP_PRODUCT") ?? "Mycelium",
+            ClientIdentifier: Environment.GetEnvironmentVariable("PLEX_CLIENT_IDENTIFIER") ?? "mycelium"));
         builder.RegisterType<HttpClient>().AsSelf().SingleInstance();
 
         // Deezer download subsystem (env-driven; the ARL lives in streamrip's own config, which

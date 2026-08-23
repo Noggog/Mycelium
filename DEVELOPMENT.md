@@ -88,9 +88,27 @@ AppHost env vars to child services).
 | `PLEX_TOKEN` | **Yes** | Plex authentication token |
 | `PLEX_ENDPOINT` | **Yes** | Plex server base URL (backend throws if unset) |
 | `PLEX_LIBRARY` | No | Which Plex library to crawl; if unset, falls back to the first artist-type library |
+| `PLEX_APP_PRODUCT` | No | Name this app shows under in a user's Plex authorised-devices list (default `Mycelium`) |
+| `PLEX_CLIENT_IDENTIFIER` | No | Stable device id used when linking a user's Plex account (default `mycelium`) — see below |
 | `MONGO_URI` | No (auto) | Mongo connection string |
 
 There are no hardcoded defaults — every value comes from the environment.
+
+### Per-user Plex accounts (playlist features)
+
+`PLEX_TOKEN` is the *server owner's* token and stays the app's identity for library metadata — the
+mood tags a thumb writes are shared state and need the owner's rights.
+
+The Playlists page is different: playlists, track ratings, play counts and last-played are all
+**per-Plex-account**. Building a "4 stars and up" playlist with the server token would file it in the
+owner's sidebar and filter it by the owner's ratings, for every user. So each app user links their own
+Plex account (plex.tv PIN flow — `PlexLinkService` / `PlexAccountApi`) and the playlist calls act as
+them. Only the *server-scoped* access token plex.tv issues for this one server is stored, in the
+`plexLinks` Mongo collection, keyed by OIDC subject.
+
+`PLEX_CLIENT_IDENTIFIER` must not change between the request that creates a link PIN and the one that
+claims it, so it comes from configuration rather than being generated per process — a regenerated id
+orphans any link a user is midway through approving.
 
 Notes:
 - `MONGO_URI` is supplied by the AppHost from the provisioned MongoDB resource's

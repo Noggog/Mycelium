@@ -65,6 +65,9 @@ export default function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/purchases" className={navClass}>
             Download
           </NavLink>
+          <NavLink to="/playlists" className={navClass}>
+            Playlists
+          </NavLink>
           {/* Dev panel — shown only to DEV_USERNAMES users (Plex tag tooling + similarity debug). */}
           {user?.isDev && (
             <NavLink to="/dev" className={navClass}>
