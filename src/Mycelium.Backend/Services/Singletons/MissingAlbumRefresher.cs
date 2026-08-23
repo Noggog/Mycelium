@@ -48,9 +48,9 @@ public class MissingAlbumRefresher
 
     // A Deezer album id -> its album-artist name. The discography listing omits the album-artist, so
     // learning it costs one /album/{id} call per album; we memoise for the process lifetime (warms
-    // across the daily sweep, re-warms on restart) so the extra calls stay bounded. Null = resolved
-    // to "no album-artist" (Deezer miss) and cached so we don't refetch a known miss.
-    private readonly ConcurrentDictionary<long, string?> _albumArtistCache = new();
+    // across the daily sweep, re-warms on restart) so the extra calls stay bounded. Only answers are
+    // stored — see ResolveAlbumArtist for why a null is left uncached.
+    private readonly ConcurrentDictionary<long, string> _albumArtistCache = new();
 
     public MissingAlbumRefresher(
         IArtistCatalogRepo catalog,
@@ -76,15 +76,29 @@ public class MissingAlbumRefresher
         var scanned = 0;
         var missingTotal = 0;
 
+        var skipped = 0;
         foreach (var artist in present)
         {
             scanned++;
-            missingTotal += (await RefreshOne(artist.ArtistKey, ownedAlbums)).Count;
+            try
+            {
+                missingTotal += (await RefreshOne(artist.ArtistKey, ownedAlbums)).Count;
+            }
+            catch (DeezerUnavailableException ex)
+            {
+                // One artist Deezer wouldn't answer for doesn't stop the sweep, and — crucially —
+                // doesn't clear that artist's stored rows either. Their existing gap stands until a
+                // pass that actually hears back from Deezer.
+                skipped++;
+                _logger.LogWarning(
+                    "Missing-album sync: skipping {Artist} — {Reason}", artist.ArtistKey.ArtistName, ex.Message);
+            }
         }
 
         _logger.LogInformation(
-            "Missing-album sync: scanned {Scanned} owned artist(s), {Missing} missing album(s) total",
-            scanned, missingTotal);
+            "Missing-album sync: scanned {Scanned} owned artist(s), {Missing} missing album(s) total"
+            + "{SkipNote}",
+            scanned, missingTotal, skipped > 0 ? $", {skipped} skipped (Deezer unavailable)" : string.Empty);
         return new MissingAlbumSyncResult(scanned, missingTotal);
     }
 
@@ -97,6 +111,10 @@ public class MissingAlbumRefresher
     /// album titles) so a collaboration album can be checked against the act it's actually filed under,
     /// not just the listing artist. Returns the persisted rows.
     /// </summary>
+    /// <exception cref="DeezerUnavailableException">
+    /// Deezer didn't answer, so nothing is persisted — the artist's existing rows are left standing
+    /// rather than replaced with an empty set we have no evidence for.
+    /// </exception>
     public async Task<IReadOnlyList<MissingAlbum>> RefreshOne(
         ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
     {
@@ -117,6 +135,11 @@ public class MissingAlbumRefresher
     /// them (<see cref="AlbumRecordType.IsFeedEligible"/>). Owned albums the library has that Deezer
     /// doesn't list at all are appended (without art/id/type) so the picture is complete.
     /// </summary>
+    /// <exception cref="DeezerUnavailableException">
+    /// Deezer didn't answer. Nothing is persisted and nothing is returned — the caller surfaces this
+    /// as "Deezer is busy, retrying" rather than an authoritative empty discography, which the user
+    /// would otherwise see (and the client would cache) as "this artist has no albums".
+    /// </exception>
     public async Task<IReadOnlyList<DiscographyAlbum>> Discography(
         ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
     {
@@ -148,13 +171,33 @@ public class MissingAlbumRefresher
     /// between Plex and Deezer (e.g. a typographic vs. straight apostrophe) don't make an owned album
     /// look missing; the original Deezer title is still what we surface.
     /// </summary>
+    /// <exception cref="DeezerUnavailableException">
+    /// Deezer never answered — so nothing learned here is evidence of anything. Distinct from a null
+    /// return ("Deezer answered: no such artist"), because the callers <em>persist</em> this diff:
+    /// treating an unanswered call as an empty discography wipes the artist's missing-album rows and
+    /// blanks their album list in the UI, which is exactly what a five-second quota blip used to do.
+    /// </exception>
     private async Task<(List<DiscographyAlbum> All, List<MissingAlbum> Missing)?> FetchAndDiff(
         ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
     {
-        var deezerId = await _resolver.ResolveArtistId(artist.ArtistName);
+        var lookup = await _resolver.Lookup(artist.ArtistName);
+        if (lookup.Unavailable)
+        {
+            throw new DeezerUnavailableException(
+                $"Deezer didn't answer the artist lookup for '{artist.ArtistName}'");
+        }
+
+        var deezerId = lookup.Value?.Id;
         if (deezerId is null)
         {
             return null;
+        }
+
+        var listing = await _deezer.GetAlbums(deezerId.Value);
+        if (listing is null)
+        {
+            throw new DeezerUnavailableException(
+                $"Deezer didn't answer the discography listing for '{artist.ArtistName}'");
         }
 
         // Normalized owned titles per artist name, computed lazily and memoised for this pass — so the
@@ -178,7 +221,7 @@ public class MissingAlbumRefresher
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var all = new List<DiscographyAlbum>();
         var missing = new List<MissingAlbum>();
-        foreach (var album in await _deezer.GetAlbums(deezerId.Value))
+        foreach (var album in listing)
         {
             var title = album.title;
             var key = NormalizeTitle(title);
@@ -229,6 +272,11 @@ public class MissingAlbumRefresher
     /// The album-artist Deezer credits a release to (the listing discography omits it). Cached for the
     /// process lifetime — one <c>/album/{id}</c> call per album ever seen. Returns null on a Deezer
     /// miss, which the caller treats as "no collaboration info" and falls back to the listing artist.
+    ///
+    /// An id that came out of the discography listing exists by construction, so a null answer here is
+    /// a failed call, not a real miss — and it isn't cached. Memoising it would pin the whole rest of
+    /// a rate-limited discography walk to the listing artist for the life of the process, long after
+    /// Deezer started answering again.
     /// </summary>
     private async Task<string?> ResolveAlbumArtist(long albumId)
     {
@@ -238,7 +286,10 @@ public class MissingAlbumRefresher
         }
 
         var name = (await _deezer.GetAlbum(albumId))?.artist?.name;
-        _albumArtistCache[albumId] = name;
+        if (name is not null)
+        {
+            _albumArtistCache[albumId] = name;
+        }
         return name;
     }
 

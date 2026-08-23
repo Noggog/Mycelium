@@ -12,6 +12,7 @@ import type {
   PurchaseItem,
   RatedItem,
 } from '../types'
+import { DeezerBusyError } from './deezer'
 
 export type Verdict = 'up' | 'down'
 
@@ -54,6 +55,11 @@ export async function getMixedFeed(
 export async function getArtistAlbums(artist: string): Promise<FeedItem[]> {
   const params = new URLSearchParams({ artist })
   const res = await fetch(`/api/discovery/artist-albums?${params}`)
+  // 503 = Deezer didn't answer (see DeezerBusyError). Thrown rather than returned as an empty list so
+  // the caller retries and says so, instead of caching "no albums" as this artist's answer.
+  if (res.status === 503) {
+    throw new DeezerBusyError()
+  }
   if (!res.ok) {
     throw new Error(`Failed to load albums for ${artist}: ${res.status} ${res.statusText}`)
   }
@@ -65,6 +71,9 @@ export async function getArtistAlbums(artist: string): Promise<FeedItem[]> {
 export async function getArtistDiscography(artist: string): Promise<ArtistAlbumItem[]> {
   const params = new URLSearchParams({ artist })
   const res = await fetch(`/api/discovery/artist-discography?${params}`)
+  if (res.status === 503) {
+    throw new DeezerBusyError()
+  }
   if (!res.ok) {
     throw new Error(`Failed to load discography for ${artist}: ${res.status} ${res.statusText}`)
   }

@@ -16,6 +16,25 @@ public record DeezerPreviewTrack(string Title, string PreviewUrl);
 /// <param name="Tracks">The artist's top previewable tracks (biggest first), possibly empty.</param>
 public record DeezerPlayInfo(long Id, string ArtistLink, string? ImageUrl, IReadOnlyList<DeezerPreviewTrack> Tracks);
 
+/// <summary>
+/// The outcome of a Deezer lookup, keeping "Deezer says there's no such artist" apart from "Deezer
+/// never answered". Both used to arrive as a bare null, and conflating them is what turned a
+/// momentary rate-limit into a sticky "Not on Deezer" in the readout: the caller had no way to tell
+/// a verdict from a blip, so it cached the blip as the verdict.
+/// </summary>
+/// <param name="Value">What was found, or null on a miss <em>or</em> an unanswered call.</param>
+/// <param name="Unavailable">True when Deezer never answered, so nothing here is evidence.</param>
+public record DeezerLookup<T>(T? Value, bool Unavailable) where T : class
+{
+    /// <summary>Deezer answered, and has no such artist.</summary>
+    public static DeezerLookup<T> Missing { get; } = new(null, false);
+
+    /// <summary>Deezer never answered (transport error or rate-limit quota).</summary>
+    public static DeezerLookup<T> Unreachable { get; } = new(null, true);
+
+    public static DeezerLookup<T> Found(T value) => new(value, false);
+}
+
 /// <summary>What the SPA needs to sample a specific album: its previewable tracks and a link out.</summary>
 /// <param name="Id">Deezer album id.</param>
 /// <param name="AlbumLink">Canonical deezer.com album page.</param>
@@ -70,23 +89,26 @@ public class DeezerArtistResolver
     }
 
     /// <summary>
-    /// Full sample/link/image info for an artist name, or null if Deezer has no match. Pass
-    /// forceRefresh to bypass the cached (and possibly expired) preview urls and re-mint them.
+    /// Full sample/link/image info for an artist name. Pass forceRefresh to bypass the cached (and
+    /// possibly expired) preview urls and re-mint them. The result distinguishes "no Deezer match"
+    /// from "Deezer didn't answer" so the endpoint can answer 404 vs. 503 — the sample player showing
+    /// a permanent "Not on Deezer" for what was really a five-second rate-limit is the bug this
+    /// separation exists to prevent.
     /// </summary>
-    public async Task<DeezerPlayInfo?> ResolvePlayInfo(string artistName, bool forceRefresh = false)
+    public async Task<DeezerLookup<DeezerPlayInfo>> ResolvePlayInfo(string artistName, bool forceRefresh = false)
     {
-        var identity = await ResolveIdentity(artistName);
-        if (identity is null)
+        var lookup = await Lookup(artistName);
+        if (lookup.Value is not { } identity)
         {
-            return null;
+            return lookup.Unavailable ? DeezerLookup<DeezerPlayInfo>.Unreachable : DeezerLookup<DeezerPlayInfo>.Missing;
         }
 
         var tracks = await ResolveTopTracks(identity.Id, forceRefresh);
-        return new DeezerPlayInfo(
+        return DeezerLookup<DeezerPlayInfo>.Found(new DeezerPlayInfo(
             identity.Id,
             identity.Link ?? $"https://www.deezer.com/artist/{identity.Id}",
             identity.ImageUrl,
-            tracks);
+            tracks));
     }
 
     /// <summary>The Deezer artist id for a name, or null if Deezer has no match. Cached.</summary>
@@ -101,20 +123,28 @@ public class DeezerArtistResolver
     /// cached so cards never re-hit Deezer for something already looked up. A search Deezer never
     /// answered also resolves to null, but is never written anywhere — only an answer is evidence.
     /// </summary>
-    public async Task<DeezerIdentity?> ResolveIdentity(string artistName)
+    public async Task<DeezerIdentity?> ResolveIdentity(string artistName) =>
+        (await Lookup(artistName)).Value;
+
+    /// <summary>
+    /// <see cref="ResolveIdentity"/>, with the reason for a null answer kept: whether Deezer said no
+    /// or simply never answered. Callers that <em>record</em> the outcome — the discography diff
+    /// persists what it sees — must read this rather than the bare identity.
+    /// </summary>
+    public async Task<DeezerLookup<DeezerIdentity>> Lookup(string artistName)
     {
         // A sticky "unlinked" decision wins outright: the artist has no Deezer match, so never
         // re-guess by name (that's exactly what produced the wrong link the user detached).
         if (await _catalog.IsDeezerUnlinked(new ArtistKey(artistName)))
         {
-            return null;
+            return DeezerLookup<DeezerIdentity>.Missing;
         }
 
         // A user pin wins next — the whole point is to stop guessing by name.
         var stored = await _catalog.GetDeezer(new ArtistKey(artistName));
         if (stored is { IsOverride: true })
         {
-            return stored.Value.Identity;
+            return DeezerLookup<DeezerIdentity>.Found(stored.Value.Identity);
         }
 
         var key = NameCacheKey(artistName);
@@ -133,7 +163,7 @@ public class DeezerArtistResolver
                 // Deezer never answered (unreachable, or rate-limited). Unresolved for this call, but
                 // nothing is written: caching that would turn a momentary quota blip into a sticky
                 // "not on Deezer" for everything downstream, for as long as the entry lives.
-                return null;
+                return DeezerLookup<DeezerIdentity>.Unreachable;
             }
 
             identity = ToIdentity(DeezerApi.PickBestMatch(candidates, artistName));
@@ -151,7 +181,7 @@ public class DeezerArtistResolver
             await _catalog.SetDeezerIdentity(new ArtistKey(artistName), identity, isOverride: false);
         }
 
-        return identity;
+        return identity is null ? DeezerLookup<DeezerIdentity>.Missing : DeezerLookup<DeezerIdentity>.Found(identity);
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getDeezerAlbumPlayInfo, getDeezerPlayInfo } from '../api/deezer'
+import { getDeezerAlbumPlayInfo, getDeezerPlayInfo, isDeezerBusy } from '../api/deezer'
+import { Spinner } from './icons'
 import { getVolume, useVolume } from '../audio/volume'
 import { startAudioReactive, stopAudioReactive } from '../effects/audioReactive'
 
@@ -29,7 +30,7 @@ export function DeezerSample({ artist, albumId }: { artist?: string; albumId?: n
   })
   const queryClient = useQueryClient()
   const queryKey = isAlbum ? ['deezer-album', albumId] : ['deezer-play', artist]
-  const { data, isPending, isError } = isAlbum ? albumQuery : artistQuery
+  const { data, isPending, isError, error, isFetching, refetch } = isAlbum ? albumQuery : artistQuery
   const link = data ? ('albumLink' in data ? data.albumLink : data.artistLink) : null
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
@@ -107,9 +108,23 @@ export function DeezerSample({ artist, albumId }: { artist?: string; albumId?: n
   }, [])
 
   if (isPending) {
-    return <span className="deezer-sample muted">Loading Deezer…</span>
+    return <span className="deezer-sample muted disc-sub-busy"><Spinner size={12} /> Loading Deezer…</span>
   }
-  if (isError || !data) {
+  // "Not on Deezer" is a verdict — Deezer answered and has no such artist. A failed call is not that,
+  // and rendering it as that made a momentary rate-limit look permanent (the client caches it, so it
+  // survived until a reload). Say which one it is, and offer the retry.
+  if (isError) {
+    return (
+      <span className="deezer-sample muted disc-sub-busy">
+        {isFetching ? <Spinner size={12} /> : null}
+        {isDeezerBusy(error) ? 'Deezer is busy — try again in a moment.' : 'Couldn’t reach Deezer.'}
+        {!isFetching && (
+          <button className="disc-btn" onClick={() => refetch()}>Retry</button>
+        )}
+      </span>
+    )
+  }
+  if (!data) {
     return <span className="deezer-sample muted">Not on Deezer</span>
   }
 

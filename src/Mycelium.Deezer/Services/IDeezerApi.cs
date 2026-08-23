@@ -37,8 +37,14 @@ public interface IDeezerApi
     /// </summary>
     Task<DeezerTrack[]> GetTopTracks(long artistId, int limit);
 
-    /// <summary>The artist's albums (their discography). Empty if none/error.</summary>
-    Task<DeezerAlbum[]> GetAlbums(long artistId);
+    /// <summary>
+    /// The artist's albums (their discography). An empty array is Deezer answering with nothing (the
+    /// artist really has no releases listed); <c>null</c> means the call never got an answer — a
+    /// transport error, or the rate-limit quota. The distinction matters because the caller persists
+    /// the diff this feeds: an unanswered call read as "no albums" erases the artist's missing-album
+    /// rows and shows the user an empty discography.
+    /// </summary>
+    Task<DeezerAlbum[]?> GetAlbums(long artistId);
 
     /// <summary>
     /// A single album by its id, including its album-artist (the discography listing omits that).

@@ -2213,6 +2213,51 @@ a.detail-chip.via:hover {
   50% { transform: translateY(2px); opacity: 1; }
 }
 
+/* Inline "waiting on Deezer" spinner + the row it sits in, used wherever an upstream call is still
+   running (or being retried past a rate limit) and a static line of text would read as a finished,
+   empty answer. */
+.inline-spinner {
+  display: inline-block;
+  flex: none;
+  border: 2px solid color-mix(in srgb, var(--cyan) 25%, transparent);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: inline-spin 0.7s linear infinite;
+}
+
+@keyframes inline-spin {
+  to { transform: rotate(360deg); }
+}
+
+.disc-sub-busy {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+.disc-sub-busy .disc-btn {
+  margin-left: 0.2rem;
+}
+
+/* A soft banner over a list we are still showing while a refresh fails — the last known albums stay
+   on screen rather than being replaced by an error. */
+.disc-sub-stale {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  padding: 0.3rem 0.45rem;
+  border-left: 2px solid color-mix(in srgb, var(--cyan) 40%, transparent);
+  background: color-mix(in srgb, var(--cyan) 6%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inline-spinner { animation-duration: 2.4s; }
+}
+
 /* ========================================================================== */
 /* Responsive — collapse the readout into a bottom drawer on small screens     */
 /* ========================================================================== */

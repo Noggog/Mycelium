@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text.RegularExpressions;
 using System.Web;
 using Microsoft.Extensions.Logging;
 using Mycelium.Deezer.Inputs;
@@ -18,9 +20,23 @@ namespace Mycelium.Deezer.Services;
 /// </summary>
 public class DeezerApi : IDeezerApi
 {
+    // Deezer rate-limits at ~50 requests per 5 seconds per IP and answers the overflow with a
+    // 200-wrapped "Quota limit exceeded" — which, read as data, is indistinguishable from "nothing
+    // found". Opening one brand-new artist's discography is a burst on its own (the album listing,
+    // then one /album/{id} per not-yet-owned release, which for a new artist is all of them), so the
+    // ceiling is reachable from ordinary browsing, not just the nightly sweep. Pace every call
+    // through a rolling window instead of finding the ceiling by hitting it.
+    private const int WindowCalls = 40;
+    private const int QuotaRetries = 2;
+    private static readonly TimeSpan Window = TimeSpan.FromSeconds(5);
+
     private readonly HttpClient _httpClient;
     private readonly DeezerEndpointInfo _endpointInfo;
     private readonly ILogger<DeezerApi> _logger;
+
+    // Timestamps of the calls made inside the current window, oldest first.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Queue<DateTimeOffset> _recent = new();
 
     public DeezerApi(DeezerEndpointInfo endpointInfo, ILogger<DeezerApi> logger)
     {
@@ -92,12 +108,15 @@ public class DeezerApi : IDeezerApi
         return result?.data.ToArray() ?? Array.Empty<DeezerTrack>();
     }
 
-    public async Task<DeezerAlbum[]> GetAlbums(long artistId)
+    public async Task<DeezerAlbum[]?> GetAlbums(long artistId)
     {
         // limit=300 comfortably covers any discography in one page (Deezer's default page is 25).
         var url = $"{_endpointInfo.BaseUri}/artist/{artistId}/albums?limit=300";
+        // Null (Deezer never answered) is deliberately not flattened to an empty page, for the same
+        // reason as SearchArtists: the caller persists the diff this feeds, and an unanswered call
+        // read as "this artist has no albums" wipes the artist's missing-album rows.
         var result = await Get<DeezerAlbumList>(url);
-        return result?.data.ToArray() ?? Array.Empty<DeezerAlbum>();
+        return result?.data.ToArray();
     }
 
     public async Task<DeezerAlbum?> GetAlbum(long albumId)
@@ -138,13 +157,40 @@ public class DeezerApi : IDeezerApi
 
     private async Task<T?> Get<T>(string url) where T : class
     {
+        for (var attempt = 0; ; attempt++)
+        {
+            await Throttle();
+            var (value, quotaHit) = await GetOnce<T>(url);
+            if (!quotaHit || attempt == QuotaRetries)
+            {
+                if (quotaHit)
+                {
+                    _logger.LogWarning("Deezer still rate-limiting after {Retries} retries for {Url}", attempt, url);
+                }
+                return value;
+            }
+
+            // Sit out the rest of the window before trying again. The throttle above keeps us under
+            // the ceiling in steady state; this covers the case where something else (a redeploy's
+            // cold-start sweep, streamrip downloading from the same IP) already spent the budget.
+            _logger.LogInformation("Deezer rate-limited {Url}; retrying in {Delay}", url, Window);
+            await Task.Delay(Window);
+        }
+    }
+
+    /// <summary>
+    /// One attempt. Returns the parsed body (null on any failure) plus whether the failure was
+    /// Deezer's rate-limit quota specifically — the one failure worth waiting out and retrying.
+    /// </summary>
+    private async Task<(T? Value, bool QuotaHit)> GetOnce<T>(string url) where T : class
+    {
         try
         {
             var response = await _httpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Deezer request failed: {Status} for {Url}", response.StatusCode, url);
-                return null;
+                return (null, response.StatusCode == HttpStatusCode.TooManyRequests);
             }
 
             var body = await response.Content.ReadAsStringAsync();
@@ -155,15 +201,62 @@ public class DeezerApi : IDeezerApi
             if (TryReadError(body, out var error))
             {
                 _logger.LogWarning("Deezer returned an error for {Url}: {Error}", url, error);
-                return null;
+                return (null, IsQuotaError(error));
             }
 
-            return JsonConvert.DeserializeObject<T>(body);
+            return (JsonConvert.DeserializeObject<T>(body), false);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Deezer request errored for {Url}", url);
-            return null;
+            return (null, false);
+        }
+    }
+
+    // Deezer's quota refusal is code 4. Anchored against the following character so it can't also
+    // match 40x/41x codes, which mean something else entirely and are not worth retrying.
+    private static readonly Regex QuotaCode = new(@"""code""\s*:\s*4(?!\d)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Deezer's quota refusal, by either shape it arrives in: the type/message wording
+    /// ("QuotaException" / "Quota limit exceeded"), or error code 4.
+    /// </summary>
+    private static bool IsQuotaError(string error) =>
+        error.Contains("quota", StringComparison.OrdinalIgnoreCase) || QuotaCode.IsMatch(error);
+
+    /// <summary>
+    /// Blocks until this call fits inside the rolling window. Deezer's ceiling is ~50 requests per 5
+    /// seconds per IP; we pace to <see cref="WindowCalls"/> so bursts from elsewhere in the app (or
+    /// streamrip on the same IP) still have room. Held under a gate, so concurrent callers queue in
+    /// arrival order rather than all deciding at once that there's room for one more.
+    /// </summary>
+    private async Task Throttle()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            while (true)
+            {
+                var now = DateTimeOffset.UtcNow;
+                while (_recent.Count > 0 && now - _recent.Peek() >= Window)
+                {
+                    _recent.Dequeue();
+                }
+
+                if (_recent.Count < WindowCalls)
+                {
+                    break;
+                }
+
+                // Full window — wait for the oldest call in it to age out.
+                await Task.Delay(_recent.Peek() + Window - now);
+            }
+
+            _recent.Enqueue(DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 

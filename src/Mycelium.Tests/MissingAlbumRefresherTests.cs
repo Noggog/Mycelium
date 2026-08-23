@@ -215,4 +215,72 @@ public class MissingAlbumRefresherTests
         m.Artist.ArtistName.Should().Be(Artist);                 // surfaces under the listing artist
         m.MatchArtist.ArtistName.Should().Be("Nostrum Grocers"); // matches ownership under the album-artist
     }
+
+    // ---- Deezer not answering (rate-limit quota) must never be read as "this artist has nothing" ----
+    //
+    // Deezer serves a burst past its ~50-calls-per-5s ceiling as a 200 whose body is an error
+    // envelope; the client turns that into a null. Persisting the resulting "empty discography" wiped
+    // the artist's stored rows and blanked their album list in the UI until a hard reload.
+
+    [Fact]
+    public async Task Unanswered_discography_listing_does_not_replace_the_stored_rows()
+    {
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        _deezer.GetAlbums(DeezerId).Returns((DeezerAlbum[]?)null);
+
+        var act = () => _sut.Discography(new ArtistKey(Artist), Owned());
+
+        await act.Should().ThrowAsync<DeezerUnavailableException>();
+        await _missing.DidNotReceiveWithAnyArgs().ReplaceForArtist(default!, default!);
+    }
+
+    [Fact]
+    public async Task Unanswered_artist_lookup_does_not_replace_the_stored_rows()
+    {
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        // Null candidates = Deezer never answered the name search, as distinct from an empty array
+        // (Deezer answered: no such artist), which legitimately clears the rows.
+        _deezer.SearchArtists(Artist, Arg.Any<int>()).Returns((DeezerArtist[]?)null);
+
+        var act = () => _sut.RefreshOne(new ArtistKey(Artist), Owned());
+
+        await act.Should().ThrowAsync<DeezerUnavailableException>();
+        await _missing.DidNotReceiveWithAnyArgs().ReplaceForArtist(default!, default!);
+    }
+
+    [Fact]
+    public async Task An_artist_deezer_answers_no_match_for_still_has_its_rows_cleared()
+    {
+        // The other half of the distinction: an answered search that found nothing is evidence, so the
+        // artist's stale rows should go.
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        _deezer.SearchArtists(Artist, Arg.Any<int>()).Returns(Array.Empty<DeezerArtist>());
+
+        await _sut.RefreshOne(new ArtistKey(Artist), Owned());
+
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Sweep_skips_an_artist_deezer_wont_answer_for_and_carries_on()
+    {
+        const string other = "open mike eagle";
+        _catalog.GetAllPresent().Returns(new[]
+        {
+            new CatalogArtist(new ArtistKey(Artist), null, default),
+            new CatalogArtist(new ArtistKey(other), null, default),
+        });
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        _deezer.GetAlbums(DeezerId).Returns((DeezerAlbum[]?)null);
+        _deezer.SearchArtists(other, Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = 7, name = other } });
+        _deezer.GetAlbums(7).Returns(new[] { Album("brick body kids still daydream") });
+
+        var result = await _sut.Refresh();
+
+        // The unanswered artist is scanned but leaves no write behind; the other is still refreshed.
+        result.ArtistsScanned.Should().Be(2);
+        CapturedMissing().Should().ContainSingle().Which.Album.AlbumName
+            .Should().Be("brick body kids still daydream");
+    }
 }

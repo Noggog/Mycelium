@@ -4,6 +4,21 @@
 
 import type { DeezerCandidate } from '../types'
 
+// A 503 from any Deezer-backed endpoint: Deezer itself never answered — it rate-limits bursts at
+// ~50 calls per 5 seconds, and one artist's discography is a burst on its own. The backend refuses to
+// invent an answer for that, because an empty list is indistinguishable from "this artist has
+// nothing" once the client caches it — which is how a five-second blip used to blank an artist's
+// albums until a hard reload. Distinct from a 404, which is Deezer answering "no such artist": that
+// one is a fact worth keeping, this one is worth retrying.
+export class DeezerBusyError extends Error {
+  constructor(message = 'Deezer is rate-limiting requests right now.') {
+    super(message)
+    this.name = 'DeezerBusyError'
+  }
+}
+
+export const isDeezerBusy = (err: unknown): boolean => err instanceof DeezerBusyError
+
 export interface DeezerPreviewTrack {
   title: string
   previewUrl: string
@@ -25,6 +40,9 @@ export async function getDeezerPlayInfo(artist: string, fresh = false): Promise<
   if (res.status === 404) {
     return null
   }
+  if (res.status === 503) {
+    throw new DeezerBusyError()
+  }
   if (!res.ok) {
     throw new Error(`Failed to resolve Deezer artist: ${res.status} ${res.statusText}`)
   }
@@ -42,6 +60,9 @@ export async function getDeezerAlbumPlayInfo(albumId: number, fresh = false): Pr
   const params = new URLSearchParams({ id: String(albumId) })
   if (fresh) params.set('fresh', 'true')
   const res = await fetch(`/api/deezer/album?${params}`)
+  if (res.status === 503) {
+    throw new DeezerBusyError()
+  }
   if (!res.ok) {
     throw new Error(`Failed to resolve Deezer album: ${res.status} ${res.statusText}`)
   }

@@ -6,6 +6,7 @@ using Mycelium.Backend.Services.Auth;
 using Mycelium.Backend.Services.Background;
 using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
+using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
 using Serilog;
 using Serilog.Events;
@@ -160,6 +161,13 @@ app.MapGet("/auth/me", (HttpContext http, DevUsers devUsers, ILoggerFactory logg
 // Application API, grouped under /api so it shares the origin with the SPA without the SPA's
 // client routes (/artists, /related, /purchases, ...) colliding with same-named API paths.
 var api = app.MapGroup("/api");
+
+// Deezer never answered — its rate-limit quota, usually. A retryable 503, never an empty 200: the
+// SPA caches what an endpoint returns, so answering a rate-limited discography call with "no albums"
+// pins that answer on screen until a hard reload.
+static IResult DeezerBusy() => Results.Problem(
+    "Deezer didn't answer — it rate-limits bursts. Try again in a moment.",
+    statusCode: StatusCodes.Status503ServiceUnavailable);
 
 api.MapGet("/artists", (ILibraryProvider libraryProvider) =>
     {
@@ -381,8 +389,12 @@ api.MapGet("/related", async (string artist, bool? refresh,
 // preview whose signed url expired while the readout sat open (Deezer's tokens live ~15 minutes).
 api.MapGet("/deezer/artist", async (string artist, DeezerArtistResolver resolver, bool? fresh) =>
     {
-        var info = await resolver.ResolvePlayInfo(artist, fresh ?? false);
-        return info is null ? Results.NotFound() : Results.Ok(info);
+        var lookup = await resolver.ResolvePlayInfo(artist, fresh ?? false);
+        // 404 means Deezer answered and has no such artist ("Not on Deezer" — a fact the client can
+        // cache). 503 means Deezer never answered, so the client must retry rather than record a
+        // rate-limit blip as the artist's permanent verdict.
+        if (lookup.Unavailable) return DeezerBusy();
+        return lookup.Value is null ? Results.NotFound() : Results.Ok(lookup.Value);
     })
     .WithName("ResolveDeezerArtist");
 
@@ -536,14 +548,34 @@ api.MapPost("/discovery/seed", async (
 // owned), surfaced inline under the just-rated card so a fresh discovery can be acted on. Fetched
 // on demand (one Deezer call) only when an artist is liked — not precomputed per feed card.
 api.MapGet("/discovery/artist-albums", async (string artist, HttpContext http, DiscoveryEngine engine) =>
-        Results.Ok(await engine.ArtistAlbums(http.User.GetSubject()!, artist)))
+    {
+        try
+        {
+            return Results.Ok(await engine.ArtistAlbums(http.User.GetSubject()!, artist));
+        }
+        catch (DeezerUnavailableException)
+        {
+            // An empty list here would read as "this artist has nothing to acquire" and be cached as
+            // such by the client. Fail loudly instead so it retries.
+            return DeezerBusy();
+        }
+    })
     .RequireAuthorization()
     .WithName("GetArtistAlbums");
 
 // An owned artist's full Deezer discography for the Artists-page drill-down: every LP flagged owned
 // vs. missing, missing ones overlaid with the user's verdict. One Deezer call per expand.
 api.MapGet("/discovery/artist-discography", async (string artist, HttpContext http, DiscoveryEngine engine) =>
-        Results.Ok(await engine.ArtistDiscography(http.User.GetSubject()!, artist)))
+    {
+        try
+        {
+            return Results.Ok(await engine.ArtistDiscography(http.User.GetSubject()!, artist));
+        }
+        catch (DeezerUnavailableException)
+        {
+            return DeezerBusy();
+        }
+    })
     .RequireAuthorization()
     .WithName("GetArtistDiscography");
 

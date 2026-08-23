@@ -130,3 +130,17 @@ export function IconUndo(props: IconProps) {
     </Svg>
   )
 }
+
+// A spinning ring for "still waiting on Deezer" states. Worth a moving element rather than a line of
+// text: a static "Loading albums…" is easy to read as a settled (and empty) answer, which is exactly
+// the confusion an upstream call that takes seconds — or is being retried past a rate limit — creates.
+export function Spinner({ size = 14, className }: IconProps) {
+  return (
+    <span
+      className={className ? `inline-spinner ${className}` : 'inline-spinner'}
+      style={{ width: size, height: size }}
+      role="status"
+      aria-label="Loading"
+    />
+  )
+}

@@ -33,7 +33,8 @@ import { useAuth } from '../auth/AuthContext'
 import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
-import { IconApprove, IconBlock, IconCheck, IconClear, IconReject, IconWrench } from '../components/icons'
+import { IconApprove, IconBlock, IconCheck, IconClear, IconReject, IconWrench, Spinner } from '../components/icons'
+import { isDeezerBusy } from '../api/deezer'
 
 // The detail pane is driven by a lightweight selection: just enough to render the readout and to key
 // the Albums / Related tab queries. A library row supplies the full ArtistListItem (looked up by name
@@ -672,7 +673,7 @@ function ArtistAlbums({ artist }: { artist: string }) {
   const [openAlbum, setOpenAlbum] = useState<string | null>(null)
   // The album whose "Already in library?" pane is open, if any.
   const [merging, setMerging] = useState<ArtistAlbumItem | null>(null)
-  const { data, isPending, isError } = useQuery({
+  const { data, isPending, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['artist-discography', artist],
     queryFn: () => getArtistDiscography(artist),
     staleTime: 5 * 60 * 1000,
@@ -731,11 +732,34 @@ function ArtistAlbums({ artist }: { artist: string }) {
   })
   const busy = rateAlbum.isPending || clearAlbum.isPending || setBlocked.isPending
 
+  // Reading the discography is a live Deezer call (the listing, plus a lookup per unowned release), so
+  // it can take a few seconds on a cold artist — a spinner, not a static line, or the wait reads as a
+  // settled empty answer.
   if (isPending) {
-    return <div className="disc-sub-albums"><em className="disc-sub-note">Loading albums…</em></div>
+    return (
+      <div className="disc-sub-albums">
+        <span className="disc-sub-busy"><Spinner /> Loading albums from Deezer…</span>
+      </div>
+    )
   }
-  if (isError || !data) {
-    return <div className="disc-sub-albums"><em className="disc-sub-note">Couldn’t load albums.</em></div>
+  // A failure is never "this artist has no albums" — the two used to render identically, which is how
+  // a Deezer rate-limit blip looked like an artist with an empty discography.
+  if (isError && !data) {
+    return (
+      <div className="disc-sub-albums">
+        <span className="disc-sub-busy">
+          {isFetching ? <Spinner /> : null}
+          <em>
+            {isDeezerBusy(error)
+              ? 'Deezer is rate-limiting requests — the albums are still there.'
+              : 'Couldn’t load albums.'}
+          </em>
+          {!isFetching && (
+            <button className="disc-btn" onClick={() => refetch()}>Retry</button>
+          )}
+        </span>
+      </div>
+    )
   }
   if (data.length === 0) {
     return <div className="disc-sub-albums"><em className="disc-sub-note">No albums found on Deezer.</em></div>
@@ -743,6 +767,14 @@ function ArtistAlbums({ artist }: { artist: string }) {
 
   return (
     <div className="disc-sub-albums">
+      {/* A refresh that failed keeps the last known list on screen rather than replacing it with an
+          error — the albums didn't go anywhere, Deezer just wouldn't say so again. */}
+      {isError && (
+        <span className="disc-sub-stale">
+          {isFetching ? <Spinner size={12} /> : null}
+          {isDeezerBusy(error) ? 'Deezer is busy — showing the last loaded list.' : 'Couldn’t refresh — showing the last loaded list.'}
+        </span>
+      )}
       {sections.map((s) => (
         <section className="album-section" key={s.key}>
           <h4 className="album-section-title">
