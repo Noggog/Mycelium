@@ -188,18 +188,21 @@ public class DownloadService : BackgroundService
         // Mark it in-flight before the (slow) fetch so the monitor shows what's downloading now.
         await _repo.SetStatus(item.Id, PurchaseStatus.Downloading);
 
-        bool ok;
+        DownloadOutcome outcome;
         try
         {
-            ok = await _downloader.Request(item);
+            outcome = await _downloader.Request(item);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Download errored for {Id}", item.Id);
-            ok = false;
+            outcome = DownloadOutcome.Failed();
         }
 
-        await _repo.SetStatus(item.Id, ok ? PurchaseStatus.Sent : PurchaseStatus.Failed);
+        await _repo.SetStatus(
+            item.Id,
+            outcome.Accepted ? PurchaseStatus.Sent : PurchaseStatus.Failed,
+            outcome.Failure);
         return true;
     }
 

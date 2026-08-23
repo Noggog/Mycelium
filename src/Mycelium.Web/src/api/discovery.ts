@@ -1,6 +1,7 @@
 // Per-user discovery feed + ratings. All calls require an authenticated session (cookie sent
 // automatically, same-origin). artist/album go in the query string so names with '/' work.
 import type {
+  ArlUpdateResult,
   ArtistAlbumItem,
   DiscoveryFeedPage,
   DownloadSnapshot,
@@ -162,6 +163,24 @@ export async function setDownloadsAutomatic(automatic: boolean): Promise<void> {
   if (!res.ok) {
     throw new Error(`Failed to change download mode: ${res.status} ${res.statusText}`)
   }
+}
+
+// Replace the Deezer ARL streamrip authenticates with, after an expiry has blocked downloads. The
+// token goes in a POST body, never a query string — a URL would be logged by the request logger and
+// kept in browser history. The server validates it against Deezer before saving, so a rejection here
+// means the token is genuinely bad rather than merely unwritten; it's returned as a 400 whose body is
+// the same shape as success, carrying a message written for the user.
+export async function setDeezerArl(arl: string): Promise<ArlUpdateResult> {
+  const res = await fetch('/api/purchases/deezer-arl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ arl }),
+  })
+  const body = (await res.json().catch(() => null)) as ArlUpdateResult | null
+  if (!res.ok) {
+    throw new Error(body?.error ?? `Failed to save the ARL: ${res.status} ${res.statusText}`)
+  }
+  return body!
 }
 
 // Manually queue an item for download now (non-blocking — the drainer does the fetch). Also the

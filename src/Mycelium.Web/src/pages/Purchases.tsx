@@ -7,11 +7,18 @@ import {
   downloadPurchase,
   getDownloadStatus,
   getPurchases,
+  setDeezerArl,
   setDownloadsAutomatic,
   unsendPurchase,
 } from '../api/discovery'
 import { useArtAccent } from '../art/artColors'
-import type { DownloadSnapshot, FeedItem, PurchaseItem } from '../types'
+import type {
+  ArlUpdateResult,
+  DownloadFailure,
+  DownloadSnapshot,
+  FeedItem,
+  PurchaseItem,
+} from '../types'
 import { useAuth } from '../auth/AuthContext'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { IconClear, IconDownload, IconUndo, IconWrench } from '../components/icons'
@@ -30,6 +37,135 @@ function Avatar({ item }: { item: PurchaseItem }) {
 
 // A queue row, themed from its album/artist art (same `--art-accent` plumbing as the Discover feed):
 // the shared `.disc-row` styling turns that into the tinted background + border + glow automatically.
+// What each failure means, in the user's terms. `note` is the short tag shown on the row; `banner`
+// is the fuller explanation raised once for a systemic failure, and says what to actually do —
+// otherwise a dead ARL reads as "the downloader is broken" with Retry as the only affordance, and
+// retrying is precisely what cannot work.
+const FAILURE_COPY: Record<
+  DownloadFailure,
+  { note: string; banner?: { title: string; detail: string } } | undefined
+> = {
+  None: undefined,
+  Unknown: { note: "Couldn't download" },
+  NoTracksAvailable: { note: 'Deezer served no tracks' },
+  DeezerAuth: {
+    note: 'Deezer login rejected',
+    banner: {
+      title: 'Deezer login expired — downloads are blocked',
+      detail:
+        'Deezer rejected the saved session token (ARL). It expires on its own, and is also '
+        + 'invalidated by logging out or changing your password. Downloads will keep failing '
+        + 'identically until it is replaced: put a fresh ARL in streamrip\u2019s config.toml under '
+        + '[deezer], then retry. Nothing needs restarting.',
+    },
+  },
+  DeezerCredentialsMissing: {
+    note: 'No Deezer login configured',
+    banner: {
+      title: 'No Deezer login configured — downloads cannot run',
+      detail:
+        'streamrip has no ARL set, so it can\u2019t reach Deezer at all. Set one in its config.toml '
+        + 'under [deezer] to enable downloads.',
+    },
+  },
+}
+
+// Where to get an ARL. Written out in the banner rather than linked, because the moment a user reads
+// this is the moment downloads are broken, and "go read the deployment doc" is a worse answer than
+// four lines they can follow immediately. The cookie is per-browser-session, hence the emphasis on
+// being logged in — the commonest mistake is copying it from a signed-out tab.
+const ARL_STEPS = [
+  'Open deezer.com in a browser and make sure you are logged in.',
+  'Open DevTools (F12) → Application (Chrome) or Storage (Firefox).',
+  'Under Cookies → https://www.deezer.com, find the row named "arl".',
+  'Copy its Value — a long string of letters and numbers — and paste it below.',
+]
+
+// The blocked-downloads banner. Deliberately part of the download panel rather than a page-level
+// alert: it describes the state of the drainer, and sits next to the counts that would otherwise be
+// the only hint that every attempt is failing the same way.
+//
+// It also carries the fix. An ARL expires on its own and is the only credential streamrip accepts, so
+// this is a recurring chore — putting the paste box in the banner that reports the problem is the
+// difference between a 30-second fix and an SSH session against a TOML file.
+function BlockedBanner({ failure, onFixed }: { failure: DownloadFailure; onFixed: () => void }) {
+  const [arl, setArl] = useState('')
+  const [done, setDone] = useState<ArlUpdateResult | null>(null)
+  const banner = FAILURE_COPY[failure]?.banner
+
+  const save = useMutation({
+    mutationFn: () => setDeezerArl(arl.trim()),
+    onSuccess: (result) => {
+      setDone(result)
+      setArl('')
+      onFixed()
+    },
+  })
+
+  if (!banner) return null
+
+  // After a successful save the snapshot refetch clears `blocking`, unmounting this — but the refetch
+  // is a round trip, so confirm inline first. Naming the account is what proves the right cookie was
+  // pasted; a valid ARL for the wrong Deezer login would otherwise look identical to the right one.
+  if (done?.saved) {
+    return (
+      <div className="dl-blocked fixed" role="status">
+        <strong className="dl-blocked-title">
+          Deezer login updated{done.accountName ? ` — signed in as ${done.accountName}` : ''}
+        </strong>
+        <span className="dl-blocked-detail">
+          {done.requeued > 0
+            ? `${done.requeued} blocked download${done.requeued === 1 ? '' : 's'} returned to the queue.`
+            : 'Downloads are unblocked.'}
+          {!done.lossless
+            && ' This account has no lossless entitlement, so FLAC requests will fall back to MP3.'}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="dl-blocked" role="alert">
+      <strong className="dl-blocked-title">{banner.title}</strong>
+      <span className="dl-blocked-detail">{banner.detail}</span>
+      <details className="dl-arl-help">
+        <summary>Where do I find the ARL?</summary>
+        <ol className="dl-arl-steps">
+          {ARL_STEPS.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      </details>
+      <form
+        className="dl-arl-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (arl.trim()) save.mutate()
+        }}
+      >
+        <input
+          className="dl-arl-input"
+          type="password"
+          value={arl}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="Paste the new ARL cookie value"
+          aria-label="New Deezer ARL"
+          disabled={save.isPending}
+          onChange={(e) => setArl(e.target.value)}
+        />
+        <button className="disc-btn up" type="submit" disabled={save.isPending || !arl.trim()}>
+          {save.isPending ? 'Checking…' : 'Save'}
+        </button>
+      </form>
+      {/* The server checks the token with Deezer before writing it, so a failure here means the
+          token itself is wrong — worth saying plainly, since the alternative is saving something
+          broken and watching the same downloads fail again. */}
+      {save.isError && <span className="dl-arl-error">{(save.error as Error).message}</span>}
+    </div>
+  )
+}
+
 function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode }) {
   const accent = useArtAccent(item.imageUrl)
   const accentStyle = accent ? ({ '--art-accent': accent } as CSSProperties) : undefined
@@ -51,6 +187,11 @@ function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode
             : item.sources.length > 0
               ? `Artist · via ${item.sources.slice(0, 3).join(', ')}`
               : 'Artist'}
+          {/* Why this row failed, inline with its provenance. The banner covers the systemic case in
+              full; this is what distinguishes "this album wasn't available" from "nothing is". */}
+          {item.status === 'Failed' && FAILURE_COPY[item.failure] && (
+            <span className="dl-fail-note"> · {FAILURE_COPY[item.failure]!.note}</span>
+          )}
         </span>
       </Link>
       <div className="disc-actions">{actions}</div>
@@ -84,10 +225,14 @@ function countdown(iso: string, now: number) {
 function Monitor({
   s,
   onToggleAutomatic,
+  onFixed,
   busy,
 }: {
   s: DownloadSnapshot
   onToggleAutomatic: (automatic: boolean) => void
+  // Called after the Deezer credential is replaced: the snapshot's `blocking` flag and the failed
+  // rows both change server-side, so both queries have to be re-read for the page to settle.
+  onFixed: () => void
   busy: boolean
 }) {
   const current = s.current[0]
@@ -138,6 +283,7 @@ function Monitor({
       </div>
       <div className={current ? 'dl-activity active' : 'dl-activity'}>{activity}</div>
       {next && <div className="dl-next">{next.label} <strong>{countdown(next.at, now)}</strong></div>}
+      {s.blocking !== 'None' && <BlockedBanner failure={s.blocking} onFixed={onFixed} />}
       <div className="dl-counts">
         <span>Queued <strong>{s.queued}</strong></span>
         <span>Downloading <strong>{s.downloading}</strong></span>
@@ -274,6 +420,10 @@ export default function Purchases() {
           s={status}
           busy={setAutomatic.isPending}
           onToggleAutomatic={(automatic) => setAutomatic.mutate(automatic)}
+          onFixed={() => {
+            queryClient.invalidateQueries({ queryKey: ['download-status'] })
+            queryClient.invalidateQueries({ queryKey: ['purchases'] })
+          }}
         />
       )}
 
@@ -314,7 +464,13 @@ export default function Purchases() {
           <h2 className="feed-section-title">
             Failed <span className="feed-count">{failed.length}</span>
           </h2>
-          <p className="disc-sub"><em>The downloader couldn't grab these — retry.</em></p>
+          <p className="disc-sub">
+            <em>
+              {failed.some((i) => i.failure === 'DeezerAuth' || i.failure === 'DeezerCredentialsMissing')
+                ? 'Blocked by the Deezer login above — fix that first, then retry.'
+                : "The downloader couldn't grab these — retry."}
+            </em>
+          </p>
           <div className="disc-list">
             {failed.map((item) =>
               row(

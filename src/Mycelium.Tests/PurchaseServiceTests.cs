@@ -41,7 +41,7 @@ public class PurchaseServiceTests
         _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase));
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
         _downloader.Name.Returns("test-backend");
-        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(true);
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
     }
 
     private void Owned(params string[] artists) =>
@@ -248,6 +248,38 @@ public class PurchaseServiceTests
         snap.Complete.Should().Be(1);
         snap.BatchSize.Should().Be(3);
         snap.JitterPercent.Should().Be(30);
+    }
+
+    [Fact]
+    public async Task Snapshot_raises_a_blocking_flag_only_for_failures_no_retry_can_fix()
+    {
+        _albumRatings.GetAllLiked().Returns(new[]
+        {
+            new AlbumRating(new ArtistKey("A"), new AlbumKey("geo blocked"), null, DiscoveryStatus.Liked),
+            new AlbumRating(new ArtistKey("B"), new AlbumKey("bad login"), null, DiscoveryStatus.Liked),
+        });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("A"), new AlbumKey("geo blocked"), null, 11),
+            new MissingAlbum(new ArtistKey("B"), new AlbumKey("bad login"), null, 22),
+        });
+        await _sut.Reconcile();
+
+        // An album Deezer wouldn't serve is this row's own problem — the queue is otherwise healthy,
+        // so the panel must not claim downloads are blocked.
+        await _purchases.SetStatus(
+            PurchaseKey.ForAlbum("A", "geo blocked"), PurchaseStatus.Failed,
+            DownloadFailure.NoTracksAvailable);
+        (await _sut.GetDownloadSnapshot()).Blocking.Should().Be(DownloadFailure.None);
+
+        // A rejected credential is everyone's problem: it will fail every other row identically.
+        await _purchases.SetStatus(
+            PurchaseKey.ForAlbum("B", "bad login"), PurchaseStatus.Failed, DownloadFailure.DeezerAuth);
+        (await _sut.GetDownloadSnapshot()).Blocking.Should().Be(DownloadFailure.DeezerAuth);
+
+        // Re-queueing clears the row's reason, so a fixed ARL doesn't leave the banner stuck up.
+        await _purchases.SetStatus(PurchaseKey.ForAlbum("B", "bad login"), PurchaseStatus.Queued);
+        (await _sut.GetDownloadSnapshot()).Blocking.Should().Be(DownloadFailure.None);
     }
 
     [Fact]

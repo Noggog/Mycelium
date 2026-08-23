@@ -65,10 +65,21 @@ public class StreamripDownloaderTests : IDisposable
                 *) shift ;;
               esac
             done
+            plandir="$(dirname "$0")/plans"
+            # One line per invocation, so a test can assert how many quality passes actually ran.
+            echo "$quality" >> "$plandir/calls"
+            # Credential failure: streamrip lets the exception escape, so it prints a traceback naming
+            # the exception type and exits 1 — before writing anything at all, at any quality.
+            if [ -f "$plandir/credfail" ]; then
+              echo "Traceback (most recent call last)"
+              echo "  File streamrip/client/deezer.py line 53 in login"
+              cat "$plandir/credfail"
+              exit 1
+            fi
             album="$folder/Food Pyramid/New Omni-Directional Healing Techniques"
             mkdir -p "$album"
             touch "$album/cover.jpg"
-            plan="$(dirname "$0")/plans/$quality"
+            plan="$plandir/$quality"
             if [ -f "$plan" ]; then
               while IFS= read -r f; do
                 [ -n "$f" ] && touch "$album/$f"
@@ -86,6 +97,24 @@ public class StreamripDownloaderTests : IDisposable
     /// <summary>Declares which files the fake produces at a given <c>--quality</c>.</summary>
     private void Plan(string quality, params string[] files) =>
         File.WriteAllLines(Path.Combine(_plans, quality), files);
+
+    /// <summary>
+    /// Makes every pass fail the way a rejected credential does: an uncaught Python exception on
+    /// stdout and exit 1, with no files written. <paramref name="exception"/> is the type name
+    /// streamrip lets escape — the only thing separating "bad ARL" from "no ARL", since the exit code
+    /// is 1 for both.
+    /// </summary>
+    private void CredentialFailure(string exception) =>
+        File.WriteAllText(Path.Combine(_plans, "credfail"), exception);
+
+    /// <summary>The <c>--quality</c> of each streamrip invocation, in order.</summary>
+    private string[] Calls()
+    {
+        var path = Path.Combine(_plans, "calls");
+        return File.Exists(path)
+            ? File.ReadAllLines(path).Where(l => l.Length > 0).ToArray()
+            : Array.Empty<string>();
+    }
 
     /// <summary>How many tracks Deezer says the album has; 0 stands in for a failed lookup.</summary>
     private void DeezerReports(int trackCount) =>
@@ -111,6 +140,59 @@ public class StreamripDownloaderTests : IDisposable
     private string[] Landed() =>
         DownloadStaging.AudioFiles(_library).Select(Path.GetFileName).OrderBy(n => n).ToArray()!;
 
+    // ---- Credential failures: systemic, so they must be named and must not walk the ladder ----
+
+    [Fact]
+    public async Task A_rejected_arl_is_reported_as_such_and_does_not_walk_the_quality_ladder()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(4);
+        // Deezer rejected the session token. streamrip raises AuthenticationError from login(), before
+        // it has looked at the album — so no quality can help, and the two fallback passes would only
+        // reproduce the same traceback. Walking them wastes time and buries the reason in triplicate.
+        CredentialFailure("AuthenticationError");
+
+        var outcome = await Sut().Request(Item());
+
+        outcome.Accepted.Should().BeFalse();
+        outcome.Failure.Should().Be(DownloadFailure.DeezerAuth);
+        outcome.Failure.IsSystemic().Should().BeTrue();
+        Calls().Should().Equal("2");
+    }
+
+    [Fact]
+    public async Task A_missing_arl_is_told_apart_from_a_rejected_one()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(4);
+        // Same systemic shape, different fix: nothing is configured at all, so the user needs
+        // first-time setup rather than a refresh. streamrip raises a distinct exception for it.
+        CredentialFailure("MissingCredentialsError");
+
+        var outcome = await Sut().Request(Item());
+
+        outcome.Failure.Should().Be(DownloadFailure.DeezerCredentialsMissing);
+        outcome.Failure.IsSystemic().Should().BeTrue();
+        Calls().Should().Equal("2");
+    }
+
+    [Fact]
+    public async Task An_album_deezer_serves_no_tracks_for_is_not_blamed_on_the_credential()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(4);
+        // The other zero-track ending: streamrip logs in fine and exits 0, but every track was
+        // unavailable (geo-block, pulled master). That IS worth a retry and must not raise the
+        // "downloads are blocked" banner, so it has to classify differently from an auth failure.
+        var outcome = await Sut().Request(Item());
+
+        outcome.Accepted.Should().BeFalse();
+        outcome.Failure.Should().Be(DownloadFailure.NoTracksAvailable);
+        outcome.Failure.IsSystemic().Should().BeFalse();
+        // No credential problem, so the full ladder is still walked looking for a servable format.
+        Calls().Should().Equal("2", "1", "0");
+    }
+
     // ---- The reported bug: Deezer serves this album as MP3 only, so the FLAC pass got nothing ----
 
     [Fact]
@@ -122,7 +204,7 @@ public class StreamripDownloaderTests : IDisposable
         Plan("1", "02. Prana Focus.mp3", "03. Manufracture.mp3",
             "04. Advanced Cool Down.mp3", "05. Shambhala.mp3");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal(
             "02. Prana Focus.mp3", "03. Manufracture.mp3",
@@ -143,7 +225,7 @@ public class StreamripDownloaderTests : IDisposable
         Plan("0", "02. Prana Focus.mp3", "03. Manufracture.mp3",
             "04. Advanced Cool Down.mp3", "05. Shambhala.mp3");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal(
             "02. Prana Focus.mp3", "03. Manufracture.mp3",
@@ -159,7 +241,7 @@ public class StreamripDownloaderTests : IDisposable
         // Quality 0 would overwrite both with different files; reaching it at all is the bug.
         Plan("0", "01. One.mp3", "02. Two.mp3", "99. Should Never Appear.mp3");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal("01. One.mp3", "02. Two.mp3");
     }
@@ -171,7 +253,7 @@ public class StreamripDownloaderTests : IDisposable
         DeezerReports(4);
         Plan("1", "02. Prana Focus.mp3");
 
-        (await Sut(Array.Empty<string>()).Request(Item())).Should().BeFalse();
+        (await Sut(Array.Empty<string>()).Request(Item())).Accepted.Should().BeFalse();
 
         Landed().Should().BeEmpty();
     }
@@ -187,7 +269,7 @@ public class StreamripDownloaderTests : IDisposable
         Plan("1", "02. Prana Focus.mp3", "03. Manufracture.mp3",
             "04. Advanced Cool Down.mp3", "05. Shambhala.mp3");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal(
             "02. Prana Focus.flac", "03. Manufracture.flac",
@@ -203,7 +285,7 @@ public class StreamripDownloaderTests : IDisposable
         // Present but never wanted — if the fallback ran, these would show up in the library.
         Plan("1", "02. Prana Focus.mp3", "03. Manufracture.mp3");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal("02. Prana Focus.flac", "03. Manufracture.flac");
     }
@@ -216,7 +298,7 @@ public class StreamripDownloaderTests : IDisposable
         if (Unsupported) { return; }
         DeezerReports(4);
 
-        (await Sut().Request(Item())).Should().BeFalse();
+        (await Sut().Request(Item())).Accepted.Should().BeFalse();
 
         Landed().Should().BeEmpty();
         // Not even the cover art reaches the library — a folder holding only artwork is the exact
@@ -234,7 +316,7 @@ public class StreamripDownloaderTests : IDisposable
 
         // 3 of 4 is logged as a partial promotion, but a geo-blocked track is not a reason to
         // withhold the album — and no quality would fix it, so failing would just retry forever.
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().HaveCount(3);
     }
@@ -248,7 +330,7 @@ public class StreamripDownloaderTests : IDisposable
         DeezerReports(0);
         Plan("1", "02. Prana Focus.mp3");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal("02. Prana Focus.mp3");
     }
@@ -278,7 +360,7 @@ public class StreamripDownloaderTests : IDisposable
         DeezerReports(1);
         Plan("2", "02. Prana Focus.flac");
 
-        (await Sut().Request(Item())).Should().BeTrue();
+        (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal("01. Sun Ra.flac", "02. Prana Focus.flac");
     }

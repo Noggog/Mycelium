@@ -48,7 +48,11 @@ public record PurchaseItem(
     long? DeezerAlbumId,
     // The act the library files this album under (Deezer's album-artist) — used to match ownership
     // for a collaboration whose listing/display artist differs. Null for artists and non-collabs.
-    string? AlbumArtist = null);
+    string? AlbumArtist = null,
+    // Why the last attempt failed, when it did. Persisted rather than logged-only because the page
+    // that offers "Retry" is exactly where a user needs to know a retry can't work — a dead ARL fails
+    // every row identically, and the reason is otherwise buried in a server-side traceback.
+    DownloadFailure Failure = DownloadFailure.None);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -69,6 +73,10 @@ public record DownloadSnapshot(
     int Complete,
     int Failed,
     PurchaseItem[] Current,
+    // Set when the most recent failures are ones no retry can fix — currently a rejected or absent
+    // Deezer credential. The panel raises a single banner off this instead of leaving the user to
+    // infer a systemic outage from a pile of identical row failures.
+    DownloadFailure Blocking,
     // When the drainer next expects to act: NextItemAt is the end of the wait between two albums
     // (null unless it's mid-wait), NextBatchAt the next automatic sweep for pending albums. Both null
     // when nothing is scheduled — e.g. before the first pass has run.
@@ -107,7 +115,12 @@ public interface IPurchaseRepo
     /// Sets a row's status (stamping SentAt when moving to <see cref="PurchaseStatus.Sent"/>).
     /// Returns false if the id is unknown.
     /// </summary>
-    Task<bool> SetStatus(string id, PurchaseStatus status);
+    /// <summary>
+    /// Moves a row to <paramref name="status"/>, recording <paramref name="failure"/> alongside it.
+    /// Any non-Failed status clears the stored reason, so a row that later succeeds or is re-queued
+    /// doesn't keep displaying a stale explanation.
+    /// </summary>
+    Task<bool> SetStatus(string id, PurchaseStatus status, DownloadFailure failure = DownloadFailure.None);
 
     /// <summary>Removes a row entirely (no longer wanted).</summary>
     Task Remove(string id);

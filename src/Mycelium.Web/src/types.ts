@@ -239,6 +239,32 @@ export interface LibraryAlbumOption {
 // persisted acquisition lifecycle. `kind` is 'RecommendedArtist' (no album) or 'MissingAlbum'.
 export type PurchaseStatus = 'Pending' | 'Queued' | 'Downloading' | 'Sent' | 'InLibrary' | 'Failed'
 
+// Mirror DownloadFailure (IDownloader.cs) — why the last download attempt failed. 'DeezerAuth' and
+// 'DeezerCredentialsMissing' are systemic: every queued album fails identically until the ARL in
+// streamrip's config is replaced, so a retry is wasted effort and the UI says so instead of offering
+// one. The rest are per-album and worth retrying.
+export type DownloadFailure =
+  | 'None'
+  | 'Unknown'
+  | 'DeezerAuth'
+  | 'DeezerCredentialsMissing'
+  | 'NoTracksAvailable'
+
+// Mirror ArlUpdateResult (DeezerCredentialService.cs) — the answer to submitting a replacement ARL.
+// The token is never echoed back; what comes back is whether Deezer accepted it and who it belongs to.
+export interface ArlUpdateResult {
+  saved: boolean
+  // The Deezer account the new token authenticates as, so a paste can be confirmed as the right
+  // account rather than just a well-formed string. Null when Deezer didn't name one.
+  accountName: string | null
+  // Whether that account can stream lossless — the usual reason downloads keep landing as MP3.
+  lossless: boolean
+  // How many downloads blocked by the old credential were returned to the queue.
+  requeued: number
+  // Why it wasn't saved, phrased for the user. Null on success.
+  error: string | null
+}
+
 // Mirror DownloadSnapshot (IPurchaseRepo.cs) — the live download-monitor payload.
 export interface DownloadSnapshot {
   automatic: boolean
@@ -253,6 +279,9 @@ export interface DownloadSnapshot {
   complete: number
   failed: number
   current: PurchaseItem[]
+  // Non-'None' when downloads are blocked by something no retry fixes (a rejected/absent Deezer
+  // credential). Drives the one banner on the panel rather than a note on every failed row.
+  blocking: DownloadFailure
   // ISO timestamps for when the drainer next acts (null when nothing is scheduled).
   nextItemAt: string | null
   nextBatchAt: string | null
@@ -271,6 +300,9 @@ export interface PurchaseItem {
   sentAt: string | null
   // Deezer album id for downloadable (MissingAlbum) items; null for artists.
   deezerAlbumId: number | null
+  // Why the last attempt failed; 'None' unless this row is Failed. Cleared on any other transition,
+  // so it never explains a failure that has since been retried.
+  failure: DownloadFailure
 }
 
 // The signed-in user, as returned by GET /auth/me (the BFF). Null when not authenticated.

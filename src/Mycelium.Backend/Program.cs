@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Mycelium.Backend;
 using Mycelium.Backend.Services.Auth;
 using Mycelium.Backend.Services.Background;
+using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
 using Mycelium.Interfaces;
 using Serilog;
@@ -688,6 +689,21 @@ api.MapPost("/purchases/download", async (string id, DownloadService downloads) 
     .RequireAuthorization()
     .WithName("DownloadPurchase");
 
+// Replace the Deezer ARL that streamrip authenticates with. The token expires on its own and is the
+// only credential streamrip's Deezer client accepts, so this turns a recurring SSH-and-edit-TOML
+// chore into a paste on the page that reported the problem. POST-only and never echoed back: the
+// value goes in, a yes/no comes out. Validated against Deezer before anything is written, so a
+// mistyped token can't be saved and then fail every download exactly as the expired one did.
+api.MapPost("/purchases/deezer-arl", async (ArlUpdateRequest body, DeezerCredentialService credentials) =>
+    {
+        var result = await credentials.Update(body.Arl ?? "");
+        // 400, not 500: a rejected or unsaveable ARL is the user's input to correct, and the message
+        // is written for them to act on.
+        return result.Saved ? Results.Ok(result) : Results.BadRequest(result);
+    })
+    .RequireAuthorization()
+    .WithName("SetDeezerArl");
+
 // Undo — move a downloaded/queued item back to "pending".
 api.MapPost("/purchases/unsend", async (string id, PurchaseService purchases) =>
         await purchases.Unsend(id) ? Results.NoContent() : Results.NotFound())
@@ -748,3 +764,9 @@ app.MapDefaultEndpoints();
 app.MapFallbackToFile("index.html");
 
 app.Run();
+
+/// <summary>
+/// Body of the ARL update. A POST body rather than a query parameter so the credential never lands in
+/// a URL — where it would be logged by the request logger, proxies, and browser history alike.
+/// </summary>
+internal record ArlUpdateRequest(string? Arl);

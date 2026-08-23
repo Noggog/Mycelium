@@ -132,6 +132,23 @@ in Mongo (not an env var), so it survives redeploys and takes effect without a r
   `/music/.mycelium-incoming/` and only promotes verified files, so a failed grab leaves the
   library untouched; a leftover directory there means the app was killed mid-download and is safe
   to delete.
+- **"Deezer login expired" on the Download page / `AuthenticationError` in the log:** the ARL is
+  rejected, not missing — Deezer invalidates it when the session ends, the password changes, or it
+  simply ages out. Nothing downloads until it's replaced, so the app raises one banner on the
+  Download panel instead of letting each album fail with a generic "couldn't grab this".
+  **Fix it from the app:** the banner carries a paste box, with a "Where do I find the ARL?"
+  walkthrough. Copy a new `arl` cookie from a logged-in Deezer session in a browser
+  (DevTools → Application → Cookies → `deezer.com` → `arl`), paste it, Save. The app checks the token
+  against Deezer before writing it, so an unusable one is refused rather than saved; on success it
+  rewrites just the `arl` key in `config.toml` (every other setting and comment is left byte-for-byte
+  alone), names the account it signed in as, and returns the blocked albums to the queue. `rip` reads
+  its config per invocation, so nothing restarts. Editing
+  `STREAMRIP_CONFIG_HOST/streamrip/config.toml` by hand still works, and is the fallback if the
+  config volume is mounted read-only.
+  There is no way around the periodic refresh: streamrip 2.1.0's Deezer client authenticates by ARL
+  only, and the underlying `deezer-py` login by email/password needs a reCAPTCHA token, so it can't
+  be automated. A failed pass here skips the remaining quality fallbacks — they would reproduce the
+  identical failure — so the log carries one traceback per album rather than three.
 - **`Cannot connect to host e-cdns-proxy-N.dzcdn.net` in the log:** expected, and handled. Deezer
   retired that CDN, and streamrip 2.1.0 still builds a URL on it whenever the media API returns no
   URL for a track at the requested format. That track can only be recovered by retrying it at a

@@ -29,13 +29,20 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
         return Task.CompletedTask;
     }
 
-    public Task<bool> SetStatus(string id, PurchaseStatus status)
+    public Task<bool> SetStatus(string id, PurchaseStatus status, DownloadFailure failure = DownloadFailure.None)
     {
         if (!_items.TryGetValue(id, out var item))
         {
             return Task.FromResult(false);
         }
-        _items[id] = item with { Status = status, SentAt = status == PurchaseStatus.Sent ? DateTimeOffset.UtcNow : item.SentAt };
+        _items[id] = item with
+        {
+            Status = status,
+            SentAt = status == PurchaseStatus.Sent ? DateTimeOffset.UtcNow : item.SentAt,
+            // Mirrors the Mongo repo: the reason is only meaningful on a Failed row, and any other
+            // transition clears it so a retry doesn't inherit the last explanation.
+            Failure = status == PurchaseStatus.Failed ? failure : DownloadFailure.None,
+        };
         return Task.FromResult(true);
     }
 

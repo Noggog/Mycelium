@@ -99,7 +99,7 @@ public class DownloadServiceTests
     [Fact]
     public async Task Successful_download_marks_the_item_sent()
     {
-        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(true);
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
         var item = Album("Big Thief", "Capacity", 12345, PurchaseStatus.Queued);
         _repo.Seed(item);
 
@@ -112,7 +112,7 @@ public class DownloadServiceTests
     [Fact]
     public async Task Failed_download_marks_the_item_failed()
     {
-        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(false);
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Failed());
         var item = Album("Big Thief", "Capacity", 12345, PurchaseStatus.Queued);
         _repo.Seed(item);
 
@@ -124,7 +124,8 @@ public class DownloadServiceTests
     [Fact]
     public async Task A_thrown_downloader_is_caught_and_the_item_marked_failed()
     {
-        _downloader.Request(Arg.Any<PurchaseItem>()).Returns<bool>(_ => throw new InvalidOperationException("boom"));
+        _downloader.Request(Arg.Any<PurchaseItem>())
+            .Returns<DownloadOutcome>(_ => throw new InvalidOperationException("boom"));
         var item = Album("Big Thief", "Capacity", 12345, PurchaseStatus.Queued);
         _repo.Seed(item);
 
@@ -136,7 +137,7 @@ public class DownloadServiceTests
     [Fact]
     public async Task Non_queued_or_non_downloadable_items_are_skipped()
     {
-        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(true);
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
         _repo.Seed(Album("A", "already-sent", 1, PurchaseStatus.Sent));       // not queued
         _repo.Seed(Album("P", "still-pending", 3));                           // pending, not yet requested
         _repo.Seed(Album("B", "no-id", 0, PurchaseStatus.Queued));            // no deezer id

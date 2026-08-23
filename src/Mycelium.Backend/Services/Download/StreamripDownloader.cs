@@ -58,6 +58,28 @@ public class StreamripDownloader : IDownloader
     /// </summary>
     private readonly record struct Pass(RunResult Result, string Stdout, string Stderr)
     {
+        /// <summary>
+        /// The credential failure this pass hit, or <see cref="DownloadFailure.None"/>. streamrip
+        /// reports both as an uncaught Python traceback on stdout and exit 1, so the exception name in
+        /// the captured text is the only thing that distinguishes "your ARL is dead" from "this album
+        /// wouldn't download" — the exit code is 1 either way. Named exception types, not prose, so a
+        /// wording change upstream can't silently turn this back into an unclassified failure.
+        /// </summary>
+        public DownloadFailure CredentialFailure
+        {
+            get
+            {
+                var text = $"{Stdout}\n{Stderr}";
+                if (text.Contains("MissingCredentialsError", StringComparison.Ordinal))
+                {
+                    return DownloadFailure.DeezerCredentialsMissing;
+                }
+                return text.Contains("AuthenticationError", StringComparison.Ordinal)
+                    ? DownloadFailure.DeezerAuth
+                    : DownloadFailure.None;
+            }
+        }
+
         public string Output =>
             string.IsNullOrWhiteSpace(Stdout) && string.IsNullOrWhiteSpace(Stderr)
                 ? "<streamrip printed nothing>"
@@ -80,13 +102,13 @@ public class StreamripDownloader : IDownloader
 
     public string Name => "streamrip (Deezer)";
 
-    public async Task<bool> Request(PurchaseItem item)
+    public async Task<DownloadOutcome> Request(PurchaseItem item)
     {
         if (item.Kind != FeedKind.MissingAlbum || item.DeezerAlbumId is null or 0)
         {
             _logger.LogInformation(
                 "Skipping {Id}: only Deezer albums are downloadable (artists are wishlist-only)", item.Id);
-            return false;
+            return DownloadOutcome.Failed();
         }
 
         var albumId = item.DeezerAlbumId.Value;
@@ -121,7 +143,7 @@ public class StreamripDownloader : IDownloader
     /// The verified path: preferred quality into its own tree, a fallback pass merged in per-track if
     /// that came up short, then promote whatever survives into the library.
     /// </summary>
-    private async Task<bool> RunStaged(PurchaseItem item, string url, string staging)
+    private async Task<DownloadOutcome> RunStaged(PurchaseItem item, string url, string staging)
     {
         // 0 = Deezer couldn't tell us (flaky call, unknown album). We then fall back to the weaker
         // "did anything at all land" test, which still beats trusting the exit code.
@@ -137,7 +159,16 @@ public class StreamripDownloader : IDownloader
                 "Discarding staged files for {Artist} — {Album}: the pass timed out, and a killed "
                 + "streamrip leaves truncated tracks under their final names",
                 item.Artist.ArtistName, item.Album);
-            return false;
+            return DownloadOutcome.Failed();
+        }
+
+        // Deezer refused the session before it fetched anything. Every fallback would repeat the same
+        // login and fail identically, so stop here: one clear reason beats three copies of a traceback,
+        // and the reason is what the Download page needs to say "a retry won't fix this".
+        if (first.CredentialFailure is var credential && credential != DownloadFailure.None)
+        {
+            LogCredentialFailure(credential, item, first);
+            return DownloadOutcome.Failed(credential);
         }
 
         var got = DownloadStaging.AudioFiles(preferredDir).Count;
@@ -167,9 +198,16 @@ public class StreamripDownloader : IDownloader
 
             // A hang is systemic (bad ARL, network) and later passes would only burn more timeouts —
             // but whatever earlier passes wrote came from processes that exited on their own, so it's
-            // complete and worth keeping.
+            // complete and worth keeping. A rejected credential is systemic for the same reason; it can
+            // surface here rather than on the first pass if the session lapses mid-album.
             if (last.Result == RunResult.TimedOut)
             {
+                break;
+            }
+
+            if (last.CredentialFailure != DownloadFailure.None)
+            {
+                LogCredentialFailure(last.CredentialFailure, item, last);
                 break;
             }
 
@@ -183,6 +221,13 @@ public class StreamripDownloader : IDownloader
         var landed = DownloadStaging.AudioFiles(preferredDir).Count;
         if (landed == 0)
         {
+            // A credential failure that surfaced mid-ladder is reported as itself; the generic
+            // "nothing arrived" message below would bury the one detail that tells the user what to do.
+            if (last.CredentialFailure != DownloadFailure.None)
+            {
+                return DownloadOutcome.Failed(last.CredentialFailure);
+            }
+
             // streamrip exits 0 having logged a reason per track, so its output is the only record of
             // why nothing arrived — dump it here rather than leaving the log saying merely "0 tracks".
             _logger.LogWarning(
@@ -190,7 +235,7 @@ public class StreamripDownloader : IDownloader
                 + "nothing promoted to the library. Last streamrip pass said:\n{Output}",
                 item.Artist.ArtistName, item.Album, _config.Quality,
                 string.Join(", ", _config.FallbackQualities), last.Output);
-            return false;
+            return DownloadOutcome.Failed(DownloadFailure.NoTracksAvailable);
         }
 
         if (expected > 0 && landed < expected)
@@ -208,7 +253,25 @@ public class StreamripDownloader : IDownloader
         _logger.LogInformation(
             "Downloaded {Artist} — {Album}: {Landed} track(s) promoted to {Dir}",
             item.Artist.ArtistName, item.Album, landed, _config.DownloadDir);
-        return true;
+        return DownloadOutcome.Success();
+    }
+
+    /// <summary>
+    /// Reports a rejected/absent Deezer credential once, as a plain instruction rather than a wall of
+    /// Python traceback. This is the failure a user is least equipped to diagnose from streamrip's own
+    /// output and the one with the most specific fix, so it gets its own message naming the file to
+    /// edit — and it's logged once per album rather than once per quality pass.
+    /// </summary>
+    private void LogCredentialFailure(DownloadFailure failure, PurchaseItem item, Pass pass)
+    {
+        var reason = failure == DownloadFailure.DeezerCredentialsMissing
+            ? "no Deezer ARL is configured"
+            : "Deezer rejected the configured ARL (expired, revoked, or invalidated by a password change)";
+        _logger.LogError(
+            "Deezer login failed while fetching {Artist} — {Album}: {Reason}. Downloads stay blocked "
+            + "until the ARL is replaced in streamrip's config (see DEPLOYMENT.md §4); skipping the "
+            + "remaining quality passes, which would fail identically. streamrip said:\n{Output}",
+            item.Artist.ArtistName, item.Album, reason, pass.Output);
     }
 
     /// <summary>
@@ -222,12 +285,18 @@ public class StreamripDownloader : IDownloader
     /// a clean failure, but blind: with nowhere to stage, the exit code is the only signal, and it
     /// can't see a pass that "succeeded" while fetching nothing.
     /// </summary>
-    private async Task<bool> RunUnverified(string url, PurchaseItem item)
+    private async Task<DownloadOutcome> RunUnverified(string url, PurchaseItem item)
     {
         var pass = await RunAt(_config.Quality, url, item, folder: null);
         if (pass.Result == RunResult.Success)
         {
-            return true;
+            return DownloadOutcome.Success();
+        }
+
+        if (pass.CredentialFailure is var credential && credential != DownloadFailure.None)
+        {
+            LogCredentialFailure(credential, item, pass);
+            return DownloadOutcome.Failed(credential);
         }
 
         foreach (var fallback in _config.FallbackQualities)
@@ -245,11 +314,17 @@ public class StreamripDownloader : IDownloader
             pass = await RunAt(fallback, url, item, folder: null);
             if (pass.Result == RunResult.Success)
             {
-                return true;
+                return DownloadOutcome.Success();
+            }
+
+            if (pass.CredentialFailure != DownloadFailure.None)
+            {
+                LogCredentialFailure(pass.CredentialFailure, item, pass);
+                return DownloadOutcome.Failed(pass.CredentialFailure);
             }
         }
 
-        return false;
+        return DownloadOutcome.Failed();
     }
 
     private async Task<Pass> RunAt(string quality, string url, PurchaseItem item, string? folder)

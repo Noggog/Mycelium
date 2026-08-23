@@ -79,7 +79,8 @@ public class MainModule : Autofac.Module
             new PlexClientInfo(Environment.GetEnvironmentVariable("PLEX_TOKEN") ?? throw new InvalidOperationException()));
         builder.RegisterType<HttpClient>().AsSelf().SingleInstance();
 
-        // Deezer download subsystem (env-driven; ARL lives in streamrip's own config). streamrip is
+        // Deezer download subsystem (env-driven; the ARL lives in streamrip's own config, which
+        // DeezerCredentialService can rewrite in place when the user pastes a new one). streamrip is
         // always the backend. Whether the drainer runs unattended isn't configured here at all — it's
         // the Download page's switch, stored in Mongo (DownloadSettings) — and manual "download now"
         // works regardless. DownloadService is a shared singleton hosted service so the
@@ -87,6 +88,11 @@ public class MainModule : Autofac.Module
         builder.RegisterInstance(BuildDownloaderConfig());
         builder.RegisterType<StreamripDownloader>().As<IDownloader>().AsSelf().SingleInstance();
         builder.RegisterType<DownloadService>().AsSelf().As<IHostedService>().SingleInstance();
+        // Replacing the ARL from the Download page. The Services.Download namespace isn't part of the
+        // assembly scan below (which covers Services.Singletons), so these are registered by hand like
+        // the two above.
+        builder.RegisterType<StreamripArlStore>().AsSelf().SingleInstance();
+        builder.RegisterType<DeezerCredentialService>().AsSelf().SingleInstance();
 
         // Post-download Plex rescan (PlexLibraryScanner auto-registers as ILibraryScanner via the
         // assembly scan below). Off unless PLEX_RESCAN_AFTER_DOWNLOAD is set; debounce defaults to 5m.

@@ -4,9 +4,12 @@ namespace Mycelium.Backend.Services.Download;
 /// Configuration for the Deezer download subsystem, read from environment variables in MainModule
 /// (no hardcoded config). Whether the background drainer runs at all is *not* here — that's the
 /// switch on the Download page, stored in Mongo (see DownloadSettings) — and manual "download now"
-/// works either way. The Deezer <c>ARL</c> itself lives in <b>streamrip's own config</b> (set once
-/// with <c>rip config</c> on the server), not here, so the credential never enters this app's
-/// surface. We own the orchestration: what to grab, how fast, and where it lands.
+/// works either way. The Deezer <c>ARL</c> itself lives in <b>streamrip's own config</b> (bootstrapped
+/// with <c>rip config</c> on the server), not here — no env var carries it and nothing caches it. The
+/// one exception is deliberate: because the ARL expires and is the only credential streamrip accepts,
+/// <see cref="DeezerCredentialService"/> can validate and rewrite that one key in place, so a user can
+/// paste a fresh token into the page that reported the expiry instead of editing TOML over SSH. We own
+/// the orchestration: what to grab, how fast, and where it lands.
 /// </summary>
 /// <param name="SettleInterval">How often to re-pull the Plex catalog while a just-downloaded album is
 /// still waiting to appear in the library, so "Complete" rows close out in minutes rather than at the

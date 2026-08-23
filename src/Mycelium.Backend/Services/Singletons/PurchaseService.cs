@@ -96,6 +96,16 @@ public class PurchaseService
             .ThenBy(p => p.RequestedAt)
             .ToArray();
 
+        // One systemic reason for the whole panel: if any failed row died on a bad credential, every
+        // other download is blocked the same way, so the page should say that once rather than let the
+        // user read a list of identical row failures and reach for Retry. Most recent wins, so fixing
+        // the ARL and getting a different failure clears it on the next attempt.
+        var blocking = all
+            .Where(p => p.Status == PurchaseStatus.Failed && p.Failure.IsSystemic())
+            .OrderByDescending(p => p.SentAt ?? p.RequestedAt)
+            .Select(p => p.Failure)
+            .FirstOrDefault();
+
         return new DownloadSnapshot(
             // The live switch (stored, else the env default) — not the raw config, so the panel shows
             // what the drainer will actually do.
@@ -110,6 +120,7 @@ public class PurchaseService
             all.Count(p => p.Status == PurchaseStatus.Sent),
             all.Count(p => p.Status == PurchaseStatus.Failed),
             current,
+            blocking,
             _schedule.NextItemAt,
             _schedule.NextBatchAt);
     }

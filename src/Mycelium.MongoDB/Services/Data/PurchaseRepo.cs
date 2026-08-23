@@ -24,6 +24,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldSentAt = "sentAt";
     private const string FieldDeezerAlbumId = "deezerAlbumId";
     private const string FieldAlbumArtist = "albumArtist";
+    private const string FieldFailure = "failure";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -70,9 +71,15 @@ public class PurchaseRepo : IPurchaseRepo
             new UpdateOptions { IsUpsert = true });
     }
 
-    public async Task<bool> SetStatus(string id, PurchaseStatus status)
+    public async Task<bool> SetStatus(
+        string id, PurchaseStatus status, DownloadFailure failure = DownloadFailure.None)
     {
-        var update = Builders<BsonDocument>.Update.Set(FieldStatus, status.ToString());
+        // Written on every transition, not just failures: a row moving back to Queued/Pending for a
+        // retry must lose the previous reason, or the page would keep explaining a failure that no
+        // longer applies.
+        var update = Builders<BsonDocument>.Update
+            .Set(FieldStatus, status.ToString())
+            .Set(FieldFailure, (status == PurchaseStatus.Failed ? failure : DownloadFailure.None).ToString());
         if (status == PurchaseStatus.Sent)
         {
             update = update.Set(FieldSentAt, DateTimeOffset.UtcNow.UtcDateTime);
@@ -106,9 +113,13 @@ public class PurchaseRepo : IPurchaseRepo
             ? da.ToInt64()
             : null;
 
+        // Rows written before failure tracking have no field, and an unparseable value is treated the
+        // same way: an unexplained failure, which is what the page showed before this existed.
+        var failure = Enum.TryParse<DownloadFailure>(Str(FieldFailure), out var f) ? f : DownloadFailure.None;
+
         return new PurchaseItem(
             doc["_id"].AsString, kind, new ArtistKey(Str(FieldArtist)), StrN(FieldAlbum),
             StrN(FieldImageUrl), score, sources, status, requestedAt, sentAt, deezerAlbumId,
-            StrN(FieldAlbumArtist));
+            StrN(FieldAlbumArtist), failure);
     }
 }

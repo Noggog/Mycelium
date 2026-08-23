@@ -2056,6 +2056,88 @@ a.detail-chip.via:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* Downloads blocked by a credential the user must replace. Loud on purpose: without it the only
+   signal is a Failed count climbing while every retry fails identically, which reads as a broken
+   downloader rather than an expired token. Sits inside the monitor panel, above the counts it
+   explains. */
+.dl-blocked {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.7rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--bad);
+  background: rgba(250, 115, 118, 0.12);
+}
+.dl-blocked-title {
+  font-size: 0.88rem;
+  color: var(--bad);
+}
+.dl-blocked-detail {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+/* Confirmation state — same box, no longer an alarm. */
+.dl-blocked.fixed {
+  border-color: var(--good);
+  background: rgba(56, 232, 160, 0.12);
+}
+.dl-blocked.fixed .dl-blocked-title {
+  color: var(--good);
+}
+/* Collapsed by default: someone who already knows where the cookie lives shouldn't have to scroll
+   past four steps to reach the input, and someone who doesn't is one click away. */
+.dl-arl-help {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.dl-arl-help summary {
+  cursor: pointer;
+  color: var(--cyan);
+}
+.dl-arl-steps {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+  line-height: 1.5;
+}
+.dl-arl-steps li {
+  margin-bottom: 0.15rem;
+}
+.dl-arl-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+}
+/* type="password" so a shoulder-surfer or a screenshot can't lift the token — it is a live session
+   credential for the whole Deezer account, not just a download key. */
+.dl-arl-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.dl-arl-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+.dl-arl-error {
+  font-size: 0.8rem;
+  color: var(--bad);
+}
+
+/* The per-row reason, riding along with the provenance line — quiet, since the banner carries the
+   systemic case and this only needs to tell one row's story apart from another's. */
+.dl-fail-note {
+  color: var(--bad);
+}
+
 .dl-counts {
   display: flex;
   gap: 1.4rem;
