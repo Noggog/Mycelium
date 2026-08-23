@@ -124,10 +124,12 @@ public class MissingAlbumRefresherTests
         // (Ben Howard's 3-track "Another Friday Night / Hot Heavy Summer / Sister" is one) is invisible
         // in the app. Each row carries its type so the UI can badge it; without that a single would read
         // as an LP, since the listing no longer implies "album".
+        // Titles avoid a trailing "EP"/"LP" on purpose: the title matcher treats that as a format
+        // designator and folds it away, which would make these two fixtures the same album.
         _deezer.GetAlbums(DeezerId).Returns(new[]
         {
-            Album("an lp", id: 1),
-            Album("an ep", recordType: "ep", id: 2),
+            Album("lp record", id: 1),
+            Album("ep record", recordType: "ep", id: 2),
             Album("a single", recordType: "single", id: 3),
             Album("a comp", recordType: "compilation", id: 4),
         });
@@ -136,7 +138,7 @@ public class MissingAlbumRefresherTests
 
         listed.Select(a => (a.Title, a.RecordType)).Should().BeEquivalentTo(new[]
         {
-            ("an lp", "album"), ("an ep", "ep"), ("a single", "single"), ("a comp", "compilation"),
+            ("lp record", "album"), ("ep record", "ep"), ("a single", "single"), ("a comp", "compilation"),
         });
     }
 

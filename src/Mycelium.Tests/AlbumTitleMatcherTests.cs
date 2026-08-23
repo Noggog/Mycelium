@@ -90,6 +90,79 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.Normalize("Me &").Should().Be("me and");
     }
 
+    // Plex writes the EP designator one way, Deezer another — and one of them often leaves it off.
+    [Theory]
+    [InlineData("The Burgh Island EP")]
+    [InlineData("The Burgh Island E.P.")]
+    [InlineData("The Burgh Island e.p.")]
+    [InlineData("The Burgh Island")]
+    public void Ep_designators_and_their_dots_fold_away(string title)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be("the burgh island");
+    }
+
+    [Theory]
+    [InlineData("The Old Pine E.P.")]
+    [InlineData("The Old Pine")]
+    public void A_trailing_ep_matches_the_bare_title(string title)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be("the old pine");
+    }
+
+    [Fact]
+    public void A_dotted_initialism_inside_a_title_collapses()
+    {
+        AlbumTitleMatcher.Normalize("M.I.A. Sessions").Should().Be("mia sessions");
+    }
+
+    [Fact]
+    public void A_lone_initial_keeps_its_dot()
+    {
+        AlbumTitleMatcher.Normalize("Mr. Bungle").Should().Be("mr. bungle");
+    }
+
+    // Reissue decoration the sources disagree on: the record is the same one either way.
+    [Theory]
+    [InlineData("I Forgot Where We Were (10th Anniversary Deluxe)")]
+    [InlineData("I Forgot Where We Were [10th Anniversary Deluxe]")]
+    [InlineData("I Forgot Where We Were")]
+    public void An_anniversary_edition_matches_the_plain_release(string title)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be("i forgot where we were");
+    }
+
+    [Theory]
+    [InlineData("Every Kingdom (Deluxe Edition)")]
+    [InlineData("Every Kingdom (Bonus Track Version)")]
+    [InlineData("Every Kingdom - Remastered")]
+    [InlineData("Every Kingdom (Deluxe Edition) [Remastered]")]
+    [InlineData("Every Kingdom")]
+    public void Edition_qualifiers_fold_away(string title)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be("every kingdom");
+    }
+
+    // A qualifier word is only decoration when the whole tail is decoration — otherwise it is title.
+    [Theory]
+    [InlineData("Sound Kapital (Clean Slate)", "sound kapital (clean slate)")]
+    [InlineData("Celebration Rock (Live)", "celebration rock (live)")]
+    [InlineData("Live - 1975", "live - 1975")]
+    [InlineData("Post-Nothing", "post-nothing")]
+    public void A_tail_that_carries_meaning_is_kept(string title, string expected)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be(expected);
+    }
+
+    // Stripping never eats the whole name: these albums really are called this.
+    [Theory]
+    [InlineData("EP", "ep")]
+    [InlineData("Deluxe", "deluxe")]
+    [InlineData("(Deluxe Edition)", "(deluxe edition)")]
+    public void A_title_that_is_only_a_qualifier_survives(string title, string expected)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be(expected);
+    }
+
     [Fact]
     public void Distinct_titles_still_normalize_differently()
     {
@@ -104,5 +177,12 @@ public class AlbumTitleMatcherTests
         // merge recorded under one convention has to be honoured under the other.
         AlbumOverrideKey.For("CFCF", "Radiance & Submission")
             .Should().Be(AlbumOverrideKey.For("cfcf", "Radiance and Submission"));
+    }
+
+    [Fact]
+    public void Override_keys_agree_across_an_edition_suffix()
+    {
+        AlbumOverrideKey.For("Ben Howard", "Every Kingdom (Deluxe Edition)")
+            .Should().Be(AlbumOverrideKey.For("ben howard", "Every Kingdom"));
     }
 }
