@@ -15,9 +15,10 @@ namespace Mycelium.Backend.Services.Background;
 ///   • <b>Manual</b>: <see cref="RequestDownload"/> (the "Download now" button) enqueues one id and
 ///     returns immediately, so the HTTP request never blocks on the multi-minute fetch.
 /// "Fast mode" (see <see cref="DownloadSettings.FastUntil"/>) is a time-boxed variant of the automatic
-/// pass: for an hour it lifts the batch cap so every pending album is queued at once. The consumer is
-/// unchanged — same single flight, same wait between albums — so a burst empties the backlog into the
-/// queue, it doesn't make the fetching itself any less polite.
+/// pass: for an hour it lifts the batch cap so every pending album is queued at once, and re-runs the
+/// pass every few seconds so an album marked mid-burst is queued straight away rather than at the next
+/// batch tick. The consumer is unchanged — same single flight, same wait between albums — so a burst
+/// empties the backlog into the queue, it doesn't make the fetching itself any less polite.
 /// Each item goes Pending → Queued → Downloading → Sent/Failed; a downloaded album then closes the loop
 /// (file lands in Plex → reconcile → in-library, drops off the list) — via the settle pass here if it lands
 /// soon after the download, else at the next daily catalog sync. Registered as a shared
@@ -210,17 +211,77 @@ public class DownloadService : BackgroundService
         return true;
     }
 
-    /// <summary>Periodically enqueues pending downloadable albums (batch-capped) while the drainer
-    /// switch is on. The loop runs regardless of the switch and each pass re-checks it, so switching to
-    /// automatic starts draining at the next tick rather than needing a restart. Every gap is jittered
+    /// <summary>
+    /// How often the enqueue pass re-checks for pending albums during a fast-mode burst. Short enough
+    /// that an album marked while the burst is running joins the queue as soon as you can look back at
+    /// the panel — the whole point of fast mode is that nothing waits for the next batch tick — and
+    /// cheap because the pass only reads Mongo; what actually reaches Deezer is still the single-flight
+    /// consumer, unchanged.
+    /// </summary>
+    private static readonly TimeSpan FastPollInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Periodically enqueues pending downloadable albums (batch-capped) while the drainer switch is on.
+    /// The loop runs regardless of the switch and each pass re-checks it, so switching to automatic
+    /// starts draining at the next tick rather than needing a restart. Its own loop rather than
+    /// <see cref="JitterPolicy.RunPeriodic"/> because the cadence isn't fixed: it re-reads the fast-mode
+    /// deadline after every pass and drops to <see cref="FastPollInterval"/> while a burst is running,
+    /// then returns to the batch interval on its own when the deadline lapses. Every gap is jittered
     /// (as all the app's recurring waits are) and published to <see cref="DownloadSchedule"/> so the
-    /// monitor can count it down.</summary>
-    private Task AutoEnqueue(CancellationToken ct) =>
-        // Zero start delay: after a deploy the queue should start moving at once, and a single pass at
-        // startup isn't what a rate-limiter keys on — the repeating cadence is, and that's jittered.
-        _jitter.RunPeriodic(
-            TimeSpan.Zero, _config.BatchInterval, EnqueuePendingBatch, ct,
-            onWait: _schedule.BatchWait);
+    /// monitor counts down the cadence actually in force.
+    /// </summary>
+    private async Task AutoEnqueue(CancellationToken ct)
+    {
+        try
+        {
+            // Pass first, wait after: after a deploy the queue should start moving at once, and a single
+            // pass at startup isn't what a rate-limiter keys on — the repeating cadence is, and that's
+            // jittered.
+            while (!ct.IsCancellationRequested)
+            {
+                await EnqueuePendingBatch();
+
+                var wait = await NextEnqueueWait();
+                _schedule.BatchWait(wait);
+                await Task.Delay(wait, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // shutting down
+        }
+    }
+
+    /// <summary>
+    /// How long to wait before the next enqueue pass: the batch interval normally, the much shorter
+    /// <see cref="FastPollInterval"/> while a fast-mode burst is running. Re-decided after every pass
+    /// rather than fixed at startup, so a burst begun (or ended) mid-loop changes the cadence from the
+    /// very next gap.
+    /// </summary>
+    internal async Task<TimeSpan> NextEnqueueWait()
+    {
+        var wait = _jitter.Apply(await FastMode() ? FastPollInterval : _config.BatchInterval);
+        // A floor, not a throttle: a misconfigured interval of zero would otherwise spin the loop
+        // against Mongo as fast as the CPU allows.
+        return wait > TimeSpan.Zero ? wait : TimeSpan.FromSeconds(1);
+    }
+
+    /// <summary>
+    /// Whether a fast-mode burst is in force right now. Swallows a failed read rather than letting it
+    /// end the loop: not knowing means the ordinary batched pace, which is the safe answer.
+    /// </summary>
+    private async Task<bool> FastMode()
+    {
+        try
+        {
+            return await _settings.FastUntil() is not null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read the fast-mode deadline; using the normal batch pace");
+            return false;
+        }
+    }
 
     /// <summary>
     /// One automatic pass: a no-op in manual mode, where only the button enqueues. While a fast-mode
@@ -237,7 +298,7 @@ public class DownloadService : BackgroundService
                 return;
             }
 
-            var fast = await _settings.FastUntil() is not null;
+            var fast = await FastMode();
             await _purchases.Reconcile();
             var candidates = (await _repo.GetAll())
                 .Where(p => p.Status == PurchaseStatus.Pending

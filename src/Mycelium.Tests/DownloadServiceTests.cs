@@ -49,9 +49,11 @@ public class DownloadServiceTests
         _queue.GetAllUserIds().Returns(Array.Empty<string>());
     }
 
-    private static DownloaderConfig Config(TimeSpan? settleWindow = null, int batchSize = 10) =>
+    private static DownloaderConfig Config(
+        TimeSpan? settleWindow = null, int batchSize = 10, TimeSpan? batchInterval = null) =>
         new(DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQualities: new[] { "1", "0" },
-            Codec: "", BatchSize: batchSize, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
+            Codec: "", BatchSize: batchSize, ItemDelay: TimeSpan.Zero,
+            BatchInterval: batchInterval ?? TimeSpan.Zero,
             DownloadTimeout: TimeSpan.FromMinutes(15), SettleInterval: TimeSpan.FromMinutes(15),
             SettleWindow: settleWindow ?? TimeSpan.FromHours(6));
 
@@ -286,6 +288,24 @@ public class DownloadServiceTests
         _repo.Items.Count(i => i.Status == PurchaseStatus.Queued).Should().Be(2);
         var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
         (await settings.FastUntil()).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Fast_mode_rechecks_for_new_albums_instead_of_waiting_for_the_next_batch_tick()
+    {
+        var sut = Sut(Config(batchInterval: TimeSpan.FromMinutes(30)));
+        var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
+
+        // Normally an album marked just after a pass waits out the whole batch interval...
+        (await sut.NextEnqueueWait()).Should().Be(TimeSpan.FromMinutes(30));
+
+        // ...which is exactly what a burst is for: the next gap is seconds, so anything marked while
+        // it runs is queued almost at once. Same instance, no restart — the deadline is re-read.
+        await settings.SetFast(true);
+        (await sut.NextEnqueueWait()).Should().BeLessThan(TimeSpan.FromMinutes(1));
+
+        await settings.SetFast(false);
+        (await sut.NextEnqueueWait()).Should().Be(TimeSpan.FromMinutes(30));
     }
 
     [Fact]
