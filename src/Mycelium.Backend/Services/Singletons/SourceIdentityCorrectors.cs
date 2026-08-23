@@ -83,7 +83,8 @@ public class DeezerIdentityCorrector : ISourceIdentityCorrector
         Name: d.Name,
         Detail: Fans(d.Fans),
         Link: d.Link ?? $"https://www.deezer.com/artist/{d.Id}",
-        ImageUrl: d.ImageUrl);
+        ImageUrl: d.ImageUrl,
+        Popularity: d.Fans);
 
     private static string? Fans(int? fans) => fans.HasValue ? $"{fans.Value:N0} fans" : null;
 

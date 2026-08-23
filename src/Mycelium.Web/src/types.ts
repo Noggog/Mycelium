@@ -55,6 +55,9 @@ export interface SourceCandidate {
   detail: string | null
   link: string | null
   imageUrl: string | null
+  // The source's own follower count (Deezer fans), null where the source has none — the tie-break
+  // for collapsing several same-named candidates onto the canonical act.
+  popularity: number | null
 }
 
 export interface ArtistSources {

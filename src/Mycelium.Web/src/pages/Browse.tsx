@@ -1176,8 +1176,24 @@ function UncatalogedResults({
   })
 
   // Only artists not already in the library — same-name hits are already listed above.
-  const results = (search.data ?? []).filter(
+  const matches = (search.data ?? []).filter(
     (c) => c.name && !libraryNames.has(normalize(c.name)),
+  )
+
+  // Deezer lists several artists under one name (a "Feist" with 25 fans next to the real one with
+  // 200k), and every row here selects by name alone — so duplicates open the same readout and are
+  // pure noise. Collapse each name to its most-followed entry, the same tie-break the backend's
+  // PickBestMatch uses to resolve a name, so the row's "Add" pins what the readout is already
+  // playing. A wrong guess is re-routed from the readout's Meta tab, which lists every candidate.
+  const best = new Map<string, SourceCandidate>()
+  for (const c of matches) {
+    const key = normalize(c.name as string)
+    const held = best.get(key)
+    if (!held || (c.popularity ?? 0) > (held.popularity ?? 0)) best.set(key, c)
+  }
+  // Keep Deezer's relevance order: dedupe by first appearance of each name, not by fan count.
+  const results = [...new Set(matches.map((c) => normalize(c.name as string)))].map(
+    (key) => best.get(key) as SourceCandidate,
   )
 
   if (trimmed.length === 0) return null

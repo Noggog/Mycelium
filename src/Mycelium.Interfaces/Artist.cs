@@ -77,8 +77,14 @@ public record SourceIdentity(
     bool Correctable,
     bool Unlinked = false);
 
-/// <summary>One candidate in a source's "Correct association" search picker.</summary>
-public record SourceCandidate(string Id, string? Name, string? Detail, string? Link, string? ImageUrl);
+/// <summary>
+/// One candidate in a source's "Correct association" search picker. <paramref name="Popularity"/> is
+/// the source's own follower/listener count when it has one (Deezer fans), left null otherwise — it
+/// is what lets a caller collapse several same-named candidates onto the canonical act, the same
+/// tie-break the resolvers use when they pick a match by name.
+/// </summary>
+public record SourceCandidate(string Id, string? Name, string? Detail, string? Link, string? ImageUrl,
+    int? Popularity = null);
 
 /// <summary>The cross-source identity view of one artist, one entry per surfaced source.</summary>
 public record ArtistSources(ArtistKey Artist, IReadOnlyList<SourceIdentity> Sources);
