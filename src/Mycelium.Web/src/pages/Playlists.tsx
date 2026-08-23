@@ -164,15 +164,8 @@ function PlexConnection() {
       <div className="dev-tool">
         <h2>Connect your Plex account</h2>
         <p>
-          Playlists are made <strong>in your own Plex account</strong>, so they show up in your sidebar
-          like any playlist you'd make yourself, and the star-rating and "haven't heard it lately" rules
-          use <em>your</em> ratings and <em>your</em> play history — not the server owner's.
-        </p>
-        <p>
-          <em>
-            Approval happens on plex.tv; this app never sees your password. It keeps a token limited to
-            this one server, which you can revoke here at any time.
-          </em>
+          Connect Plex to get a few useful smart playlists set up for you — like one holding only the
+          artists you've thumbed up, or your top-rated tracks you haven't heard in a while.
         </p>
 
         <div className="controls">
