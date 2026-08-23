@@ -998,29 +998,40 @@ input[type='checkbox'] {
   font-size: 0.92rem;
   font-weight: 500;
 }
-/* Deezer's record type beside an album title. The drill-down lists every type while the Discover feed
-   carries only albums and EPs, so this badge is what marks a row as browse-only — it has to read at a
-   glance without pulling focus off the title, hence the muted pill. Albums (the bulk of any listing)
-   stay the quietest; the types you're scanning *for* get a touch more contrast. */
-.album-type {
-  margin-left: 0.5rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  vertical-align: 0.08em;
-  white-space: nowrap;
-  color: var(--text-faint);
-  background: rgba(116, 88, 219, 0.14);
-  border: 1px solid var(--border);
+/* A discography section (Albums / EPs / Singles / …). Deezer's record type used to ride along as a
+   pill on every row; grouping says the same thing once per section instead, so the titles are left to
+   read on their own. The heading is the quiet Orbitron label used elsewhere in the readout, with a
+   hairline under it to separate one run of rows from the next. */
+.album-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
-.album-type.ep,
-.album-type.single,
-.album-type.compilation {
-  color: var(--text-dim);
+.album-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.5rem 0 0.1rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+/* First section sits directly under the tab strip — no extra lead-in above it. */
+.album-section:first-child .album-section-title {
+  margin-top: 0;
+}
+.album-section-count {
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
   background: rgba(116, 88, 219, 0.26);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
 }
 
 /* The release year beside an album title — quiet enough not to compete with the title itself. */

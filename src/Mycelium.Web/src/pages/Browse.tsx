@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getArtists } from '../api/artists'
@@ -524,15 +524,36 @@ const ALBUM_VERDICT_LABEL: Partial<Record<DiscoveryStatus, string>> = {
   Snoozed: 'Snoozed',
 }
 
-// Deezer's record_type → the badge shown beside the title. The drill-down lists every type but the
-// Discover feed only carries albums and EPs, so the badge is what marks a row as browse-only — and
-// why a 3-track release like Ben Howard's "Another Friday Night / Hot Heavy Summer / Sister" sits
-// here reading "Single" instead of being mistaken for an LP. Unknown/absent types get no badge.
-const ALBUM_TYPE_LABEL: Record<string, string> = {
-  album: 'Album',
-  ep: 'EP',
-  single: 'Single',
-  compilation: 'Compilation',
+// Deezer's record_type → the discography section a release is filed under, in display order. The
+// drill-down lists every type but the Discover feed only carries albums and EPs, so the section is
+// what marks a row as browse-only — and why a 3-track release like Ben Howard's "Another Friday
+// Night / Hot Heavy Summer / Sister" sits under Singles instead of being mistaken for an LP.
+// Anything else (including the null type an owned-only album Deezer doesn't list carries) falls to
+// the trailing "Other" section.
+const ALBUM_SECTIONS: { key: string; title: string }[] = [
+  { key: 'album', title: 'Albums' },
+  { key: 'ep', title: 'EPs' },
+  { key: 'single', title: 'Singles' },
+  { key: 'compilation', title: 'Compilations' },
+  { key: 'other', title: 'Other' },
+]
+
+// Which section a release belongs to — its record type when we recognise it, "other" otherwise.
+function albumSectionKey(a: ArtistAlbumItem): string {
+  const type = a.recordType?.toLowerCase()
+  return type && ALBUM_SECTIONS.some((s) => s.key === type) ? type : 'other'
+}
+
+// Newest first within a section. Deezer leaves the year off owned-only albums (and the odd release
+// with no date), and an undated entry can't claim a spot in the timeline — sink those to the bottom
+// and break the tie on title so the order is stable across refetches.
+function byYearDesc(x: ArtistAlbumItem, y: ArtistAlbumItem): number {
+  if (x.year !== y.year) {
+    if (x.year == null) return 1
+    if (y.year == null) return -1
+    return y.year - x.year
+  }
+  return x.album.localeCompare(y.album)
 }
 
 // A single album in the discography drill-down, themed from its cover art via `--art-accent` (the
@@ -563,7 +584,6 @@ function AlbumSubRow({
   const accent = useArtAccent(a.imageUrl)
   const accentStyle = accent ? ({ '--art-accent': accent } as CSSProperties) : undefined
   const label = a.verdict ? ALBUM_VERDICT_LABEL[a.verdict] : null
-  const typeLabel = a.recordType ? ALBUM_TYPE_LABEL[a.recordType.toLowerCase()] : undefined
   const canPlay = a.deezerAlbumId != null
   return (
     <div className="disc-sub-album-wrap">
@@ -575,7 +595,6 @@ function AlbumSubRow({
         <AlbumThumb item={a} />
         <div className="disc-sub-album-name">
           {a.album}
-          {typeLabel && <span className={`album-type ${a.recordType!.toLowerCase()}`}>{typeLabel}</span>}
           {a.year && <span className="album-year">{a.year}</span>}
         </div>
         <div className="disc-actions" onClick={(e) => e.stopPropagation()}>
@@ -659,6 +678,17 @@ function ArtistAlbums({ artist }: { artist: string }) {
     staleTime: 5 * 60 * 1000,
   })
 
+  // Albums / EPs / Singles / Compilations as their own headed sections, newest release first inside
+  // each — the type is the section it sits under, so the rows themselves carry no type badge. Empty
+  // sections are dropped (most artists have no compilations, and "Other" is usually empty too).
+  const sections = useMemo(() => {
+    if (!data) return []
+    return ALBUM_SECTIONS.map((s) => ({
+      ...s,
+      items: data.filter((a) => albumSectionKey(a) === s.key).sort(byYearDesc),
+    })).filter((s) => s.items.length > 0)
+  }, [data])
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['artist-discography', artist] })
     queryClient.invalidateQueries({ queryKey: ['purchases'] })
@@ -713,19 +743,27 @@ function ArtistAlbums({ artist }: { artist: string }) {
 
   return (
     <div className="disc-sub-albums">
-      {data.map((a) => (
-        <AlbumSubRow
-          key={a.album}
-          a={a}
-          busy={busy}
-          isOpen={openAlbum === a.album}
-          onToggle={() => setOpenAlbum((cur) => (cur === a.album ? null : a.album))}
-          onRate={(album, verdict) => rateAlbum.mutate({ a: album, verdict })}
-          onClear={(album) => clearAlbum.mutate(album)}
-          onMerge={setMerging}
-          onBlock={(album) => setBlocked.mutate({ a: album, blocked: true })}
-          onUnblock={(album) => setBlocked.mutate({ a: album, blocked: false })}
-        />
+      {sections.map((s) => (
+        <section className="album-section" key={s.key}>
+          <h4 className="album-section-title">
+            {s.title}
+            <span className="album-section-count">{s.items.length}</span>
+          </h4>
+          {s.items.map((a) => (
+            <AlbumSubRow
+              key={a.album}
+              a={a}
+              busy={busy}
+              isOpen={openAlbum === a.album}
+              onToggle={() => setOpenAlbum((cur) => (cur === a.album ? null : a.album))}
+              onRate={(album, verdict) => rateAlbum.mutate({ a: album, verdict })}
+              onClear={(album) => clearAlbum.mutate(album)}
+              onMerge={setMerging}
+              onBlock={(album) => setBlocked.mutate({ a: album, blocked: true })}
+              onUnblock={(album) => setBlocked.mutate({ a: album, blocked: false })}
+            />
+          ))}
+        </section>
       ))}
 
       {merging && (
