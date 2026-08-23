@@ -37,6 +37,14 @@ public class SimilarityIngestionServiceTests
     private static DeezerArtist Artist(long id, string name, string? image = null) =>
         new() { id = id, name = name, picture_xl = image };
 
+    // Name resolution runs through the candidate search, not the single-result convenience — it needs
+    // to tell "Deezer says no such artist" (empty) from "Deezer didn't answer" (null).
+    private void DeezerFinds(string name, DeezerArtist artist) =>
+        _deezer.SearchArtists(name, Arg.Any<int>()).Returns(new[] { artist });
+
+    private void DeezerFindsNothing(string name) =>
+        _deezer.SearchArtists(name, Arg.Any<int>()).Returns(Array.Empty<DeezerArtist>());
+
     [Fact]
     public async Task Fresh_cache_is_served_without_touching_Deezer_or_writing()
     {
@@ -47,7 +55,7 @@ public class SimilarityIngestionServiceTests
         var result = await _sut.EnsureRelated(Radiohead);
 
         result.Should().BeSameAs(fresh);
-        await _deezer.DidNotReceive().SearchArtist(Arg.Any<string>());
+        await _deezer.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
         await _repo.DidNotReceive().Upsert(Arg.Any<ArtistRelations>());
     }
 
@@ -57,12 +65,12 @@ public class SimilarityIngestionServiceTests
         var stale = new ArtistRelations(Radiohead, "deezer", Array.Empty<RelatedArtist>(),
             DateTimeOffset.UtcNow - TimeSpan.FromDays(31));
         _repo.Get(Radiohead, "deezer").Returns(stale);
-        _deezer.SearchArtist("Radiohead").Returns(Artist(399, "Radiohead"));
+        DeezerFinds("Radiohead", Artist(399, "Radiohead"));
         _deezer.GetRelated(399).Returns(new[] { Artist(1, "Beach House", "img") });
 
         await _sut.EnsureRelated(Radiohead);
 
-        await _deezer.Received(1).SearchArtist("Radiohead");
+        await _deezer.Received(1).SearchArtists("Radiohead", Arg.Any<int>());
         await _repo.Received(1).Upsert(Arg.Any<ArtistRelations>());
     }
 
@@ -70,7 +78,7 @@ public class SimilarityIngestionServiceTests
     public async Task Missing_entry_fetches_maps_and_persists_related_with_images()
     {
         _repo.Get(Radiohead, "deezer").Returns((ArtistRelations?)null);
-        _deezer.SearchArtist("Radiohead").Returns(Artist(399, "Radiohead", "seed-img"));
+        DeezerFinds("Radiohead", Artist(399, "Radiohead", "seed-img"));
         _deezer.GetRelated(399).Returns(new[]
         {
             Artist(1, "Beach House", "bh-img"),
@@ -95,12 +103,12 @@ public class SimilarityIngestionServiceTests
     {
         var fresh = new ArtistRelations(Radiohead, "deezer", Array.Empty<RelatedArtist>(), DateTimeOffset.UtcNow);
         _repo.Get(Radiohead, "deezer").Returns(fresh);
-        _deezer.SearchArtist("Radiohead").Returns(Artist(399, "Radiohead"));
+        DeezerFinds("Radiohead", Artist(399, "Radiohead"));
         _deezer.GetRelated(399).Returns(Array.Empty<DeezerArtist>());
 
         await _sut.EnsureRelated(Radiohead, forceRefresh: true);
 
-        await _deezer.Received(1).SearchArtist("Radiohead");
+        await _deezer.Received(1).SearchArtists("Radiohead", Arg.Any<int>());
         await _repo.Received(1).Upsert(Arg.Any<ArtistRelations>());
     }
 
@@ -108,7 +116,7 @@ public class SimilarityIngestionServiceTests
     public async Task Blank_related_names_are_filtered_out()
     {
         _repo.Get(Radiohead, "deezer").Returns((ArtistRelations?)null);
-        _deezer.SearchArtist("Radiohead").Returns(Artist(399, "Radiohead"));
+        DeezerFinds("Radiohead", Artist(399, "Radiohead"));
         _deezer.GetRelated(399).Returns(new[]
         {
             Artist(1, "Beach House"),
@@ -131,7 +139,7 @@ public class SimilarityIngestionServiceTests
             new[] { new RelatedArtist(new ArtistKey("Beach House"), "img") },
             DateTimeOffset.UtcNow - TimeSpan.FromDays(99));
         _repo.Get(Radiohead, "deezer").Returns(existing);
-        _deezer.SearchArtist("Radiohead").Returns((DeezerArtist?)null); // no match / unreachable
+        DeezerFindsNothing("Radiohead"); // Deezer answered, with nothing
 
         var result = await _sut.EnsureRelated(Radiohead);
 
@@ -144,7 +152,7 @@ public class SimilarityIngestionServiceTests
     public async Task No_Deezer_match_with_nothing_cached_returns_empty_edge_set()
     {
         _repo.Get(Radiohead, "deezer").Returns((ArtistRelations?)null);
-        _deezer.SearchArtist("Radiohead").Returns((DeezerArtist?)null);
+        DeezerFindsNothing("Radiohead");
 
         var result = await _sut.EnsureRelated(Radiohead);
 
@@ -157,7 +165,7 @@ public class SimilarityIngestionServiceTests
     public async Task Image_backfill_includes_seed_and_related_with_images_only()
     {
         _repo.Get(Radiohead, "deezer").Returns((ArtistRelations?)null);
-        _deezer.SearchArtist("Radiohead").Returns(Artist(399, "Radiohead", "seed-img"));
+        DeezerFinds("Radiohead", Artist(399, "Radiohead", "seed-img"));
         _deezer.GetRelated(399).Returns(new[]
         {
             Artist(1, "Beach House", "bh-img"),

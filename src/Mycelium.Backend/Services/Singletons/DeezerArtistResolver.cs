@@ -39,6 +39,16 @@ public class DeezerArtistResolver
         AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(30),
     };
 
+    // A miss is cached too — a name Deezer genuinely doesn't carry shouldn't re-search on every card —
+    // but nowhere near as long as a hit. Deezer's search is not perfectly stable (a name that answers
+    // now can answer with nothing under load), and a miss held for 30 days strands the artist as "Not
+    // on Deezer" everywhere resolution feeds: the sample player, the discography, the album diff. Half
+    // an hour keeps the re-search cheap while letting a bad answer age out on its own.
+    private static readonly DistributedCacheEntryOptions MissCacheOptions = new()
+    {
+        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
+    };
+
     // Deezer's preview MP3s are signed urls with a short ~15-minute expiry (hdnea=exp=… token); a
     // cached url older than that yields a dead link the browser rejects (MEDIA_ERR_SRC_NOT_SUPPORTED).
     // Keep the cache well under the token life so served urls are almost always still valid, and let
@@ -88,7 +98,8 @@ public class DeezerArtistResolver
     /// Honors a user override pinned on the catalog (resolved by id, never re-searched); otherwise
     /// takes Deezer's top name-search hit. Every successful resolution is persisted to the catalog
     /// so the id is captured opportunistically (e.g. when an artist is sampled or thumbed-up), and
-    /// cached so cards never re-hit Deezer for something already looked up.
+    /// cached so cards never re-hit Deezer for something already looked up. A search Deezer never
+    /// answered also resolves to null, but is never written anywhere — only an answer is evidence.
     /// </summary>
     public async Task<DeezerIdentity?> ResolveIdentity(string artistName)
     {
@@ -116,8 +127,20 @@ public class DeezerArtistResolver
         }
         else
         {
-            identity = ToIdentity(await _deezer.SearchArtist(artistName));
-            await _cache.SetStringAsync(key, identity is null ? "" : JsonSerializer.Serialize(identity), IdCacheOptions);
+            var candidates = await _deezer.SearchArtists(artistName, DeezerApi.SearchCandidates);
+            if (candidates is null)
+            {
+                // Deezer never answered (unreachable, or rate-limited). Unresolved for this call, but
+                // nothing is written: caching that would turn a momentary quota blip into a sticky
+                // "not on Deezer" for everything downstream, for as long as the entry lives.
+                return null;
+            }
+
+            identity = ToIdentity(DeezerApi.PickBestMatch(candidates, artistName));
+            await _cache.SetStringAsync(
+                key,
+                identity is null ? "" : JsonSerializer.Serialize(identity),
+                identity is null ? MissCacheOptions : IdCacheOptions);
         }
 
         // Opportunistic capture onto the catalog (for the Artists page). Done on cache hits too, not
@@ -147,8 +170,18 @@ public class DeezerArtistResolver
             return cached.Length == 0 ? null : JsonSerializer.Deserialize<DeezerIdentity>(cached)?.ImageUrl;
         }
 
-        var identity = ToIdentity(await _deezer.SearchArtist(artistName));
-        await _cache.SetStringAsync(key, identity is null ? "" : JsonSerializer.Serialize(identity), IdCacheOptions);
+        var candidates = await _deezer.SearchArtists(artistName, DeezerApi.SearchCandidates);
+        if (candidates is null)
+        {
+            // Deezer didn't answer — no photo this pass, and nothing cached (see ResolveIdentity).
+            return null;
+        }
+
+        var identity = ToIdentity(DeezerApi.PickBestMatch(candidates, artistName));
+        await _cache.SetStringAsync(
+            key,
+            identity is null ? "" : JsonSerializer.Serialize(identity),
+            identity is null ? MissCacheOptions : IdCacheOptions);
         return identity?.ImageUrl;
     }
 
@@ -190,7 +223,7 @@ public class DeezerArtistResolver
 
     /// <summary>Free-text Deezer artist search for the "Correct association" picker.</summary>
     public async Task<IReadOnlyList<DeezerIdentity>> SearchArtists(string query, int limit) =>
-        (await _deezer.SearchArtists(query, limit))
+        (await _deezer.SearchArtists(query, limit) ?? Array.Empty<DeezerArtist>())
             .Select(ToIdentity)
             .Where(i => i != null)
             .Select(i => i!)

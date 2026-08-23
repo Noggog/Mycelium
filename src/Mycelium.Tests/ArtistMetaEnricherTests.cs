@@ -27,12 +27,16 @@ public class ArtistMetaEnricherTests
     private static UnifiedRelatedArtist Rel(string name, string? image, params string[] sources) =>
         new(new ArtistKey(name), image, sources);
 
+    // The enricher resolves names through DeezerArtistResolver, which searches for candidates so it
+    // can tell a real miss (empty) from an unanswered call (null) — stub that, not SearchArtist.
+    private void DeezerFinds(string name, DeezerArtist artist) =>
+        _deezer.SearchArtists(name, Arg.Any<int>()).Returns(new[] { artist });
+
     [Fact]
     public async Task Fills_a_missing_image_from_deezer_regardless_of_recommending_source()
     {
         // ListenBrainz recommended Ariana Grande but carries no image; Deezer has her photo.
-        _deezer.SearchArtist("Ariana Grande")
-            .Returns(new DeezerArtist { id = 1, name = "Ariana Grande", picture_xl = "ari.jpg" });
+        DeezerFinds("Ariana Grande", new DeezerArtist { id = 1, name = "Ariana Grande", picture_xl = "ari.jpg" });
 
         var input = new UnifiedRelations(new ArtistKey("100 gecs"), new[]
         {
@@ -45,13 +49,13 @@ public class ArtistMetaEnricherTests
         result.Related.Single(r => r.ArtistKey.ArtistName == "Ariana Grande").ImageUrl.Should().Be("ari.jpg");
         // An artist that already had an image is left untouched — no redundant Deezer lookup.
         result.Related.Single(r => r.ArtistKey.ArtistName == "Alice Gas").ImageUrl.Should().Be("alice.jpg");
-        await _deezer.DidNotReceive().SearchArtist("Alice Gas");
+        await _deezer.DidNotReceive().SearchArtists("Alice Gas", Arg.Any<int>());
     }
 
     [Fact]
     public async Task Leaves_an_artist_with_no_deezer_match_imageless()
     {
-        _deezer.SearchArtist("Obscure LB Artist").Returns((DeezerArtist?)null);
+        _deezer.SearchArtists("Obscure LB Artist", Arg.Any<int>()).Returns(Array.Empty<DeezerArtist>());
 
         var input = new UnifiedRelations(new ArtistKey("seed"), new[] { Rel("Obscure LB Artist", null, "listenbrainz") });
 
@@ -63,8 +67,7 @@ public class ArtistMetaEnricherTests
     [Fact]
     public async Task Feed_enrichment_touches_artist_items_only_not_missing_albums()
     {
-        _deezer.SearchArtist("Aphex Twin")
-            .Returns(new DeezerArtist { id = 2, name = "Aphex Twin", picture_xl = "aphex.jpg" });
+        DeezerFinds("Aphex Twin", new DeezerArtist { id = 2, name = "Aphex Twin", picture_xl = "aphex.jpg" });
 
         var items = new FeedItem[]
         {

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Mycelium.Deezer.Inputs;
 using Mycelium.Deezer.Models;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Mycelium.Deezer.Services;
 
@@ -31,11 +32,14 @@ public class DeezerApi : IDeezerApi
     // How many candidates to pull before picking a best match. Deezer's relevance order buries the
     // canonical artist behind collaborations/near-duplicates (e.g. "RJD2 & Supastition" outranks the
     // real "RJD2"), so we look past the top hit to find an exact-name match — one page is plenty.
-    private const int SearchCandidates = 25;
+    // Public so a caller that needs the reached/missed distinction can run the same search itself
+    // (see DeezerArtistResolver) and still pick the way this client would.
+    public const int SearchCandidates = 25;
 
     public async Task<DeezerArtist?> SearchArtist(string artistName)
     {
-        return PickBestMatch(await SearchArtists(artistName, SearchCandidates), artistName);
+        return PickBestMatch(
+            await SearchArtists(artistName, SearchCandidates) ?? Array.Empty<DeezerArtist>(), artistName);
     }
 
     /// <summary>
@@ -44,7 +48,7 @@ public class DeezerApi : IDeezerApi
     /// most-followed — the canonical act. Only when nothing matches by name does it defer to Deezer's
     /// own relevance order (the first result, its strongest guess).
     /// </summary>
-    internal static DeezerArtist? PickBestMatch(IReadOnlyList<DeezerArtist> candidates, string artistName)
+    public static DeezerArtist? PickBestMatch(IReadOnlyList<DeezerArtist> candidates, string artistName)
     {
         var exact = candidates
             .Where(a => string.Equals(a.name?.Trim(), artistName.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -54,15 +58,17 @@ public class DeezerApi : IDeezerApi
         return exact ?? candidates.FirstOrDefault();
     }
 
-    public async Task<DeezerArtist[]> SearchArtists(string query, int limit)
+    public async Task<DeezerArtist[]?> SearchArtists(string query, int limit)
     {
         var qs = HttpUtility.ParseQueryString(string.Empty);
         qs["q"] = query;
         qs["limit"] = limit.ToString();
         var url = $"{_endpointInfo.BaseUri}/search/artist?{qs}";
 
+        // Null (Deezer never answered) is deliberately not flattened to an empty page here: a caller
+        // that persists the outcome must be able to tell a rate-limited call from "no such artist".
         var result = await Get<DeezerArtistList>(url);
-        return result?.data.ToArray() ?? Array.Empty<DeezerArtist>();
+        return result?.data.ToArray();
     }
 
     public async Task<DeezerArtist?> GetArtist(long artistId)
@@ -142,6 +148,16 @@ public class DeezerApi : IDeezerApi
             }
 
             var body = await response.Content.ReadAsStringAsync();
+            // Deezer reports its own failures *inside a 200*: { "error": { "type", "message", "code" } }
+            // — most often "Quota limit exceeded" when a burst trips the ~50-calls-per-5s rate limit.
+            // Deserialized blindly that binds to a payload with no data, which reads to callers as an
+            // authoritative "nothing found", so unwrap the envelope and fail the call instead.
+            if (TryReadError(body, out var error))
+            {
+                _logger.LogWarning("Deezer returned an error for {Url}: {Error}", url, error);
+                return null;
+            }
+
             return JsonConvert.DeserializeObject<T>(body);
         }
         catch (Exception ex)
@@ -149,5 +165,29 @@ public class DeezerApi : IDeezerApi
             _logger.LogWarning(ex, "Deezer request errored for {Url}", url);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Whether a 200 body is one of Deezer's error envelopes. Some successful responses carry an
+    /// empty <c>error</c> ([] / {}), so only a populated one counts. A body that doesn't parse throws
+    /// out to <see cref="Get{T}"/>'s catch, which is the right answer anyway — the deserializer
+    /// wouldn't have made anything of it either.
+    /// </summary>
+    private static bool TryReadError(string body, out string message)
+    {
+        message = string.Empty;
+        if (string.IsNullOrWhiteSpace(body) || body.TrimStart()[0] != '{')
+        {
+            return false;
+        }
+
+        var error = JObject.Parse(body)["error"];
+        if (error is null or JValue { Value: null } or JArray { Count: 0 } or JObject { Count: 0 })
+        {
+            return false;
+        }
+
+        message = error.ToString(Formatting.None);
+        return true;
     }
 }

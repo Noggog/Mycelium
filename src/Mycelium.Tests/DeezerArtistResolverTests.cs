@@ -27,6 +27,16 @@ public class DeezerArtistResolverTests
         _sut = new DeezerArtistResolver(_deezer, _cache, _catalog);
     }
 
+    // Resolution searches for candidates and picks from them, rather than taking the client's
+    // single-result convenience: only the candidate search distinguishes "Deezer answered with
+    // nothing" (an empty array) from "Deezer never answered" (null), and that difference decides
+    // whether the outcome may be cached.
+    private void DeezerReturns(string name, params DeezerArtist[] candidates) =>
+        _deezer.SearchArtists(name, Arg.Any<int>()).Returns(candidates);
+
+    private void DeezerIsUnreachable(string name) =>
+        _deezer.SearchArtists(name, Arg.Any<int>()).Returns((DeezerArtist[]?)null);
+
     [Fact]
     public async Task Override_resolves_by_pinned_id_and_never_name_searches()
     {
@@ -37,14 +47,14 @@ public class DeezerArtistResolverTests
         var result = await _sut.ResolveIdentity("ALEX");
 
         result.Should().Be(pinned);
-        await _deezer.DidNotReceive().SearchArtist(Arg.Any<string>());
+        await _deezer.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
     }
 
     [Fact]
     public async Task No_override_falls_back_to_name_search_and_captures_the_id()
     {
         _catalog.GetDeezer(Alex).Returns(((DeezerIdentity, bool)?)null);
-        _deezer.SearchArtist("ALEX").Returns(new DeezerArtist { id = 541784, name = "Alex Warren", nb_fan = 146474 });
+        DeezerReturns("ALEX", new DeezerArtist { id = 541784, name = "Alex Warren", nb_fan = 146474 });
 
         var result = await _sut.ResolveIdentity("ALEX");
 
@@ -67,7 +77,7 @@ public class DeezerArtistResolverTests
         var result = await _sut.ResolveIdentity("ALEX");
 
         result!.Id.Should().Be(541784);
-        await _deezer.DidNotReceive().SearchArtist(Arg.Any<string>()); // served from cache
+        await _deezer.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>()); // served from cache
         await _catalog.Received(1).SetDeezerIdentity(Alex,
             Arg.Is<DeezerIdentity>(i => i.Id == 541784), false); // but still persisted
     }
@@ -82,6 +92,37 @@ public class DeezerArtistResolverTests
         await _sut.ResolveIdentity("ALEX");
 
         await _catalog.DidNotReceive().SetDeezerIdentity(Arg.Any<ArtistKey>(), Arg.Any<DeezerIdentity>(), false);
+    }
+
+    [Fact]
+    public async Task An_unreachable_deezer_is_not_remembered_as_a_miss()
+    {
+        // A rate-limited or unreachable Deezer used to be cached exactly like a real miss, which
+        // stranded the artist as "Not on Deezer" everywhere resolution feeds until the entry aged out
+        // a month later. It must leave no trace, so the next look-up asks again.
+        _catalog.GetDeezer(Alex).Returns(((DeezerIdentity, bool)?)null);
+        DeezerIsUnreachable("ALEX");
+
+        (await _sut.ResolveIdentity("ALEX")).Should().BeNull();
+        (await _cache.GetStringAsync("deezer:artist:v2:alex")).Should().BeNull();
+
+        DeezerReturns("ALEX", new DeezerArtist { id = 541784, name = "Alex Warren" });
+
+        (await _sut.ResolveIdentity("ALEX"))!.Id.Should().Be(541784);
+    }
+
+    [Fact]
+    public async Task A_genuine_miss_is_cached_so_it_is_not_re_searched()
+    {
+        // Deezer answered, with nothing: that's worth remembering (briefly — see MissCacheOptions) so
+        // a name Deezer doesn't carry isn't re-searched by every card that mentions it.
+        _catalog.GetDeezer(Alex).Returns(((DeezerIdentity, bool)?)null);
+        DeezerReturns("ALEX");
+
+        (await _sut.ResolveIdentity("ALEX")).Should().BeNull();
+        (await _sut.ResolveIdentity("ALEX")).Should().BeNull();
+
+        await _deezer.Received(1).SearchArtists("ALEX", Arg.Any<int>());
     }
 
     [Fact]

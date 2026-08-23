@@ -9,14 +9,21 @@ namespace Mycelium.Deezer.Services;
 /// </summary>
 public interface IDeezerApi
 {
-    /// <summary>Resolve an artist name to its Deezer artist (strongest match), or null if none.</summary>
+    /// <summary>
+    /// Resolve an artist name to its Deezer artist (strongest match), or null if none. Null also
+    /// covers "Deezer didn't answer", so a caller that <em>records</em> the outcome — a cached miss,
+    /// a persisted "not on Deezer" — must use <see cref="SearchArtists"/> and read the distinction.
+    /// </summary>
     Task<DeezerArtist?> SearchArtist(string artistName);
 
     /// <summary>
-    /// Search Deezer for artists by name, in relevance order (empty if none/error). Used to offer
-    /// the user a choice when the top hit is wrong (the "Correct association" picker).
+    /// Search Deezer for artists by name, in relevance order. An empty array is Deezer answering with
+    /// nothing (a real miss); <c>null</c> means the call never got an answer — a transport error, or
+    /// one of Deezer's 200-wrapped API errors such as the rate-limit quota. Used to offer the user a
+    /// choice when the top hit is wrong (the "Correct association" picker), and by name resolution,
+    /// which must not cache a quota blip as "this artist doesn't exist".
     /// </summary>
-    Task<DeezerArtist[]> SearchArtists(string query, int limit);
+    Task<DeezerArtist[]?> SearchArtists(string query, int limit);
 
     /// <summary>Fetch a Deezer artist by its id (name, fans, image, link), or null if none/error.</summary>
     Task<DeezerArtist?> GetArtist(long artistId);

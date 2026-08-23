@@ -381,7 +381,8 @@ public class DiscoveryEngineTests
     {
         // The cards shown inline under a freshly-liked artist follow the same rule as the main feed —
         // otherwise liking an artist buries their albums under every B-side they ever released.
-        _deezer.SearchArtist("Ben Howard").Returns(new DeezerArtist { id = 8, name = "Ben Howard" });
+        _deezer.SearchArtists("Ben Howard", Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = 8, name = "Ben Howard" } });
         _deezer.GetAlbums(8).Returns(new[]
         {
             new DeezerAlbum { id = 301, title = "Noonday Dream", record_type = "album" },
@@ -494,7 +495,8 @@ public class DiscoveryEngineTests
     {
         // Liking a brand-new artist pulls their Deezer discography as ratable missing-album items,
         // each carrying the Deezer id so a thumbs-up can flow to the downloader.
-        _deezer.SearchArtist("Phoebe Bridgers").Returns(new DeezerArtist { id = 7, name = "Phoebe Bridgers" });
+        _deezer.SearchArtists("Phoebe Bridgers", Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = 7, name = "Phoebe Bridgers" } });
         _deezer.GetAlbums(7).Returns(new[]
         {
             new DeezerAlbum { id = 201, title = "Stranger in the Alps", record_type = "album" },

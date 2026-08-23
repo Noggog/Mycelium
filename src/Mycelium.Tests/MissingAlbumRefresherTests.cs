@@ -31,7 +31,9 @@ public class MissingAlbumRefresherTests
         _sut = new MissingAlbumRefresher(_catalog, resolver, _deezer, _missing, _overrides, NullLogger<MissingAlbumRefresher>.Instance);
 
         _catalog.GetAllPresent().Returns(new[] { new CatalogArtist(new ArtistKey(Artist), null, default) });
-        _deezer.SearchArtist(Artist).Returns(new DeezerArtist { id = DeezerId, name = Artist });
+        // Resolution searches for candidates (so it can tell a miss from an unanswered call).
+        _deezer.SearchArtists(Artist, Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = DeezerId, name = Artist } });
     }
 
     private static DeezerAlbum Album(string title, string recordType = "album", long id = 1) =>

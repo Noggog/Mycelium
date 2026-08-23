@@ -17,6 +17,7 @@ import {
 } from '../api/discovery'
 import { getRelated } from '../api/related'
 import { useArtAccent } from '../art/artColors'
+import { useDebounced } from '../hooks/useDebounced'
 import { rateFeedback } from '../effects/effectsBus'
 import type {
   ArtistAlbumItem,
@@ -166,11 +167,14 @@ function SourcePicker({
   const key = source.source
   const label = sourceLabel(key)
   const [query, setQuery] = useState(artist)
+  // Search on a pause, not per keystroke — MusicBrainz allows one call a second, and typing a name
+  // through would spend the whole budget answering prefixes nobody asked about.
+  const searched = useDebounced(query.trim())
 
   const search = useQuery({
-    queryKey: ['source-search', key, query],
-    queryFn: () => searchSource(key, query),
-    enabled: query.trim().length > 0,
+    queryKey: ['source-search', key, searched],
+    queryFn: () => searchSource(key, searched),
+    enabled: searched.length > 0,
   })
 
   const apply = useMutation({
@@ -1114,11 +1118,16 @@ function UncatalogedResults({
 }) {
   const queryClient = useQueryClient()
   const trimmed = query.trim()
+  // The library list above filters as you type; this searches Deezer, so it waits for a pause. Typing
+  // a full name straight through was ~20 live searches in a couple of seconds — enough to trip
+  // Deezer's rate limit, which answers with an error that reads as "no such artist" and leaves the
+  // artist you just typed missing from these results.
+  const searched = useDebounced(trimmed)
 
   const search = useQuery({
-    queryKey: ['deezer-search', trimmed],
-    queryFn: () => searchSource('deezer', trimmed),
-    enabled: trimmed.length > 0,
+    queryKey: ['deezer-search', searched],
+    queryFn: () => searchSource('deezer', searched),
+    enabled: searched.length > 0,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -1139,17 +1148,21 @@ function UncatalogedResults({
 
   if (trimmed.length === 0) return null
 
+  // Mid-debounce the results below still belong to the previous query, so read as busy until the
+  // search catches up — otherwise a half-typed name flashes "No new artists on Deezer".
+  const searching = search.isFetching || searched !== trimmed
+
   return (
     <div className="uncataloged-results">
       <div className="uncataloged-head">
         Not in your library
-        {search.isFetching && <span className="artist-search-count">searching Deezer…</span>}
+        {searching && <span className="artist-search-count">searching Deezer…</span>}
       </div>
 
       {search.isError && <p className="disc-sub-note"><em>Deezer search failed.</em></p>}
 
-      {!search.isFetching && results.length === 0 && (
-        <p className="disc-sub-note"><em>No new artists on Deezer for “{trimmed}”.</em></p>
+      {!searching && results.length === 0 && (
+        <p className="disc-sub-note"><em>No new artists on Deezer for “{searched}”.</em></p>
       )}
 
       <div className="disc-list">

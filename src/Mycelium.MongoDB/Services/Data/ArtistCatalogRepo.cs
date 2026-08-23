@@ -365,10 +365,26 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
                 filter,
                 Builders<BsonDocument>.Filter.Ne(FieldDeezerOverride, true));
         }
+        else
+        {
+            // A pin can name an artist the library doesn't have — that's exactly what seeding a new
+            // act from a source search is — so it creates the doc rather than silently matching
+            // nothing. See CreateForPin for why that's safe.
+            update = update.SetOnInsert(FieldName, artist.ArtistName);
+        }
 
-        // Never create entries for artists outside the catalog.
-        await Collection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = false });
+        // Opportunistic captures only ever annotate an artist the catalog already knows.
+        await Collection.UpdateOneAsync(filter, update, CreateForPin(isOverride));
     }
+
+    /// <summary>
+    /// Write options for the identity setters: a user pin upserts, everything else only updates.
+    /// The created doc carries no <c>present</c> flag, so it is not a library artist — it never
+    /// reaches the Browse list, the owned-album diff, or an absence sweep — it is just somewhere to
+    /// hang the identity the user chose. If Plex later gains the artist, its sync writes onto this
+    /// same <c>_id</c> and the pin survives into ownership.
+    /// </summary>
+    private static UpdateOptions CreateForPin(bool isOverride) => new() { IsUpsert = isOverride };
 
     public async Task ClearDeezerOverride(ArtistKey artist)
     {
@@ -457,9 +473,15 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
                 filter,
                 Builders<BsonDocument>.Filter.Ne(FieldMusicBrainzOverride, true));
         }
+        else
+        {
+            // Same as the Deezer pin: a user's chosen identity creates its row if the library has no
+            // such artist yet.
+            update = update.SetOnInsert(FieldName, artist.ArtistName);
+        }
 
-        // Never create entries for artists outside the catalog.
-        await Collection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = false });
+        // Opportunistic captures only ever annotate an artist the catalog already knows.
+        await Collection.UpdateOneAsync(filter, update, CreateForPin(isOverride));
     }
 
     public async Task ClearMusicBrainzOverride(ArtistKey artist)
