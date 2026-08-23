@@ -88,6 +88,12 @@ public class MainModule : Autofac.Module
         builder.RegisterInstance(BuildDownloaderConfig());
         builder.RegisterType<StreamripDownloader>().As<IDownloader>().AsSelf().SingleInstance();
         builder.RegisterType<DownloadService>().AsSelf().As<IHostedService>().SingleInstance();
+
+        // The after-the-click worker: endpoints record a verdict/correction and hand it the graph
+        // expansion, queue rebuild and Plex tag write. Same shape as DownloadService — a shared
+        // singleton hosted service, so the endpoints that enqueue and the loop that drains are the
+        // same instance — and, like it, registered by hand: Services.Background isn't assembly-scanned.
+        builder.RegisterType<ArtistFollowUpService>().AsSelf().As<IHostedService>().SingleInstance();
         // Replacing the ARL from the Download page. The Services.Download namespace isn't part of the
         // assembly scan below (which covers Services.Singletons), so these are registered by hand like
         // the two above.

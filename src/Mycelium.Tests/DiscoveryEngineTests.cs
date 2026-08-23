@@ -174,6 +174,42 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
+    public async Task Recording_a_verdict_persists_it_without_touching_the_source_apis()
+    {
+        _queue.Rate(User, "Phoebe Bridgers", DiscoveryStatus.Liked, null)
+            .Returns(new DiscoveryCandidate(new ArtistKey("Phoebe Bridgers"), null, 3, new[] { "boygenius" }, 1));
+        Relates("Phoebe Bridgers", ("Better Oblivion", null, 1));
+
+        var depth = await _sut.RecordArtistVerdict(User, "Phoebe Bridgers", DiscoveryStatus.Liked);
+
+        // The half a request runs: the verdict lands and the expansion depth comes back for the worker…
+        await _queue.Received(1).Rate(User, "Phoebe Bridgers", DiscoveryStatus.Liked, null);
+        depth.Should().Be(2); // liked depth (1) + 1
+        // …with none of the slow half — that's what kept a click waiting on Deezer/MusicBrainz.
+        await _related.DidNotReceive().GetRelated(Arg.Any<ArtistKey>(), Arg.Any<bool>(), Arg.Any<bool>());
+        await _queue.DidNotReceive().UpsertCandidates(Arg.Any<string>(), Arg.Any<IReadOnlyList<DiscoveryCandidate>>());
+    }
+
+    [Fact]
+    public async Task Deferred_follow_up_expands_a_like_at_the_depth_it_was_recorded_with()
+    {
+        Relates("Phoebe Bridgers", ("Better Oblivion", null, 1));
+
+        await _sut.ApplyVerdictFollowUp(User, "Phoebe Bridgers", DiscoveryStatus.Liked, depth: 2);
+
+        Captured(_queue).Single().Depth.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Deferred_follow_up_for_a_cleared_verdict_prunes_like_a_dislike()
+    {
+        await _sut.ApplyVerdictFollowUp(User, "boygenius", status: null, depth: 0);
+
+        await _queue.Received(1).PruneBySource(User, "boygenius");
+        await _queue.DidNotReceive().UpsertCandidates(Arg.Any<string>(), Arg.Any<IReadOnlyList<DiscoveryCandidate>>());
+    }
+
+    [Fact]
     public async Task Clearing_an_artist_rating_prunes_the_recommendations_it_seeded()
     {
         await _sut.ClearArtistRating(User, "boygenius");

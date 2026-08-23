@@ -268,13 +268,12 @@ api.MapGet("/sources/{source}/search",
     .RequireAuthorization()
     .WithName("SearchSource");
 
-// Pin an artist to a specific id on one source (sticky override), then re-derive that artist's
-// similarity edges from the corrected ids and rebuild the caller's queue so the old (wrong) edges
-// drop off immediately — mirrors the original Deezer-pin behaviour, now source-generic.
+// Pin an artist to a specific id on one source (sticky override). The pin lands before the response;
+// re-deriving that artist's similarity edges from the corrected id and rebuilding the caller's queue —
+// so the old (wrong) edges drop off — is queued, since a rebuild re-walks every liked artist.
 api.MapPost("/artists/sources/{source}",
         async (HttpContext http, string source, string artist, string id,
-            IEnumerable<ISourceIdentityCorrector> correctors,
-            RelatedArtistInteractor interactor, DiscoveryEngine engine) =>
+            IEnumerable<ISourceIdentityCorrector> correctors, ArtistFollowUpService followUps) =>
         {
             var corrector = correctors.FirstOrDefault(c => c.Source == source);
             if (corrector is null) return Results.NotFound();
@@ -282,27 +281,24 @@ api.MapPost("/artists/sources/{source}",
             var identity = await corrector.Pin(new ArtistKey(artist), id);
             if (identity is null) return Results.NotFound();
 
-            await interactor.GetRelated(new ArtistKey(artist), forceRefresh: true);
-            await engine.Rebuild(http.User.GetSubject()!);
+            followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
             return Results.Ok(identity);
         })
     .RequireAuthorization()
     .WithName("PinArtistSource");
 
-// Clear a source's pin (or unlinked flag) so the artist re-resolves from a name search next time,
-// then re-derive its similarity edges and rebuild the queue — the same refresh a pin does, so a
-// reset doesn't leave stale edges from the old (pinned/detached) identity behind.
+// Clear a source's pin (or unlinked flag) so the artist re-resolves from a name search next time, and
+// queue the same re-derive + rebuild a pin does, so a reset doesn't leave stale edges from the old
+// (pinned/detached) identity behind.
 api.MapDelete("/artists/sources/{source}",
         async (HttpContext http, string source, string artist,
-            IEnumerable<ISourceIdentityCorrector> correctors,
-            RelatedArtistInteractor interactor, DiscoveryEngine engine) =>
+            IEnumerable<ISourceIdentityCorrector> correctors, ArtistFollowUpService followUps) =>
         {
             var corrector = correctors.FirstOrDefault(c => c.Source == source);
             if (corrector is null) return Results.NotFound();
 
             await corrector.Clear(new ArtistKey(artist));
-            await interactor.GetRelated(new ArtistKey(artist), forceRefresh: true);
-            await engine.Rebuild(http.User.GetSubject()!);
+            followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
             return Results.NoContent();
         })
     .RequireAuthorization()
@@ -310,19 +306,18 @@ api.MapDelete("/artists/sources/{source}",
 
 // Stickily detach an artist from a source (it has no match there). Wipes the artist's stored
 // similarity edges first — a detached source resolves to null and so won't overwrite the old (wrong)
-// edges on its own — then re-derives from whatever sources remain linked and rebuilds the queue.
+// edges on its own — then queues the re-derive from whatever sources remain linked, and the rebuild.
 api.MapPost("/artists/sources/{source}/unlink",
         async (HttpContext http, string source, string artist,
             IEnumerable<ISourceIdentityCorrector> correctors,
-            IRelatedArtistRepo relatedRepo, RelatedArtistInteractor interactor, DiscoveryEngine engine) =>
+            IRelatedArtistRepo relatedRepo, ArtistFollowUpService followUps) =>
         {
             var corrector = correctors.FirstOrDefault(c => c.Source == source);
             if (corrector is null) return Results.NotFound();
 
             await corrector.Unlink(new ArtistKey(artist));
             await relatedRepo.DeleteAllSources(new ArtistKey(artist));
-            await interactor.GetRelated(new ArtistKey(artist), forceRefresh: true);
-            await engine.Rebuild(http.User.GetSubject()!);
+            followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
             return Results.NoContent();
         })
     .RequireAuthorization()
@@ -467,7 +462,7 @@ api.MapPost("/discovery/refresh", async (DiscoveryEngine engine) =>
 // Rate an artist or (when album is supplied) a missing album. verdict = "up" (Liked) | "down" (Disliked).
 api.MapPost("/discovery/rate", async (
         string artist, string? album, string? albumArt, string verdict,
-        HttpContext http, DiscoveryEngine engine, IArtistTagger tagger) =>
+        HttpContext http, DiscoveryEngine engine, ArtistFollowUpService followUps) =>
     {
         var status = verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
             ? DiscoveryStatus.Liked
@@ -475,20 +470,21 @@ api.MapPost("/discovery/rate", async (
         var userId = http.User.GetSubject()!;
         if (string.IsNullOrEmpty(album))
         {
-            await engine.RateArtist(userId, artist, status);
-            // Mirror the verdict into Plex as a per-user mood tag ("<username>_liked"/"_disliked"), which
-            // a music smart playlist can filter on via "Artist Mood". Stamp the new verdict and strip the
-            // opposite so the latest rating is the only tag left (a like→dislike flip drops "_liked").
-            // Best-effort (never throws), so a Plex hiccup can't fail the rating.
+            // Record the verdict — that's what the UI is waiting on — and leave the frontier expansion
+            // and the Plex write to the follow-up worker, so a thumb never blocks on the source APIs.
+            var depth = await engine.RecordArtistVerdict(userId, artist, status);
+            // The queued Plex write mirrors the verdict as a per-user mood tag ("<username>_liked"/
+            // "_disliked"), which a music smart playlist can filter on via "Artist Mood". Stamp the new
+            // verdict and strip the opposite so the latest rating is the only tag left (a like→dislike
+            // flip drops "_liked").
             var username = http.User.FindFirst("preferred_username")?.Value;
             var tag = ArtistTag.For(username, status);
-            if (tag != null)
-            {
-                var opposite = status == DiscoveryStatus.Liked ? DiscoveryStatus.Disliked : DiscoveryStatus.Liked;
-                var oppositeTag = ArtistTag.For(username, opposite);
-                var remove = oppositeTag != null ? new[] { oppositeTag } : Array.Empty<string>();
-                await tagger.SetTags(artist, tag, remove);
-            }
+            var opposite = status == DiscoveryStatus.Liked ? DiscoveryStatus.Disliked : DiscoveryStatus.Liked;
+            var oppositeTag = tag != null ? ArtistTag.For(username, opposite) : null;
+            followUps.QueueVerdictFollowUp(
+                userId, artist, status, depth,
+                addTag: tag,
+                removeTags: oppositeTag != null ? new[] { oppositeTag } : Array.Empty<string>());
         }
         else
         {
@@ -508,7 +504,7 @@ api.MapPost("/discovery/rate", async (
 api.MapPost("/discovery/seed", async (
         string source, string artist, string id,
         HttpContext http, IEnumerable<ISourceIdentityCorrector> correctors,
-        DiscoveryEngine engine, IArtistTagger tagger) =>
+        DiscoveryEngine engine, ArtistFollowUpService followUps) =>
     {
         var corrector = correctors.FirstOrDefault(c => c.Source == source);
         if (corrector is null) return Results.NotFound();
@@ -516,17 +512,20 @@ api.MapPost("/discovery/seed", async (
         var identity = await corrector.Pin(new ArtistKey(artist), id);
         if (identity is null) return Results.NotFound();
 
+        // Pin + verdict, then answer. The expansion and the Plex tag run on the follow-up worker: this
+        // artist is new to the app, so every graph fetch it implies is a cold, rate-limited round trip
+        // and the Plex tag write can't hit a stored rating key — seconds of work the "Added" tick in
+        // the UI has no reason to wait for.
         var userId = http.User.GetSubject()!;
-        await engine.RateArtist(userId, artist, DiscoveryStatus.Liked);
+        var depth = await engine.RecordArtistVerdict(userId, artist, DiscoveryStatus.Liked);
 
         var username = http.User.FindFirst("preferred_username")?.Value;
         var tag = ArtistTag.For(username, DiscoveryStatus.Liked);
-        if (tag != null)
-        {
-            var dislikeTag = ArtistTag.For(username, DiscoveryStatus.Disliked);
-            var remove = dislikeTag != null ? new[] { dislikeTag } : Array.Empty<string>();
-            await tagger.SetTags(artist, tag, remove);
-        }
+        var dislikeTag = tag != null ? ArtistTag.For(username, DiscoveryStatus.Disliked) : null;
+        followUps.QueueVerdictFollowUp(
+            userId, artist, DiscoveryStatus.Liked, depth,
+            addTag: tag,
+            removeTags: dislikeTag != null ? new[] { dislikeTag } : Array.Empty<string>());
 
         return Results.Ok(new { artist });
     })
@@ -581,24 +580,23 @@ api.MapPost("/discovery/snooze", async (
 
 // Clear a rating, returning the artist/album to the feed.
 api.MapDelete("/discovery/rate", async (
-        string artist, string? album, HttpContext http, DiscoveryEngine engine, IArtistTagger tagger) =>
+        string artist, string? album, HttpContext http, DiscoveryEngine engine,
+        ArtistFollowUpService followUps) =>
     {
         var userId = http.User.GetSubject()!;
         if (string.IsNullOrEmpty(album))
         {
-            await engine.ClearArtistRating(userId, artist);
-            // Undo the Plex tag too — a cleared verdict shouldn't leave its "<username>_liked"/
-            // "_disliked" tag behind. We don't know which verdict it was, so strip both (the user holds
-            // at most one); best-effort, so a Plex hiccup can't fail the clear.
+            await engine.ClearArtistVerdict(userId, artist);
+            // The queued follow-up prunes what the artist seeded and undoes the Plex tag — a cleared
+            // verdict shouldn't leave its "<username>_liked"/"_disliked" tag behind. We don't know which
+            // verdict it was, so strip both (the user holds at most one). Queued rather than awaited so
+            // it can't reorder against the rate that preceded it: one worker, submission order.
             var username = http.User.FindFirst("preferred_username")?.Value;
             var tags = new[] { DiscoveryStatus.Liked, DiscoveryStatus.Disliked }
                 .Select(s => ArtistTag.For(username, s))
                 .OfType<string>()
                 .ToArray();
-            if (tags.Length > 0)
-            {
-                await tagger.SetTags(artist, add: null, remove: tags);
-            }
+            followUps.QueueVerdictFollowUp(userId, artist, status: null, depth: 0, addTag: null, removeTags: tags);
         }
         else
         {

@@ -14,6 +14,21 @@ public interface IQueueReplenisher
 }
 
 /// <summary>
+/// The seam the <c>ArtistFollowUpService</c> worker drives — the deferred half of a decision the user
+/// has already been told landed: what a recorded verdict implies for the frontier, and the rebuild an
+/// identity correction implies. Implemented by <see cref="DiscoveryEngine"/>; extracted for the same
+/// reason as <see cref="IQueueReplenisher"/>, so the background worker is unit-testable on its own.
+/// </summary>
+public interface IVerdictFollowUp
+{
+    /// <inheritdoc cref="DiscoveryEngine.ApplyVerdictFollowUp"/>
+    Task ApplyVerdictFollowUp(string userId, string artistName, DiscoveryStatus? status, int depth);
+
+    /// <inheritdoc cref="DiscoveryEngine.Rebuild"/>
+    Task Rebuild(string userId);
+}
+
+/// <summary>
 /// The discovery loop. Surfaces three kinds of things to react to — new recommended artists, owned
 /// artists not yet rated, and albums missing from <em>liked</em> artists — and steers a per-user walk
 /// through the similarity graph by the user's verdicts.
@@ -25,7 +40,7 @@ public interface IQueueReplenisher
 /// Recommendations never re-add an artist that's owned, already-decided, or the frontier itself, so
 /// the frontier only moves outward.
 /// </summary>
-public class DiscoveryEngine : IQueueReplenisher
+public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
 {
     private readonly IUserQueueRepo _queue;
     private readonly IRelatedArtistReader _related;
@@ -412,6 +427,19 @@ public class DiscoveryEngine : IQueueReplenisher
     /// </summary>
     public async Task RateArtist(string userId, string artistName, DiscoveryStatus status)
     {
+        var depth = await RecordArtistVerdict(userId, artistName, status);
+        await ApplyVerdictFollowUp(userId, artistName, status, depth);
+    }
+
+    /// <summary>
+    /// The fast half of <see cref="RateArtist"/>: persists the verdict (and the "stood by it twice"
+    /// confirmation) and nothing else. Returns the depth the frontier should grow from — one hop past
+    /// the rated artist's own. Split out so a request can record the decision, answer the user, and
+    /// leave <see cref="ApplyVerdictFollowUp"/> to a background worker; the rate-limited source APIs it
+    /// would otherwise wait on turned a click into a multi-second stall.
+    /// </summary>
+    public async Task<int> RecordArtistVerdict(string userId, string artistName, DiscoveryStatus status)
+    {
         // Before Rate overwrites the previous verdict, while the row still carries it.
         if (status is DiscoveryStatus.Disliked or DiscoveryStatus.Liked
             && await _queue.TryConfirmVerdict(userId, artistName, status))
@@ -422,14 +450,25 @@ public class DiscoveryEngine : IQueueReplenisher
         }
 
         var rated = await _queue.Rate(userId, artistName, status, imageUrl: null);
+        return (rated?.Depth ?? 0) + 1;
+    }
+
+    /// <summary>
+    /// The slow half: what a recorded verdict implies for the queue. A like grows the frontier from the
+    /// artist; a dislike — or a cleared verdict (<paramref name="status"/> null), which likewise takes
+    /// the artist out of the frontier — drops the pending candidates it alone had seeded (or just its
+    /// provenance + score share, where others also recommend them), so the queue tracks current taste
+    /// without a manual rebuild.
+    /// </summary>
+    public async Task ApplyVerdictFollowUp(
+        string userId, string artistName, DiscoveryStatus? status, int depth)
+    {
         if (status == DiscoveryStatus.Liked)
         {
-            await ExpandFrom(userId, new[] { artistName }, depth: (rated?.Depth ?? 0) + 1);
+            await ExpandFrom(userId, new[] { artistName }, depth);
         }
-        else if (status == DiscoveryStatus.Disliked)
+        else if (status is DiscoveryStatus.Disliked or null)
         {
-            // Disliking takes the artist out of the frontier; drop the pending candidates it seeded
-            // (or just its provenance + score share, where others also recommend them).
             await _queue.PruneBySource(userId, artistName);
         }
     }
@@ -509,11 +548,18 @@ public class DiscoveryEngine : IQueueReplenisher
     /// <summary>Clears an artist's verdict, returning it to the feed (recommended or library).</summary>
     public async Task ClearArtistRating(string userId, string artistName)
     {
-        await _queue.ClearVerdict(userId, artistName);
+        await ClearArtistVerdict(userId, artistName);
         // Un-liking drops the artist from the frontier, so prune the recommendations it seeded — same
         // as a dislike. A no-op when the cleared verdict wasn't a like (it seeded nothing).
-        await _queue.PruneBySource(userId, artistName);
+        await ApplyVerdictFollowUp(userId, artistName, status: null, depth: 0);
     }
+
+    /// <summary>
+    /// The fast half of <see cref="ClearArtistRating"/> — drops the verdict row and leaves the pruning
+    /// to <see cref="ApplyVerdictFollowUp"/>, mirroring the <see cref="RecordArtistVerdict"/> split.
+    /// </summary>
+    public Task ClearArtistVerdict(string userId, string artistName) =>
+        _queue.ClearVerdict(userId, artistName);
 
     /// <summary>Clears an album's verdict, returning it to the missing-albums feed.</summary>
     public Task ClearAlbumRating(string userId, string artistName, string albumName) =>
