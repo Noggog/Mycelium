@@ -2149,7 +2149,11 @@ a.detail-chip.via:hover {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  margin-top: 0.15rem;
+  /* The page's shared measure (.dl-monitor, .disc-list, .disc-sub all sit at 720px centred). Without
+     it a bare flex row stretches the input the full width of the viewport, which on a wide screen
+     left the box spanning the page while everything above it stayed in a narrow centred column. */
+  max-width: 720px;
+  margin: 0.15rem auto 0;
 }
 .paste-album-input {
   flex: 1;
@@ -2166,11 +2170,13 @@ a.detail-chip.via:hover {
   outline: none;
   border-color: var(--cyan);
 }
-/* The outcome note sits under the box, and .disc-sub centres itself with auto side margins — left-
-   align it against the input it is answering for (same fix as .dl-section .disc-sub above). */
+/* The outcome note sits under the box, centred on the same measure as everything else on the page.
+   .disc-sub already centres itself; .error doesn't, so it needs the box treatment to line up. */
 .paste-album .disc-sub,
 .paste-album .error {
-  margin: 0.4rem auto 0 0;
+  max-width: 720px;
+  margin: 0.4rem auto 0;
+  text-align: center;
   font-size: 0.8rem;
 }
 

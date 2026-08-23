@@ -354,10 +354,12 @@ function PasteAlbum({ onAdded }: { onAdded: () => void }) {
   return (
     <div className="dl-section paste-album">
       <h2 className="feed-section-title">Add an album by link</h2>
+      {/* Kept to one line at the page's 720px measure — the placeholder below already shows the URL
+          shape, so saying "paste a Deezer album URL" here only bought a wrapped, orphaned line. */}
       <p className="disc-sub">
         <em>
           For releases nothing recommends — compilations, reissues, anything filed under an artist
-          the library doesn't follow. Paste a Deezer album URL.
+          the library doesn't follow.
         </em>
       </p>
       <div className="paste-album-row">
