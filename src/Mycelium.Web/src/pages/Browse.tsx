@@ -673,6 +673,9 @@ function ArtistAlbums({ artist }: { artist: string }) {
   const [openAlbum, setOpenAlbum] = useState<string | null>(null)
   // The album whose "Already in library?" pane is open, if any.
   const [merging, setMerging] = useState<ArtistAlbumItem | null>(null)
+  // Title filter over the loaded discography — a prolific act's listing runs to hundreds of singles,
+  // and the whole list is already in hand, so this narrows it locally with no refetch.
+  const [filter, setFilter] = useState('')
   const { data, isPending, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['artist-discography', artist],
     queryFn: () => getArtistDiscography(artist),
@@ -682,13 +685,16 @@ function ArtistAlbums({ artist }: { artist: string }) {
   // Albums / EPs / Singles / Compilations as their own headed sections, newest release first inside
   // each — the type is the section it sits under, so the rows themselves carry no type badge. Empty
   // sections are dropped (most artists have no compilations, and "Other" is usually empty too).
+  const needle = filter.trim().toLowerCase()
   const sections = useMemo(() => {
     if (!data) return []
+    const matched = needle ? data.filter((a) => a.album.toLowerCase().includes(needle)) : data
     return ALBUM_SECTIONS.map((s) => ({
       ...s,
-      items: data.filter((a) => albumSectionKey(a) === s.key).sort(byYearDesc),
+      items: matched.filter((a) => albumSectionKey(a) === s.key).sort(byYearDesc),
     })).filter((s) => s.items.length > 0)
-  }, [data])
+  }, [data, needle])
+  const shown = sections.reduce((n, s) => n + s.items.length, 0)
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['artist-discography', artist] })
@@ -774,6 +780,28 @@ function ArtistAlbums({ artist }: { artist: string }) {
           {isFetching ? <Spinner size={12} /> : null}
           {isDeezerBusy(error) ? 'Deezer is busy — showing the last loaded list.' : 'Couldn’t refresh — showing the last loaded list.'}
         </span>
+      )}
+      {/* Narrows the sections below by title. Kept above the list (and always rendered once the
+          discography has loaded) so a filter that matches nothing is still editable. */}
+      <div className="album-filter">
+        <input
+          type="text"
+          className="album-filter-input"
+          placeholder="Filter albums…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        {needle && (
+          <>
+            <span className="album-filter-count">{shown} of {data.length}</span>
+            <button className="disc-btn" title="Clear filter" onClick={() => setFilter('')}>
+              Clear
+            </button>
+          </>
+        )}
+      </div>
+      {needle && sections.length === 0 && (
+        <em className="disc-sub-note">No albums match “{filter.trim()}”.</em>
       )}
       {sections.map((s) => (
         <section className="album-section" key={s.key}>

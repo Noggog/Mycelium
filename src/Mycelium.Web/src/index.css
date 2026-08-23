@@ -998,6 +998,34 @@ input[type='checkbox'] {
   font-size: 0.92rem;
   font-weight: 500;
 }
+/* Title filter above the discography sections — the same quiet input as the library search, sized
+   to the readout column so it doesn't read as a page-level control. */
+.album-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.album-filter-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.6rem;
+  background: var(--panel-solid);
+  color: var(--text);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+.album-filter-input:focus {
+  outline: none;
+  border-color: var(--salmon);
+  box-shadow: var(--glow-salmon);
+}
+.album-filter-count {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 /* A discography section (Albums / EPs / Singles / …). Deezer's record type used to ride along as a
    pill on every row; grouping says the same thing once per section instead, so the titles are left to
    read on their own. The heading is the quiet Orbitron label used elsewhere in the readout, with a
@@ -1021,9 +1049,9 @@ input[type='checkbox'] {
   text-transform: uppercase;
   color: var(--text-faint);
 }
-/* First section sits directly under the tab strip — no extra lead-in above it. */
+/* First section sits directly under the filter row — just enough lead-in to separate the two. */
 .album-section:first-child .album-section-title {
-  margin-top: 0;
+  margin-top: 0.15rem;
 }
 .album-section-count {
   font-size: 0.62rem;
