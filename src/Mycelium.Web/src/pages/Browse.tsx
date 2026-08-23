@@ -1266,7 +1266,9 @@ function UncatalogedResults({
     <div className="uncataloged-results">
       <div className="uncataloged-head">
         Not in your library
-        {searching && <span className="artist-search-count">searching Deezer…</span>}
+        {searching && (
+          <span className="artist-search-count"><Spinner size={11} /> searching Deezer…</span>
+        )}
       </div>
 
       {search.isError && <p className="disc-sub-note"><em>Deezer search failed.</em></p>}

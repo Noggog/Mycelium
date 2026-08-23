@@ -2486,6 +2486,10 @@ a.detail-chip.via:hover {
   box-shadow: var(--glow-salmon);
 }
 .artist-search-count {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 0.35rem;
   font-size: 0.8rem;
   color: var(--text-dim);
 }
