@@ -74,13 +74,12 @@ public static class SmartPlaylistCatalog
     private static StockPlaylistDefinition MyLibrary(string? likedMoodTagId) => new(
         Id: MyLibraryId,
         Title: "My Library",
-        Description: "Every track by an artist you've thumbed up. Your music, as opposed to everything "
-                     + "else that happens to be on the server.",
+        Description: "Contains all artists you've thumbed up: your library",
         Filter: likedMoodTagId is null
             ? null
             : Sorted(new PlexCondition("artist.mood", PlexOp.Is, likedMoodTagId)),
         Unavailable: likedMoodTagId is null
-            ? "Thumb up an artist first — this playlist filters on the tag that puts in Plex."
+            ? "Thumb up an artist first."
             : null);
 
     /// <summary>
@@ -94,9 +93,7 @@ public static class SmartPlaylistCatalog
     private static StockPlaylistDefinition Frontier() => new(
         Id: FrontierId,
         Title: "Frontier",
-        Description: "Music you've drifted away from: rated tracks you haven't played in a year, plus "
-                     + "anything untouched for two — narrowed to what's either unrated, barely played, or "
-                     + "you liked enough to be worth another go.",
+        Description: "For when you want to experience new or forgotten music.",
         Filter: Sorted(PlexGroup.All(
             // Stale enough to be worth resurfacing. Rated tracks come back after a year; anything at all
             // comes back after two.
@@ -123,6 +120,10 @@ public static class SmartPlaylistCatalog
     /// A star-rating tier over the whole library. The Fresh variant additionally drops anything played
     /// within the last <paramref name="freshMonths"/> months, which turns a favourites list into
     /// something you can actually put on without hearing the same twenty songs.
+    ///
+    /// <para><c>lastViewedAt</c> reads oddly for music but is the right field: it is Plex's generic
+    /// name across all media, and the server labels it "Track Last Played" for audio. There is no
+    /// <c>lastPlayedAt</c>. Same for <c>viewCount</c>, which Plex labels "Track Plays".</para>
     /// </summary>
     private static StockPlaylistDefinition Stars(int stars, int? freshMonths)
     {
@@ -133,14 +134,14 @@ public static class SmartPlaylistCatalog
             return new StockPlaylistDefinition(
                 Id: $"stars-{stars}",
                 Title: $"{stars}★+",
-                Description: $"Everything you've rated {stars} stars or higher.",
+                Description: $"Rated {stars} stars and up.",
                 Filter: Sorted(threshold));
         }
 
         return new StockPlaylistDefinition(
             Id: $"stars-{stars}-fresh",
             Title: $"{stars}★+ (Fresh {freshMonths}mo)",
-            Description: $"Everything rated {stars} stars or higher that you haven't played in the last "
+            Description: $"Rated {stars} stars and up, not played in "
                          + $"{freshMonths} month{(freshMonths == 1 ? "" : "s")}.",
             Filter: Sorted(PlexGroup.All(
                 threshold,

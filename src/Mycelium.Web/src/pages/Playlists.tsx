@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
+import { Spinner } from '../components/icons'
 import {
   completePlexLink,
   createStockPlaylist,
@@ -37,7 +38,7 @@ export default function Playlists() {
     return (
       <section>
         <h1>Playlists</h1>
-        <p><em>Log in to build playlists in your Plex account.</em></p>
+        <p><em>Log in to set up playlists.</em></p>
       </section>
     )
   }
@@ -81,12 +82,9 @@ function PlexConnection() {
           queryClient.invalidateQueries({ queryKey: ['stock-playlists'] })
           authTab.current?.close()
         } else if (outcome === 'noserveraccess') {
-          setProblem(
-            "That Plex account can't see this server's music library, so nothing made for it would " +
-              'show up. Connect the account the library is shared with.',
-          )
+          setProblem("That Plex account can't see this server's music library.")
         } else {
-          setProblem('That took too long and the code expired. Try connecting again.')
+          setProblem('Timed out — try again.')
         }
       } catch (e) {
         if (!cancelled) {
@@ -100,7 +98,7 @@ function PlexConnection() {
     const giveUp = setTimeout(() => {
       if (!cancelled) {
         setWaiting(false)
-        setProblem('Gave up waiting for Plex. Try connecting again.')
+        setProblem('Timed out — try again.')
       }
     }, 5 * 60 * 1000)
 
@@ -148,13 +146,17 @@ function PlexConnection() {
   })
 
   if (link.isLoading) {
-    return <div className="dev-tool"><p><em>Checking your Plex connection…</em></p></div>
+    return (
+      <div className="dev-tool playlist-account">
+        <span className="disc-sub-busy"><Spinner /> Checking your Plex connection…</span>
+      </div>
+    )
   }
 
   if (link.isError) {
     return (
       <div className="dev-tool">
-        <p className="error">Couldn't check your Plex connection: {(link.error as Error).message}</p>
+        <p className="error">{(link.error as Error).message}</p>
       </div>
     )
   }
@@ -180,17 +182,15 @@ function PlexConnection() {
         </div>
 
         {waiting && !fallbackUrl && (
-          <p className="dev-status">
-            Approve the request in the tab that just opened. This page will pick it up on its own.
-          </p>
+          <p className="dev-status">Approve in the tab that opened — this page will update.</p>
         )}
         {fallbackUrl && (
           <p className="dev-status">
-            Your browser blocked the popup —{' '}
+            Popup blocked —{' '}
             <a href={fallbackUrl} target="_blank" rel="noreferrer">
-              open the Plex approval page
-            </a>{' '}
-            instead. This page will pick it up once you're done.
+              open the approval page
+            </a>
+            .
           </p>
         )}
         {problem && <p className="error">{problem}</p>}
@@ -200,28 +200,19 @@ function PlexConnection() {
 
   return (
     <>
-      <div className="dev-tool">
-        <h2>Plex account</h2>
-        <p>
-          Connected as <strong>{link.data.username}</strong>
-          {link.data.email ? ` (${link.data.email})` : ''}. Playlists below are created here.
-        </p>
-        <div className="controls">
-          <button
-            className="secondary"
-            onClick={() => disconnect.mutate()}
-            disabled={disconnect.isPending}
-          >
-            {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
-          </button>
-        </div>
-        <p className="dev-status">
-          Disconnecting only forgets the token — playlists already made stay in your Plex account.
-        </p>
-        {disconnect.isError && (
-          <p className="error">{(disconnect.error as Error).message}</p>
-        )}
+      <div className="dev-tool playlist-account">
+        <span className="playlist-account-name">
+          Plex: <strong>{link.data.username}</strong>
+        </span>
+        <button
+          className="secondary"
+          onClick={() => disconnect.mutate()}
+          disabled={disconnect.isPending}
+        >
+          {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+        </button>
       </div>
+      {disconnect.isError && <p className="error">{(disconnect.error as Error).message}</p>}
       <StockPlaylists />
     </>
   )
@@ -234,17 +225,20 @@ type Variant = 'raw' | 'fresh'
 
 function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
   switch (playlist.state) {
-    case 'Exists':
-      return (
-        <span className="playlist-badge is-exists">
-          ✓ In Plex{playlist.matchedTitle ? ` as “${playlist.matchedTitle}”` : ''}
-          {playlist.trackCount ? ` · ${playlist.trackCount.toLocaleString()} tracks` : ''}
-        </span>
-      )
+    case 'Exists': {
+      // The name is only worth showing when it isn't the one we'd have used — that's the case where
+      // "you already have this" would otherwise look wrong.
+      const renamed =
+        playlist.matchedTitle && playlist.matchedTitle !== playlist.title
+          ? ` as “${playlist.matchedTitle}”`
+          : ''
+      const tracks = playlist.trackCount ? ` · ${playlist.trackCount.toLocaleString()}` : ''
+      return <span className="playlist-badge is-exists">✓ In Plex{renamed}{tracks}</span>
+    }
     case 'Differs':
-      return <span className="playlist-badge is-differs">Name taken, different rules</span>
+      return <span className="playlist-badge is-differs">Name taken</span>
     case 'Unavailable':
-      return <span className="playlist-badge is-unavailable">Not available yet</span>
+      return <span className="playlist-badge is-unavailable">Not yet</span>
     default:
       return <span className="playlist-badge is-missing">Not created</span>
   }
@@ -301,7 +295,7 @@ function PlaylistRow({
         )}
         {playlist.state === 'Differs' && (
           <button onClick={() => update.mutate()} disabled={busy}>
-            {update.isPending ? 'Updating…' : 'Update its rules'}
+            {update.isPending ? 'Updating…' : 'Update'}
           </button>
         )}
       </div>
@@ -353,13 +347,17 @@ function StockPlaylists() {
   })
 
   if (survey.isLoading) {
-    return <div className="dev-tool"><p><em>Looking at your Plex playlists…</em></p></div>
+    return (
+      <div className="dev-tool playlist-account">
+        <span className="disc-sub-busy"><Spinner /> Looking at your Plex playlists…</span>
+      </div>
+    )
   }
 
   if (survey.isError) {
     return (
       <div className="dev-tool">
-        <p className="error">Couldn't read your playlists: {(survey.error as Error).message}</p>
+        <p className="error">{(survey.error as Error).message}</p>
       </div>
     )
   }
@@ -371,11 +369,6 @@ function StockPlaylists() {
     <>
       <div className="dev-tool">
         <h2>Starter playlists</h2>
-        <p>
-          Two playlists worth having whatever your library looks like. Already got one? It'll say so —
-          that's worked out by comparing <em>rules</em>, not names, so a playlist you built yourself
-          years ago and called something else still counts.
-        </p>
         {['my-library', 'frontier']
           .map((id) => byId.get(id))
           .filter((p): p is StockPlaylist => p !== undefined)
@@ -386,10 +379,7 @@ function StockPlaylists() {
 
       <div className="dev-tool">
         <h2>By star rating</h2>
-        <p>
-          Pick the tiers you want. <strong>Fresh</strong> variants leave out anything you've played
-          recently, which is what stops a favourites playlist turning into the same twenty songs.
-        </p>
+        <p>Only play things not heard recently.</p>
 
         <div className="controls playlist-picker">
           <span className="playlist-picker-label">Tiers</span>
@@ -438,7 +428,7 @@ function StockPlaylists() {
         </div>
 
         {picked.length === 0 ? (
-          <p className="dev-status">Pick at least one tier and one variant.</p>
+          <p className="dev-status">Pick a tier and a variant.</p>
         ) : (
           <>
             {picked.map((playlist) => (
@@ -453,21 +443,13 @@ function StockPlaylists() {
                 {createAll.isPending
                   ? 'Creating…'
                   : missing.length === 0
-                    ? 'All of these already exist'
-                    : `Create ${missing.length} missing playlist${missing.length === 1 ? '' : 's'}`}
+                    ? 'All set'
+                    : `Create ${missing.length}`}
               </button>
             </div>
             {createAll.isError && <p className="error">{(createAll.error as Error).message}</p>}
           </>
         )}
-      </div>
-
-      <div className="dev-tool">
-        <p className="dev-status">
-          These are ordinary Plex smart playlists — nothing here keeps managing them. Open one in Plex,
-          hit <em>Edit filters</em>, and change whatever you like; the app will simply notice the rules
-          no longer match and offer to put them back.
-        </p>
       </div>
     </>
   )

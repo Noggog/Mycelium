@@ -251,7 +251,7 @@ public class SmartPlaylistService
                     MatchedTitle = clash.Title,
                     MatchedRatingKey = clash.RatingKey,
                     TrackCount = clash.LeafCount,
-                    Note = "A playlist with this name already exists but selects something different.",
+                    Note = "This name is taken by a different playlist.",
                 };
         }
 
