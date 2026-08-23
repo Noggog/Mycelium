@@ -1019,18 +1019,18 @@ function DetailPane({
         >
           Related artists
         </button>
-        {/* Meta (source identities) and Library (Plex/Navidrome presence) only apply to library
-            artists — a related-artist stranger drilled in from the Related tab has no catalog row. */}
-        {libItem && (
-          <button
-            role="tab"
-            aria-selected={tab === 'meta'}
-            className={tab === 'meta' ? 'artist-tab active' : 'artist-tab'}
-            onClick={() => onTab('meta')}
-          >
-            Meta
-          </button>
-        )}
+        {/* Meta applies to any artist, library or not: which Deezer/MusicBrainz act a name attaches
+            to is what drives the sample player, the discography and the related expansion, and it is
+            most worth correcting *before* the artist is owned. Library (Plex/Navidrome presence) and
+            Tags read Plex, so those stay library-only. */}
+        <button
+          role="tab"
+          aria-selected={tab === 'meta'}
+          className={tab === 'meta' ? 'artist-tab active' : 'artist-tab'}
+          onClick={() => onTab('meta')}
+        >
+          Meta
+        </button>
         {libItem && (
           <button
             role="tab"
@@ -1054,14 +1054,10 @@ function DetailPane({
       </div>
 
       {tab === 'meta' ? (
-        libItem ? (
-          user ? (
-            <MetaTab artist={name} />
-          ) : (
-            <div className="disc-sub-albums"><em className="disc-sub-note">Log in to view this artist’s metadata sources.</em></div>
-          )
+        user ? (
+          <MetaTab artist={name} />
         ) : (
-          <div className="disc-sub-albums"><em className="disc-sub-note">Metadata sources apply to library artists.</em></div>
+          <div className="disc-sub-albums"><em className="disc-sub-note">Log in to view this artist’s metadata sources.</em></div>
         )
       ) : tab === 'library' ? (
         libItem ? (

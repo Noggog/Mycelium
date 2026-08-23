@@ -374,17 +374,18 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         }
 
         // Opportunistic captures only ever annotate an artist the catalog already knows.
-        await Collection.UpdateOneAsync(filter, update, CreateForPin(isOverride));
+        await Collection.UpdateOneAsync(filter, update, CreateForUserDecision(isOverride));
     }
 
     /// <summary>
-    /// Write options for the identity setters: a user pin upserts, everything else only updates.
-    /// The created doc carries no <c>present</c> flag, so it is not a library artist — it never
-    /// reaches the Browse list, the owned-album diff, or an absence sweep — it is just somewhere to
-    /// hang the identity the user chose. If Plex later gains the artist, its sync writes onto this
-    /// same <c>_id</c> and the pin survives into ownership.
+    /// Write options for the identity setters: a decision the user made themselves — a pin, a detach —
+    /// upserts, while an opportunistic capture only updates. The created doc carries no
+    /// <c>present</c> flag, so it is not a library artist — it never reaches the Browse list, the
+    /// owned-album diff, or an absence sweep — it is just somewhere to hang the identity the user
+    /// chose. If Plex later gains the artist, its sync writes onto this same <c>_id</c> and the
+    /// decision survives into ownership.
     /// </summary>
-    private static UpdateOptions CreateForPin(bool isOverride) => new() { IsUpsert = isOverride };
+    private static UpdateOptions CreateForUserDecision(bool userDecided) => new() { IsUpsert = userDecided };
 
     public async Task ClearDeezerOverride(ArtistKey artist)
     {
@@ -417,12 +418,14 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             .Unset(FieldDeezerFans)
             .Unset(FieldDeezerLink)
             .Unset(FieldDeezerOverride)
-            .Set(FieldDeezerUnlinked, true);
+            .Set(FieldDeezerUnlinked, true)
+            .SetOnInsert(FieldName, artist.ArtistName);
 
-        // Never create entries for artists outside the catalog.
+        // A detach is a user decision like a pin, so it creates its row rather than matching nothing
+        // when the artist isn't in the library (see CreateForUserDecision).
         await Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName), update,
-            new UpdateOptions { IsUpsert = false });
+            CreateForUserDecision(true));
     }
 
     private static DeezerIdentity? ToDeezerIdentity(BsonDocument doc)
@@ -481,7 +484,7 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         }
 
         // Opportunistic captures only ever annotate an artist the catalog already knows.
-        await Collection.UpdateOneAsync(filter, update, CreateForPin(isOverride));
+        await Collection.UpdateOneAsync(filter, update, CreateForUserDecision(isOverride));
     }
 
     public async Task ClearMusicBrainzOverride(ArtistKey artist)
@@ -513,12 +516,13 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             .Unset(FieldMusicBrainzName)
             .Unset(FieldMusicBrainzDisambiguation)
             .Unset(FieldMusicBrainzOverride)
-            .Set(FieldMusicBrainzUnlinked, true);
+            .Set(FieldMusicBrainzUnlinked, true)
+            .SetOnInsert(FieldName, artist.ArtistName);
 
-        // Never create entries for artists outside the catalog.
+        // Same as the Deezer detach: a user decision creates its row.
         await Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName), update,
-            new UpdateOptions { IsUpsert = false });
+            CreateForUserDecision(true));
     }
 
     private static MusicBrainzIdentity? ToMusicBrainzIdentity(BsonDocument doc)
