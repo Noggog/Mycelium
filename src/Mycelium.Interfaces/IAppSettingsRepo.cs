@@ -15,4 +15,15 @@ public interface IAppSettingsRepo
 
     /// <summary>Persists the drainer switch, replacing the default from then on.</summary>
     Task SetDownloadsAutomatic(bool automatic);
+
+    /// <summary>
+    /// When the current "fast mode" burst lapses, or null when fast mode has never been turned on (or
+    /// was turned back off). A stamp in the past means the burst is over — nothing rewrites it, the
+    /// deadline expiring is the whole mechanism — so callers compare it against the clock rather than
+    /// treating a present value as "on".
+    /// </summary>
+    Task<DateTimeOffset?> GetDownloadsFastUntil();
+
+    /// <summary>Persists the fast-mode deadline; null clears it (back to the normal batched pace).</summary>
+    Task SetDownloadsFastUntil(DateTimeOffset? until);
 }

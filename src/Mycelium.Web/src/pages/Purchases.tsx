@@ -11,6 +11,7 @@ import {
   removeManualPurchase,
   setDeezerArl,
   setDownloadsAutomatic,
+  setDownloadsFast,
   unsendPurchase,
 } from '../api/discovery'
 import { useArtAccent } from '../art/artColors'
@@ -228,14 +229,24 @@ function countdown(iso: string, now: number) {
   return minutes < 10 ? `in ${minutes}m ${seconds}s` : `in ${minutes}m`
 }
 
+// "58m left" / "45s left" — how much of the fast-mode hour is still running. Unlike `countdown` this
+// counts down a window rather than to an event, so it stays in whole minutes until the last one.
+function remaining(iso: string, now: number) {
+  const seconds = Math.round((new Date(iso).getTime() - now) / 1000)
+  if (seconds <= 0) return 'ending'
+  return seconds < 60 ? `${seconds}s left` : `${Math.ceil(seconds / 60)}m left`
+}
+
 function Monitor({
   s,
   onToggleAutomatic,
+  onToggleFast,
   onFixed,
   busy,
 }: {
   s: DownloadSnapshot
   onToggleAutomatic: (automatic: boolean) => void
+  onToggleFast: (fast: boolean) => void
   // Called after the Deezer credential is replaced: the snapshot's `blocking` flag and the failed
   // rows both change server-side, so both queries have to be re-read for the page to settle.
   onFixed: () => void
@@ -259,7 +270,7 @@ function Monitor({
     : s.automatic && s.nextBatchAt
       ? { label: s.queued > 0 ? 'Next batch' : 'Next check', at: s.nextBatchAt }
       : null
-  const now = useNow(next !== null)
+  const now = useNow(next !== null || s.fastUntil !== null)
 
   return (
     <div className="dl-monitor">
@@ -285,6 +296,24 @@ function Monitor({
             {s.automatic ? 'auto' : 'manual'}
           </span>
         </button>
+        {/* Fast mode: a one-hour burst that queues the whole backlog instead of one batch per sweep.
+            Time-boxed server-side, so this is a button rather than a switch — pressing it again while
+            it runs ends the burst early. Only the automatic pass honours it, so in manual mode it says
+            so instead of pretending to be armed. */}
+        <button
+          className={s.fastUntil ? 'dl-fast on' : 'dl-fast'}
+          disabled={busy}
+          title={
+            s.fastUntil
+              ? 'Fast mode on — queueing everything. Click to end it now.'
+              : s.automatic
+                ? 'Queue every pending album now, for one hour'
+                : 'Queue every pending album for one hour — takes effect once the drainer is on automatic'
+          }
+          onClick={() => onToggleFast(!s.fastUntil)}
+        >
+          ⚡ {s.fastUntil ? remaining(s.fastUntil, now) : 'fast'}
+        </button>
         <span className="dl-backend">backend: {s.backend}</span>
       </div>
       <div className={current ? 'dl-activity active' : 'dl-activity'}>{activity}</div>
@@ -300,9 +329,13 @@ function Monitor({
           10m), while the per-item wait only spaces albums out inside a batch. The ± is the random
           spread applied to both waits. */}
       <div className="dl-throttle">
-        {s.automatic
-          ? `auto · batch ${s.batchSize} every ~${s.batchIntervalMinutes}m`
-          : `manual only · batch ${s.batchSize}`}
+        {s.fastUntil && s.automatic
+          ? 'fast · queueing everything'
+          : s.automatic
+            ? `auto · batch ${s.batchSize} every ~${s.batchIntervalMinutes}m`
+            : s.fastUntil
+              ? 'manual only · fast waiting on automatic'
+              : `manual only · batch ${s.batchSize}`}
         {' · '}~{s.itemDelaySeconds}s between items
         {s.jitterPercent > 0 ? ` (±${s.jitterPercent}%)` : ''}
       </div>
@@ -424,6 +457,12 @@ export default function Purchases() {
     mutationFn: (automatic: boolean) => setDownloadsAutomatic(automatic),
     onSuccess: invalidate,
   })
+  // Turning fast mode on enqueues on the server before it answers, so both queries are re-read: the
+  // panel's counts and the list's rows both move in the same click.
+  const setFast = useMutation({
+    mutationFn: (fast: boolean) => setDownloadsFast(fast),
+    onSuccess: invalidate,
+  })
 
   // "Nevermind" — clearing the underlying like drops the item from the queue on the next reconcile
   // (the list is derived from liked-but-unowned ratings), so this intercepts an item before download.
@@ -514,8 +553,9 @@ export default function Purchases() {
       {status && (
         <Monitor
           s={status}
-          busy={setAutomatic.isPending}
+          busy={setAutomatic.isPending || setFast.isPending}
           onToggleAutomatic={(automatic) => setAutomatic.mutate(automatic)}
+          onToggleFast={(fast) => setFast.mutate(fast)}
           onFixed={() => {
             queryClient.invalidateQueries({ queryKey: ['download-status'] })
             queryClient.invalidateQueries({ queryKey: ['purchases'] })

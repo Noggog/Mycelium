@@ -49,9 +49,9 @@ public class DownloadServiceTests
         _queue.GetAllUserIds().Returns(Array.Empty<string>());
     }
 
-    private static DownloaderConfig Config(TimeSpan? settleWindow = null) =>
+    private static DownloaderConfig Config(TimeSpan? settleWindow = null, int batchSize = 10) =>
         new(DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQualities: new[] { "1", "0" },
-            Codec: "", BatchSize: 10, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
+            Codec: "", BatchSize: batchSize, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
             DownloadTimeout: TimeSpan.FromMinutes(15), SettleInterval: TimeSpan.FromMinutes(15),
             SettleWindow: settleWindow ?? TimeSpan.FromHours(6));
 
@@ -239,6 +239,80 @@ public class DownloadServiceTests
         await sut.EnqueuePendingBatch();
 
         _repo.Items.Single().Status.Should().Be(PurchaseStatus.Queued);
+    }
+
+    // ---- Fast mode (the time-boxed burst that lifts the batch cap) ----
+
+    [Fact]
+    public async Task Fast_mode_queues_everything_past_the_batch_cap()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            Wanted("Big Thief", $"Album {i}", deezerId: 100 + i);
+        }
+        var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
+        await settings.SetFast(true);
+
+        await Sut(Config(batchSize: 2)).EnqueuePendingBatch();
+
+        _repo.Items.Should().OnlyContain(i => i.Status == PurchaseStatus.Queued);
+    }
+
+    [Fact]
+    public async Task Without_fast_mode_the_batch_cap_still_holds()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            Wanted("Big Thief", $"Album {i}", deezerId: 100 + i);
+        }
+
+        await Sut(Config(batchSize: 2)).EnqueuePendingBatch();
+
+        _repo.Items.Count(i => i.Status == PurchaseStatus.Queued).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task An_elapsed_fast_deadline_is_over_without_anything_switching_it_off()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            Wanted("Big Thief", $"Album {i}", deezerId: 100 + i);
+        }
+        // The burst as it looks a minute after it lapsed: still stored, no longer in force.
+        await _settingsRepo.SetDownloadsFastUntil(DateTimeOffset.UtcNow - TimeSpan.FromMinutes(1));
+
+        await Sut(Config(batchSize: 2)).EnqueuePendingBatch();
+
+        _repo.Items.Count(i => i.Status == PurchaseStatus.Queued).Should().Be(2);
+        var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
+        (await settings.FastUntil()).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Fast_mode_does_not_drain_while_the_switch_says_manual()
+    {
+        Wanted("Big Thief", "Capacity", deezerId: 12345);
+        _repo.Seed(Album("Big Thief", "Capacity", 12345));
+        await _settingsRepo.SetDownloadsAutomatic(false);
+        var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
+        await settings.SetFast(true);
+
+        await Sut().EnqueuePendingBatch();
+
+        _repo.Items.Single().Status.Should().Be(PurchaseStatus.Pending);
+    }
+
+    [Fact]
+    public async Task Turning_fast_mode_off_ends_the_burst_before_its_hour_is_up()
+    {
+        var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
+
+        var until = await settings.SetFast(true);
+        until.Should().BeCloseTo(DateTimeOffset.UtcNow + DownloadSettings.FastDuration, TimeSpan.FromSeconds(5));
+        (await settings.FastUntil()).Should().NotBeNull();
+
+        (await settings.SetFast(false)).Should().BeNull();
+        (await settings.FastUntil()).Should().BeNull();
     }
 
     // ---- The settle pass (a downloaded album showing up in the library) ----

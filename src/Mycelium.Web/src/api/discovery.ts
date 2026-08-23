@@ -175,6 +175,18 @@ export async function setDownloadsAutomatic(automatic: boolean): Promise<void> {
   }
 }
 
+// Turn the temporary fast-mode burst on or off. On, the drainer stops capping each pass at the batch
+// size and queues every pending album at once; it lapses by itself an hour later. Returns the server's
+// own deadline, since the enqueue pass runs inside the request and the page shouldn't assume the hour
+// started at the click.
+export async function setDownloadsFast(fast: boolean): Promise<string | null> {
+  const res = await fetch(`/api/purchases/fast?fast=${fast}`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to change fast mode: ${res.status} ${res.statusText}`)
+  }
+  return ((await res.json()) as { fastUntil: string | null }).fastUntil
+}
+
 // Replace the Deezer ARL streamrip authenticates with, after an expiry has blocked downloads. The
 // token goes in a POST body, never a query string — a URL would be logged by the request logger and
 // kept in browser history. The server validates it against Deezer before saving, so a rejection here

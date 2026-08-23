@@ -288,6 +288,9 @@ export interface DownloadSnapshot {
   // ISO timestamps for when the drainer next acts (null when nothing is scheduled).
   nextItemAt: string | null
   nextBatchAt: string | null
+  // When the temporary fast-mode burst lapses, null when it isn't running. Fast mode queues the whole
+  // pending list at once instead of one batch per sweep; the pace between albums is unchanged.
+  fastUntil: string | null
 }
 
 export interface PurchaseItem {

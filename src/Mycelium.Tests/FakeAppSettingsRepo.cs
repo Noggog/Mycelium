@@ -9,12 +9,21 @@ namespace Mycelium.Tests;
 internal sealed class FakeAppSettingsRepo : IAppSettingsRepo
 {
     private bool? _automatic;
+    private DateTimeOffset? _fastUntil;
 
     public Task<bool?> GetDownloadsAutomatic() => Task.FromResult(_automatic);
 
     public Task SetDownloadsAutomatic(bool automatic)
     {
         _automatic = automatic;
+        return Task.CompletedTask;
+    }
+
+    public Task<DateTimeOffset?> GetDownloadsFastUntil() => Task.FromResult(_fastUntil);
+
+    public Task SetDownloadsFastUntil(DateTimeOffset? until)
+    {
+        _fastUntil = until;
         return Task.CompletedTask;
     }
 }

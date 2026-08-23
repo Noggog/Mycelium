@@ -216,7 +216,10 @@ public class PurchaseService
             current,
             blocking,
             _schedule.NextItemAt,
-            _schedule.NextBatchAt);
+            _schedule.NextBatchAt,
+            // Null once the deadline passes, so the panel's fast badge switches itself off without
+            // anything having to write the setting back.
+            await _settings.FastUntil());
     }
 
     /// <summary>

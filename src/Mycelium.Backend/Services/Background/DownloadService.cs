@@ -14,6 +14,10 @@ namespace Mycelium.Backend.Services.Background;
 ///     re-read on every tick, so flipping it on the Download page takes effect without a restart.
 ///   • <b>Manual</b>: <see cref="RequestDownload"/> (the "Download now" button) enqueues one id and
 ///     returns immediately, so the HTTP request never blocks on the multi-minute fetch.
+/// "Fast mode" (see <see cref="DownloadSettings.FastUntil"/>) is a time-boxed variant of the automatic
+/// pass: for an hour it lifts the batch cap so every pending album is queued at once. The consumer is
+/// unchanged — same single flight, same wait between albums — so a burst empties the backlog into the
+/// queue, it doesn't make the fetching itself any less polite.
 /// Each item goes Pending → Queued → Downloading → Sent/Failed; a downloaded album then closes the loop
 /// (file lands in Plex → reconcile → in-library, drops off the list) — via the settle pass here if it lands
 /// soon after the download, else at the next daily catalog sync. Registered as a shared
@@ -218,7 +222,12 @@ public class DownloadService : BackgroundService
             TimeSpan.Zero, _config.BatchInterval, EnqueuePendingBatch, ct,
             onWait: _schedule.BatchWait);
 
-    /// <summary>One automatic pass: a no-op in manual mode, where only the button enqueues.</summary>
+    /// <summary>
+    /// One automatic pass: a no-op in manual mode, where only the button enqueues. While a fast-mode
+    /// burst is running the batch cap comes off and the whole pending list goes onto the queue at once
+    /// — the drainer is still single-flight and still spaces albums out by <c>ItemDelay</c>, so what
+    /// changes is that it never runs out of work between batch ticks, not how hard it hits Deezer.
+    /// </summary>
     internal async Task EnqueuePendingBatch()
     {
         try
@@ -228,14 +237,18 @@ public class DownloadService : BackgroundService
                 return;
             }
 
+            var fast = await _settings.FastUntil() is not null;
             await _purchases.Reconcile();
-            var pending = (await _repo.GetAll())
+            var candidates = (await _repo.GetAll())
                 .Where(p => p.Status == PurchaseStatus.Pending
                             && p.Kind == FeedKind.MissingAlbum
                             && p.DeezerAlbumId is > 0)
-                .OrderBy(p => p.RequestedAt)
-                .Take(_config.BatchSize)
-                .ToList();
+                .OrderBy(p => p.RequestedAt);
+            var pending = (fast ? candidates : candidates.Take(_config.BatchSize)).ToList();
+            if (fast && pending.Count > 0)
+            {
+                _logger.LogInformation("Fast mode: queueing all {Count} pending album(s)", pending.Count);
+            }
             foreach (var item in pending)
             {
                 // Mark it queued before writing so it tallies as in-flight straight away (the drainer

@@ -88,7 +88,10 @@ public record DownloadSnapshot(
     // (null unless it's mid-wait), NextBatchAt the next automatic sweep for pending albums. Both null
     // when nothing is scheduled — e.g. before the first pass has run.
     DateTimeOffset? NextItemAt = null,
-    DateTimeOffset? NextBatchAt = null);
+    DateTimeOffset? NextBatchAt = null,
+    // When the temporary fast-mode burst lapses, or null when it isn't running. Fast mode lifts the
+    // batch cap so the whole pending list is queued at once; the pace between albums is unchanged.
+    DateTimeOffset? FastUntil = null);
 
 /// <summary>
 /// Canonical id for a purchase row — "artist:{name}" or "album:{artist} {album}", lower-cased. One

@@ -2044,7 +2044,41 @@ a.detail-chip.via:hover {
 .dl-badge.off {
   color: var(--text-faint);
 }
+/* The fast-mode burst button, beside the auto/manual switch. Off it's a quiet outlined pill; on it
+   lights up and carries its own countdown, so the hour it lasts is visible rather than remembered.
+   `margin-left: auto` on the backend label instead of here — the pill sits with the switch, and the
+   backend name stays pinned to the right of the head row. */
+.dl-fast {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--border-bright);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.dl-fast:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent, var(--border-bright));
+}
+.dl-fast:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.dl-fast.on {
+  color: #ffd76a;
+  border-color: rgba(255, 215, 106, 0.6);
+  background: rgba(255, 215, 106, 0.14);
+  text-shadow: 0 0 12px rgba(255, 215, 106, 0.45);
+}
 .dl-backend {
+  margin-left: auto;
   color: var(--text-faint);
 }
 .dl-activity {

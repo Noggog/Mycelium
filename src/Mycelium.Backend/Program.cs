@@ -710,6 +710,23 @@ api.MapPost("/purchases/automatic", async (bool automatic, DownloadSettings sett
     .RequireAuthorization()
     .WithName("SetDownloadsAutomatic");
 
+// Fast mode: a time-boxed burst that lifts the batch cap so every pending album is queued at once,
+// then lapses on its own an hour later (the deadline is stored, so it survives a redeploy and nothing
+// has to switch it back off). Turning it on runs an enqueue pass right here rather than waiting for
+// the next batch tick — "queue everything" is the point, and the pass only reads Mongo. The reply
+// carries the deadline so the page can start counting down without a second round trip.
+api.MapPost("/purchases/fast", async (bool fast, DownloadSettings settings, DownloadService downloads) =>
+    {
+        var until = await settings.SetFast(fast);
+        if (fast)
+        {
+            await downloads.EnqueuePendingBatch();
+        }
+        return Results.Ok(new FastModeResponse(until));
+    })
+    .RequireAuthorization()
+    .WithName("SetDownloadsFast");
+
 // Manually queue an item for download now (the "Download now"/"Retry" button). Non-blocking — the
 // drainer does the fetch; returns immediately. Works whether or not automatic downloads are on.
 api.MapPost("/purchases/download", async (string id, DownloadService downloads) =>
@@ -828,3 +845,10 @@ internal record ArlUpdateRequest(string? Arl);
 /// would have to be escaped into a query param and unescaped back out for no gain.
 /// </summary>
 internal record ManualAddRequest(string? Url);
+
+/// <summary>
+/// Reply to the fast-mode toggle: when the burst lapses, or null when it was switched off. Returned so
+/// the page starts its countdown from the server's own deadline rather than assuming an hour from the
+/// click — the two differ by however long the enqueue pass took.
+/// </summary>
+internal record FastModeResponse(DateTimeOffset? FastUntil);
