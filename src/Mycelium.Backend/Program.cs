@@ -702,6 +702,27 @@ api.MapPost("/purchases/deezer-arl", async (ArlUpdateRequest body, DeezerCredent
     .RequireAuthorization()
     .WithName("SetDeezerArl");
 
+// Queue an album by hand from a pasted Deezer link (or bare album id) — the escape hatch for
+// releases no owned artist's discography lists, chiefly various-artists compilations. Body rather
+// than query string: a pasted URL carries '/' and '?' and Deezer's share tracking params. Answers
+// 200 with the created/existing row, or 400 carrying the reason so the paste box can explain itself.
+api.MapPost("/purchases/add", async (ManualAddRequest body, PurchaseService purchases) =>
+    {
+        var outcome = await purchases.AddManual(body.Url);
+        return outcome.Result is ManualAddResult.Added or ManualAddResult.AlreadyQueued
+            ? Results.Ok(outcome)
+            : Results.BadRequest(outcome);
+    })
+    .RequireAuthorization()
+    .WithName("AddManualPurchase");
+
+// Drop a hand-added row. Only manual rows: everything else leaves by clearing the rating behind it,
+// and deleting one directly would just have it return on the next reconcile.
+api.MapDelete("/purchases/manual", async (string id, PurchaseService purchases) =>
+        await purchases.RemoveManual(id) ? Results.NoContent() : Results.NotFound())
+    .RequireAuthorization()
+    .WithName("RemoveManualPurchase");
+
 // Undo — move a downloaded/queued item back to "pending".
 api.MapPost("/purchases/unsend", async (string id, PurchaseService purchases) =>
         await purchases.Unsend(id) ? Results.NoContent() : Results.NotFound())
@@ -768,3 +789,10 @@ app.Run();
 /// a URL — where it would be logged by the request logger, proxies, and browser history alike.
 /// </summary>
 internal record ArlUpdateRequest(string? Arl);
+
+/// <summary>
+/// Body of a manual album add: whatever the user pasted. A POST body rather than a query parameter
+/// because a Deezer album URL carries path separators and a share query string of its own, which
+/// would have to be escaped into a query param and unescaped back out for no gain.
+/// </summary>
+internal record ManualAddRequest(string? Url);

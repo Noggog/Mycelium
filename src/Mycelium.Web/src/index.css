@@ -2143,6 +2143,37 @@ a.detail-chip.via:hover {
   color: var(--bad);
 }
 
+/* "Add an album by link" — the paste box for releases no discography lists. Mirrors the ARL form's
+   input treatment; the two are the only free-text fields on this page, so they should read alike. */
+.paste-album-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.15rem;
+}
+.paste-album-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.paste-album-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+/* The outcome note sits under the box, and .disc-sub centres itself with auto side margins — left-
+   align it against the input it is answering for (same fix as .dl-section .disc-sub above). */
+.paste-album .disc-sub,
+.paste-album .error {
+  margin: 0.4rem auto 0 0;
+  font-size: 0.8rem;
+}
+
 /* The per-row reason, riding along with the provenance line — quiet, since the banner carries the
    systemic case and this only needs to tell one row's story apart from another's. */
 .dl-fail-note {

@@ -13,9 +13,13 @@ public record ArtistKey(string ArtistName);
 /// </summary>
 public static class PlaceholderArtist
 {
+    /// <summary>The canonical spelling, used when we have to *write* the placeholder — e.g. filing a
+    /// hand-added compilation under the same act the library will.</summary>
+    public const string VariousArtists = "Various Artists";
+
     private static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Various Artists",
+        VariousArtists,
         "Various Artist",
         "Unknown Artist",
     };

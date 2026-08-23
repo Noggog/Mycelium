@@ -52,7 +52,14 @@ public record PurchaseItem(
     // Why the last attempt failed, when it did. Persisted rather than logged-only because the page
     // that offers "Retry" is exactly where a user needs to know a retry can't work — a dead ARL fails
     // every row identically, and the reason is otherwise buried in a server-side traceback.
-    DownloadFailure Failure = DownloadFailure.None);
+    DownloadFailure Failure = DownloadFailure.None,
+    // Added by hand from a pasted Deezer album link rather than derived from anyone's ratings. The
+    // reconcile prunes a pending row that nothing in the liked set still wants; a manual row has no
+    // rating behind it and would be deleted on the very next read of the page, so this flag is what
+    // exempts it. It exists for releases the artist-rooted discography walk can never reach — a
+    // various-artists compilation (in no contributor's discography, and Deezer's own "Various Artists"
+    // lists no albums at all), a regional reissue, a release filed under a differently-spelled act.
+    bool Manual = false);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -94,6 +101,34 @@ public static class PurchaseKey
     public static string ForAlbum(string artist, string album) =>
         $"album:{artist.ToLowerInvariant()} {album.ToLowerInvariant()}";
 }
+
+/// <summary>What happened to a hand-pasted Deezer album link. The distinctions are the ones that
+/// change what the page should say back: nothing was read out of the paste, Deezer doesn't know the
+/// album, it's already queued, or the library already has it.</summary>
+public enum ManualAddResult
+{
+    /// <summary>Queued as a new pending purchase.</summary>
+    Added,
+
+    /// <summary>No Deezer album id could be read out of the pasted text.</summary>
+    BadLink,
+
+    /// <summary>The id parsed, but Deezer returned no such album.</summary>
+    NotFound,
+
+    /// <summary>An identical row is already on the list (whatever its status).</summary>
+    AlreadyQueued,
+
+    /// <summary>The library already holds this album — nothing to acquire.</summary>
+    AlreadyOwned,
+}
+
+/// <summary>
+/// The outcome of one manual add. <paramref name="Item"/> is the row for
+/// <see cref="ManualAddResult.Added"/> and <see cref="ManualAddResult.AlreadyQueued"/> (so the page can
+/// show what it got, or point at the row that already exists), and null otherwise.
+/// </summary>
+public record ManualAddOutcome(ManualAddResult Result, PurchaseItem? Item);
 
 /// <summary>
 /// The shared acquisition store. One doc per item, global (not per-user). Reads serve the "to buy"

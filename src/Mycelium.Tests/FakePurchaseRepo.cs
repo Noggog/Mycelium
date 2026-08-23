@@ -22,8 +22,11 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 Status = existing.Status,
                 RequestedAt = existing.RequestedAt,
                 SentAt = existing.SentAt,
-                // Album-artist is sticky once learned (mirrors the Mongo repo): don't null it out.
+                // Album-artist and Deezer id are sticky once learned (mirrors the Mongo repo): don't
+                // null them out. A row that lost its id would be permanently un-downloadable.
                 AlbumArtist = item.AlbumArtist ?? existing.AlbumArtist,
+                DeezerAlbumId = item.DeezerAlbumId ?? existing.DeezerAlbumId,
+                Manual = existing.Manual,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;

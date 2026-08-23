@@ -306,6 +306,26 @@ export interface PurchaseItem {
   // Why the last attempt failed; 'None' unless this row is Failed. Cleared on any other transition,
   // so it never explains a failure that has since been retried.
   failure: DownloadFailure
+  // Added by hand from a pasted Deezer link rather than derived from a rating — so nothing in the
+  // feed wants it and the reconcile must not prune it. Marked in the list, because "remove" is the
+  // only way it leaves other than arriving in the library.
+  manual: boolean
+}
+
+// Mirror ManualAddResult / ManualAddOutcome (IPurchaseRepo.cs) — the answer to pasting a Deezer
+// album link. Each case says something different back to the user, so they aren't collapsed into
+// one boolean.
+export type ManualAddResult =
+  | 'Added'
+  | 'BadLink'
+  | 'NotFound'
+  | 'AlreadyQueued'
+  | 'AlreadyOwned'
+
+export interface ManualAddOutcome {
+  result: ManualAddResult
+  // The row, for 'Added' and 'AlreadyQueued'; null otherwise.
+  item: PurchaseItem | null
 }
 
 // The signed-in user, as returned by GET /auth/me (the BFF). Null when not authenticated.

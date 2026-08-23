@@ -1,4 +1,6 @@
 using Mycelium.Backend.Services.Download;
+using Mycelium.Deezer;
+using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
 
 namespace Mycelium.Backend.Services.Singletons;
@@ -24,6 +26,7 @@ public class PurchaseService
     private readonly IMissingAlbumRepo _missing;
     private readonly IAlbumMatchOverrideRepo _overrides;
     private readonly IDownloader _downloader;
+    private readonly IDeezerApi _deezer;
     private readonly DownloaderConfig _config;
     private readonly DownloadSettings _settings;
     private readonly JitterPolicy _jitter;
@@ -39,6 +42,7 @@ public class PurchaseService
         IMissingAlbumRepo missing,
         IAlbumMatchOverrideRepo overrides,
         IDownloader downloader,
+        IDeezerApi deezer,
         DownloaderConfig config,
         DownloadSettings settings,
         JitterPolicy jitter,
@@ -56,6 +60,7 @@ public class PurchaseService
         _missing = missing;
         _overrides = overrides;
         _downloader = downloader;
+        _deezer = deezer;
         _config = config;
         _logger = logger;
     }
@@ -74,6 +79,95 @@ public class PurchaseService
 
     /// <summary>Moves a downloaded/queued item back to <see cref="PurchaseStatus.Pending"/> (undo).</summary>
     public Task<bool> Unsend(string id) => _purchases.SetStatus(id, PurchaseStatus.Pending);
+
+    /// <summary>
+    /// Drops a hand-added row. Every other row leaves the list by clearing the rating behind it and
+    /// letting the reconcile prune it; a manual row has no rating, so it needs a direct delete — and
+    /// conversely a rating-derived row must <em>not</em> be deletable this way, or it would simply
+    /// reappear on the next reconcile and read as a broken button. Returns false when the id is
+    /// unknown or the row isn't manual.
+    /// </summary>
+    public async Task<bool> RemoveManual(string id)
+    {
+        var row = (await _purchases.GetAll()).FirstOrDefault(p => p.Id == id);
+        if (row is null || !row.Manual)
+        {
+            return false;
+        }
+
+        await _purchases.Remove(id);
+        _logger.LogInformation("Removed hand-added album \"{Album}\" ({Artist})", row.Album, row.Artist.ArtistName);
+        return true;
+    }
+
+    /// <summary>
+    /// Queues an album by hand from a pasted Deezer link — the escape hatch for releases the
+    /// artist-rooted discography walk can never reach. The walk starts from an owned artist and asks
+    /// Deezer for that artist's albums, so anything Deezer doesn't file under a contributor is
+    /// invisible to it: a various-artists compilation appears in no contributor's discography (and
+    /// Deezer's own "Various Artists" artist lists no albums at all), and the same blind spot covers
+    /// regional reissues and releases credited to a differently-spelled act.
+    ///
+    /// The row is a normal <see cref="FeedKind.MissingAlbum"/> carrying a Deezer id, which is all the
+    /// downloader needs, and it closes out the usual way: the library files the album under its
+    /// album-artist, so the next reconcile flips it to <see cref="PurchaseStatus.InLibrary"/> once it
+    /// lands. What it does *not* do is touch anyone's ratings or the similarity graph — a compilation
+    /// isn't a taste anchor, and this is an acquisition, not a preference.
+    /// </summary>
+    public async Task<ManualAddOutcome> AddManual(string? pasted)
+    {
+        var albumId = DeezerAlbumLink.TryParse(pasted);
+        if (albumId is null)
+        {
+            return new ManualAddOutcome(ManualAddResult.BadLink, null);
+        }
+
+        var album = await _deezer.GetAlbum(albumId.Value);
+        if (album is null || string.IsNullOrWhiteSpace(album.title))
+        {
+            return new ManualAddOutcome(ManualAddResult.NotFound, null);
+        }
+
+        // Deezer credits a compilation to its "Various Artists" placeholder, which is exactly what a
+        // library files it under too — so using it verbatim is what lets the arrival check below (and
+        // the reconcile's close-out) find the album once it lands. An album Deezer credits to nobody
+        // at all reads the same way.
+        var artist = string.IsNullOrWhiteSpace(album.artist?.name)
+            ? PlaceholderArtist.VariousArtists
+            : album.artist!.name!;
+        var title = album.title!.Trim();
+        var id = PurchaseKey.ForAlbum(artist, title);
+
+        var existing = (await _purchases.GetAll()).FirstOrDefault(p => p.Id == id);
+        if (existing is not null)
+        {
+            return new ManualAddOutcome(ManualAddResult.AlreadyQueued, existing);
+        }
+
+        var ownedAlbums = (await _catalog.GetOwnedAlbums()).ToDictionary(
+            kvp => kvp.Key,
+            kvp => kvp.Value.Select(AlbumTitleMatcher.Normalize).ToHashSet(StringComparer.Ordinal),
+            StringComparer.OrdinalIgnoreCase);
+        if (AlbumIsOwned(ownedAlbums, await LoadOverrideKeys(), artist, title))
+        {
+            return new ManualAddOutcome(ManualAddResult.AlreadyOwned, null);
+        }
+
+        var item = new PurchaseItem(
+            id, FeedKind.MissingAlbum, new ArtistKey(artist), title,
+            album.BestCoverUrl, 0, Array.Empty<string>(),
+            PurchaseStatus.Pending, default, null, albumId,
+            // Album-artist and listing artist are the same thing here: there is no discography this
+            // was reached through, so nothing to differ from.
+            artist, DownloadFailure.None, Manual: true);
+        await _purchases.Upsert(item);
+
+        _logger.LogInformation(
+            "Manually queued Deezer album {AlbumId}: \"{Album}\" ({Artist})", albumId, title, artist);
+
+        return new ManualAddOutcome(
+            ManualAddResult.Added, (await _purchases.GetAll()).FirstOrDefault(p => p.Id == id) ?? item);
+    }
 
     /// <summary>
     /// A live snapshot of the download subsystem for the monitoring panel — backend + throttle
@@ -221,8 +315,13 @@ public class PurchaseService
             }
 
             // Not owned and no longer wanted: drop rows that aren't in flight (pending/failed);
-            // keep Sent ones (already downloaded, waiting to land in the library).
+            // keep Sent ones (already downloaded, waiting to land in the library). A manual row is
+            // never "no longer wanted" — nothing rated it, so it can't appear in `desired`, and
+            // pruning it would delete a just-pasted album before the page that added it even
+            // re-rendered (GetActive reconciles on every read). It leaves only by arriving in the
+            // library (above) or by being removed by hand.
             if (!desired.ContainsKey(row.Id)
+                && !row.Manual
                 && row.Status is PurchaseStatus.Pending or PurchaseStatus.Failed)
             {
                 await _purchases.Remove(row.Id);

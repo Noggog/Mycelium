@@ -3,10 +3,12 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
+  addManualPurchase,
   clearRating,
   downloadPurchase,
   getDownloadStatus,
   getPurchases,
+  removeManualPurchase,
   setDeezerArl,
   setDownloadsAutomatic,
   unsendPurchase,
@@ -17,6 +19,7 @@ import type {
   DownloadFailure,
   DownloadSnapshot,
   FeedItem,
+  ManualAddResult,
   PurchaseItem,
 } from '../types'
 import { useAuth } from '../auth/AuthContext'
@@ -187,6 +190,9 @@ function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode
             : item.sources.length > 0
               ? `Artist · via ${item.sources.slice(0, 3).join(', ')}`
               : 'Artist'}
+          {/* Nothing rated this one, so it has no provenance to show and it won't disappear when a
+              rating changes — say where it came from, or it reads as an unexplained row. */}
+          {item.manual && <span className="disc-provenance"> · added by link</span>}
           {/* Why this row failed, inline with its provenance. The banner covers the systemic case in
               full; this is what distinguishes "this album wasn't available" from "nothing is". */}
           {item.status === 'Failed' && FAILURE_COPY[item.failure] && (
@@ -304,6 +310,90 @@ function Monitor({
   )
 }
 
+// What each outcome of a pasted link says back. The refusals are the interesting half: "already
+// owned" and "already queued" are successes from the user's point of view (the album is handled),
+// while a bad link is the only one that means "try again with something else".
+const ADD_COPY: Record<ManualAddResult, { text: string; tone: 'ok' | 'note' | 'error' }> = {
+  Added: { text: 'Queued to download.', tone: 'ok' },
+  AlreadyQueued: { text: 'Already on the list.', tone: 'note' },
+  AlreadyOwned: { text: 'Already in the library.', tone: 'note' },
+  NotFound: { text: "Deezer doesn't have an album with that id.", tone: 'error' },
+  BadLink: { text: 'That isn\'t a Deezer album link — copy the URL from an album page.', tone: 'error' },
+}
+
+// Paste a Deezer album link to queue it directly. The way in for releases the artist-rooted sync can
+// never reach: a various-artists compilation is in no contributor's discography (and Deezer's own
+// "Various Artists" artist lists no albums at all), so nothing can surface it in the feed. Same blind
+// spot covers regional reissues and releases credited to a differently-spelled act.
+//
+// Deliberately queue-only — it doesn't rate anything or touch the similarity graph. A compilation
+// isn't a taste anchor, so this is an acquisition, not a preference.
+function PasteAlbum({ onAdded }: { onAdded: () => void }) {
+  const [url, setUrl] = useState('')
+  const [outcome, setOutcome] = useState<ManualAddResult | null>(null)
+
+  const add = useMutation({
+    mutationFn: (u: string) => addManualPurchase(u),
+    onSuccess: (result) => {
+      setOutcome(result.result)
+      // Keep the box populated on a refusal so a near-miss paste can be edited rather than retyped.
+      if (result.result === 'Added') setUrl('')
+      onAdded()
+    },
+  })
+
+  const submit = () => {
+    const trimmed = url.trim()
+    if (trimmed.length === 0 || add.isPending) return
+    setOutcome(null)
+    add.mutate(trimmed)
+  }
+
+  const copy = outcome ? ADD_COPY[outcome] : null
+
+  return (
+    <div className="dl-section paste-album">
+      <h2 className="feed-section-title">Add an album by link</h2>
+      <p className="disc-sub">
+        <em>
+          For releases nothing recommends — compilations, reissues, anything filed under an artist
+          the library doesn't follow. Paste a Deezer album URL.
+        </em>
+      </p>
+      <div className="paste-album-row">
+        <input
+          type="text"
+          className="paste-album-input"
+          placeholder="https://www.deezer.com/album/…"
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value)
+            setOutcome(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+          }}
+          disabled={add.isPending}
+        />
+        <button
+          className="disc-btn up"
+          title="Queue this album"
+          disabled={add.isPending || url.trim().length === 0}
+          onClick={submit}
+        >
+          <IconDownload />
+        </button>
+      </div>
+      {add.isError && <p className="error">{(add.error as Error).message}</p>}
+      {copy && (
+        <p className={copy.tone === 'error' ? 'error' : 'disc-sub'}>
+          {copy.tone === 'error' ? copy.text : <em>{copy.text}</em>}
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function Purchases() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
@@ -336,8 +426,12 @@ export default function Purchases() {
   // "Nevermind" — clearing the underlying like drops the item from the queue on the next reconcile
   // (the list is derived from liked-but-unowned ratings), so this intercepts an item before download.
   // clearRating only reads artist/album, so a minimal feed item from the row is enough.
+  //
+  // A hand-added row has no rating behind it — clearing one would be a no-op and the row would sit
+  // there forever — so it's deleted directly instead.
   const remove = useMutation({
     mutationFn: (item: PurchaseItem) => {
+      if (item.manual) return removeManualPurchase(item.id)
       const feedItem: FeedItem = {
         kind: item.kind,
         artist: item.artist,
@@ -426,6 +520,8 @@ export default function Purchases() {
           }}
         />
       )}
+
+      <PasteAlbum onAdded={invalidate} />
 
       {isError && <p className="error">Failed to load wishlist: {(error as Error).message}</p>}
       {isPending && <p><em>Loading…</em></p>}

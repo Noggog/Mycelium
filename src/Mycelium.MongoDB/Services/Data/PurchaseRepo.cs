@@ -25,6 +25,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldDeezerAlbumId = "deezerAlbumId";
     private const string FieldAlbumArtist = "albumArtist";
     private const string FieldFailure = "failure";
+    private const string FieldManual = "manual";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -55,11 +56,18 @@ public class PurchaseRepo : IPurchaseRepo
             .Set(FieldImageUrl, (BsonValue)(item.ImageUrl ?? (BsonValue)BsonNull.Value))
             .Set(FieldScore, item.Score)
             .Set(FieldSources, new BsonArray(item.Sources))
-            .Set(FieldDeezerAlbumId, item.DeezerAlbumId is null ? (BsonValue)BsonNull.Value : new BsonInt64(item.DeezerAlbumId.Value));
+            .SetOnInsert(FieldManual, item.Manual);
 
-        // Album-artist is an immutable fact we may only learn once (while the album is still in the
-        // missing set). Set it when we have it, but never overwrite a known value back to null on a
-        // later reconcile where the missing set no longer supplies it.
+        // The Deezer id and the album-artist are immutable facts we may only learn once (while the
+        // album is still in the missing set). Set them when we have them, but never overwrite a known
+        // value back to null on a later reconcile where the missing set no longer supplies it — a row
+        // that loses its id becomes permanently un-downloadable. That is the normal case for a manual
+        // row, whose id came from a pasted link and was never in the missing set at all.
+        if (item.DeezerAlbumId is not null)
+        {
+            update = update.Set(FieldDeezerAlbumId, new BsonInt64(item.DeezerAlbumId.Value));
+        }
+
         if (item.AlbumArtist != null)
         {
             update = update.Set(FieldAlbumArtist, item.AlbumArtist);
@@ -117,9 +125,13 @@ public class PurchaseRepo : IPurchaseRepo
         // same way: an unexplained failure, which is what the page showed before this existed.
         var failure = Enum.TryParse<DownloadFailure>(Str(FieldFailure), out var f) ? f : DownloadFailure.None;
 
+        // Absent on every row written before hand-added purchases existed — all of which came from a
+        // rating, so false is the correct reading.
+        var manual = doc.TryGetValue(FieldManual, out var mn) && mn.IsBoolean && mn.AsBoolean;
+
         return new PurchaseItem(
             doc["_id"].AsString, kind, new ArtistKey(Str(FieldArtist)), StrN(FieldAlbum),
             StrN(FieldImageUrl), score, sources, status, requestedAt, sentAt, deezerAlbumId,
-            StrN(FieldAlbumArtist), failure);
+            StrN(FieldAlbumArtist), failure, manual);
     }
 }

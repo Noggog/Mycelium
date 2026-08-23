@@ -8,6 +8,7 @@ import type {
   FeedItem,
   FeedKind,
   LibraryAlbumOption,
+  ManualAddOutcome,
   PurchaseItem,
   RatedItem,
 } from '../types'
@@ -189,6 +190,36 @@ export async function downloadPurchase(id: string): Promise<void> {
   const res = await fetch(`/api/purchases/download?id=${encodeURIComponent(id)}`, { method: 'POST' })
   if (!res.ok) {
     throw new Error(`Failed to queue download: ${res.status} ${res.statusText}`)
+  }
+}
+
+// Queue an album by hand from a pasted Deezer album link (or bare id) — the way in for releases no
+// owned artist's discography lists, chiefly various-artists compilations, which appear in no
+// contributor's discography and so can never reach the feed. The paste goes in a POST body: a Deezer
+// URL carries path separators and its own share query string.
+//
+// Both outcomes the user can act on come back as a parsed body rather than a throw — 'Added' and
+// 'AlreadyQueued' arrive as 200, the refusals ('BadLink', 'NotFound', 'AlreadyOwned') as 400 with the
+// same shape — so the paste box can explain which happened instead of showing an HTTP error.
+export async function addManualPurchase(url: string): Promise<ManualAddOutcome> {
+  const res = await fetch('/api/purchases/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  const body = (await res.json().catch(() => null)) as ManualAddOutcome | null
+  if (!body) {
+    throw new Error(`Failed to add album: ${res.status} ${res.statusText}`)
+  }
+  return body
+}
+
+// Drop a hand-added row. Only these can be deleted directly — every other row leaves by clearing the
+// rating behind it (see clearRating), which the reconcile then prunes.
+export async function removeManualPurchase(id: string): Promise<void> {
+  const res = await fetch(`/api/purchases/manual?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    throw new Error(`Failed to remove album: ${res.status} ${res.statusText}`)
   }
 }
 

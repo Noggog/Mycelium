@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Mycelium.Backend.Services.Background;
 using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
+using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
 using NSubstitute;
 using Xunit;
@@ -60,7 +61,8 @@ public class DownloadServiceTests
         var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
         var purchases = new PurchaseService(
             _repo, _queue, _albumRatings, _library, _catalogRepo, _missing, _overrides, _downloader,
-            config, settings, _jitter, _schedule, NullLogger<PurchaseService>.Instance);
+            Substitute.For<IDeezerApi>(), config, settings, _jitter, _schedule,
+            NullLogger<PurchaseService>.Instance);
         var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);
         var tagBackfill = new ArtistTagBackfill(
             _tagger, _queue, _users, NullLogger<ArtistTagBackfill>.Instance);

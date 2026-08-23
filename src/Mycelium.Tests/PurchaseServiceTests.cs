@@ -2,6 +2,8 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
+using Mycelium.Deezer.Models;
+using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
 using NSubstitute;
 using Xunit;
@@ -18,6 +20,7 @@ public class PurchaseServiceTests
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
     private readonly IDownloader _downloader = Substitute.For<IDownloader>();
+    private readonly IDeezerApi _deezer = Substitute.For<IDeezerApi>();
     private readonly DownloadSchedule _schedule = new();
     private readonly PurchaseService _sut;
 
@@ -32,8 +35,9 @@ public class PurchaseServiceTests
         var settings = new DownloadSettings(
             new FakeAppSettingsRepo(), NullLogger<DownloadSettings>.Instance);
         _sut = new PurchaseService(
-            _purchases, _queue, _albumRatings, _library, _catalog, _missing, _overrides, _downloader, Config,
-            settings, new JitterPolicy(0.3), _schedule, NullLogger<PurchaseService>.Instance);
+            _purchases, _queue, _albumRatings, _library, _catalog, _missing, _overrides, _downloader,
+            _deezer, Config, settings, new JitterPolicy(0.3), _schedule,
+            NullLogger<PurchaseService>.Instance);
 
         _queue.GetAllLiked().Returns(Array.Empty<DiscoveryCandidate>());
         _albumRatings.GetAllLiked().Returns(Array.Empty<AlbumRating>());
@@ -381,5 +385,169 @@ public class PurchaseServiceTests
         _purchases.Items.Should().BeEmpty();
         // And it leaves the missing set at once, rather than lingering in the feed until the next sweep.
         await _missing.Received(1).ReplaceForArtist("Matthewdavid", Arg.Is<IReadOnlyList<MissingAlbum>>(l => l.Count == 0));
+    }
+
+    // ---- Hand-added albums (pasted Deezer link) ----------------------------------------------
+
+    /// <summary>The compilation from the Deezer docs example: credited to the "Various Artists"
+    /// placeholder, in no contributor's discography, so nothing but a paste can reach it.</summary>
+    private void DeezerAlbum(long id, string title, string? artist)
+    {
+        _deezer.GetAlbum(id).Returns(new Mycelium.Deezer.Models.DeezerAlbum
+        {
+            id = id,
+            title = title,
+            record_type = "album",
+            cover_big = "http://art/cover.jpg",
+            artist = artist is null ? null : new DeezerArtist { name = artist },
+        });
+    }
+
+    [Fact]
+    public async Task Manual_add_queues_a_various_artists_compilation_with_its_deezer_id()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+
+        var outcome = await _sut.AddManual("https://www.deezer.com/en/album/225323002");
+
+        outcome.Result.Should().Be(ManualAddResult.Added);
+        var row = _purchases.Items.Should().ContainSingle().Subject;
+        row.Kind.Should().Be(FeedKind.MissingAlbum);
+        row.Artist.ArtistName.Should().Be("Various Artists");
+        row.Album.Should().Be("Cluster Flies");
+        // The id is the whole point: without it the downloader has nothing to fetch.
+        row.DeezerAlbumId.Should().Be(225323002);
+        row.Manual.Should().BeTrue();
+        row.Status.Should().Be(PurchaseStatus.Pending);
+        // Filed under the act the library will file it under, so the arrival check can close it out.
+        row.AlbumArtist.Should().Be("Various Artists");
+    }
+
+    [Fact]
+    public async Task Manual_row_survives_reconcile_even_though_nothing_rated_it()
+    {
+        // The regression this flag exists for. Nothing likes a pasted album, so it can never appear in
+        // the desired set — and the page reconciles on every read, so an unguarded row would be deleted
+        // before the user who pasted it could press Download.
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002");
+
+        var active = await _sut.GetActive();
+
+        active.Should().ContainSingle().Which.Album.Should().Be("Cluster Flies");
+        // And its Deezer id survives the reconcile's upsert, which supplies none for a row the missing
+        // set doesn't know about.
+        active[0].DeezerAlbumId.Should().Be(225323002);
+    }
+
+    [Fact]
+    public async Task Manual_row_closes_out_once_the_album_lands_in_the_library()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002");
+
+        // Plex files a compilation under its "Various Artists" bucket, which is exactly the act the row
+        // was filed under — so the ordinary ownership check closes the loop, with no special case.
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { "Cluster Flies" },
+        });
+
+        (await _sut.GetActive()).Should().BeEmpty();
+        _purchases.Items.Should().ContainSingle()
+            .Which.Status.Should().Be(PurchaseStatus.InLibrary);
+    }
+
+    [Fact]
+    public async Task Manual_add_rejects_a_paste_it_cannot_read_without_calling_deezer()
+    {
+        var outcome = await _sut.AddManual("https://www.deezer.com/en/artist/5080");
+
+        outcome.Result.Should().Be(ManualAddResult.BadLink);
+        _purchases.Items.Should().BeEmpty();
+        await _deezer.DidNotReceive().GetAlbum(Arg.Any<long>());
+    }
+
+    [Fact]
+    public async Task Manual_add_reports_an_album_deezer_does_not_know()
+    {
+        _deezer.GetAlbum(1).Returns((Mycelium.Deezer.Models.DeezerAlbum?)null);
+
+        (await _sut.AddManual("1")).Result.Should().Be(ManualAddResult.NotFound);
+        _purchases.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Manual_add_of_something_already_queued_reports_it_rather_than_duplicating()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("225323002");
+
+        var outcome = await _sut.AddManual("https://www.deezer.com/album/225323002?utm_source=deezer");
+
+        outcome.Result.Should().Be(ManualAddResult.AlreadyQueued);
+        outcome.Item!.Album.Should().Be("Cluster Flies");
+        _purchases.Items.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Manual_add_of_an_owned_album_reports_it_rather_than_queueing_a_redundant_grab()
+    {
+        DeezerAlbum(99, "Farmhouse", "Phish");
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Phish"] = new(StringComparer.OrdinalIgnoreCase) { "Farmhouse" },
+        });
+
+        (await _sut.AddManual("99")).Result.Should().Be(ManualAddResult.AlreadyOwned);
+        _purchases.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Manual_add_files_an_uncredited_album_under_the_placeholder_the_library_uses()
+    {
+        // Deezer occasionally returns an album with no credited act at all. "Various Artists" is the
+        // honest reading and, more usefully, the bucket a library will file it under — so the row can
+        // still close itself out on arrival.
+        DeezerAlbum(7, "Untitled Comp", null);
+
+        (await _sut.AddManual("7")).Result.Should().Be(ManualAddResult.Added);
+        _purchases.Items.Should().ContainSingle()
+            .Which.Artist.ArtistName.Should().Be("Various Artists");
+    }
+
+    [Fact]
+    public async Task Removing_a_manual_row_deletes_it_outright()
+    {
+        // It has no rating to clear, so the ordinary "nevermind" path (drop the like, let the
+        // reconcile prune) can't reach it — a direct delete is the only way it leaves.
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("225323002");
+
+        (await _sut.RemoveManual(PurchaseKey.ForAlbum("Various Artists", "Cluster Flies")))
+            .Should().BeTrue();
+        _purchases.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Removing_a_rating_derived_row_this_way_is_refused()
+    {
+        // Deleting one directly would only have the next reconcile re-add it from the still-standing
+        // like, which would read as a button that does nothing.
+        _albumRatings.GetAllLiked().Returns(new[]
+        {
+            new AlbumRating(new ArtistKey("Phish"), new AlbumKey("Farmhouse"), null, DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        var id = PurchaseKey.ForAlbum("Phish", "Farmhouse");
+
+        (await _sut.RemoveManual(id)).Should().BeFalse();
+        _purchases.Items.Should().ContainSingle().Which.Id.Should().Be(id);
+    }
+
+    [Fact]
+    public async Task Removing_an_unknown_row_is_refused()
+    {
+        (await _sut.RemoveManual("album:nobody nothing")).Should().BeFalse();
     }
 }
