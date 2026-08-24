@@ -76,7 +76,7 @@ function AuthBox() {
         <button
           className="auth-chip"
           onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
-          title={`Plex: ${plex.status!.username ?? 'connected'} · signed in as ${appName}`}
+          title={`Authentik: ${appName} · Plex: ${plex.status!.username ?? 'connected'}`}
           aria-expanded={menuOpen}
         >
           <span className="auth-chip-mark" aria-hidden="true">⬡</span>
@@ -106,7 +106,21 @@ function AuthBox() {
 
       {menuOpen && (
         <div className="auth-menu">
-          <div className="auth-menu-who">{appName}</div>
+          {/* Two accounts are in play and they are rarely the same person — the app's own Authentik
+              identity, and the Plex account whose ratings and playlists the app acts on. Naming both
+              beside their values is the whole point of the panel: a bare username here used to leave
+              you guessing which of the two it was. */}
+          <dl className="auth-menu-ids">
+            <dt>Authentik</dt>
+            <dd title={user.email ?? user.username ?? undefined}>{appName}</dd>
+            <dt>Plex</dt>
+            <dd
+              className={linked ? undefined : 'is-absent'}
+              title={plex.status?.email ?? undefined}
+            >
+              {linked ? plex.status!.username ?? 'Connected' : 'Not connected'}
+            </dd>
+          </dl>
 
           {/* The approval flow can only ever link whoever is signed in at app.plex.tv in this browser.
               Pasting a token is how you link a *different* account — a Plex Home / managed user who

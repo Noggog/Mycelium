@@ -517,14 +517,34 @@ code {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
-.auth-menu-who {
-  padding: 0.5rem 0.7rem;
-  font-size: 0.75rem;
-  color: var(--text-dim);
+/* Which name belongs to which login. Two columns so the labels form a readable left rail and the
+   values line up against it — the values are usernames of wildly different lengths. */
+.auth-menu-ids {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.15rem 0.6rem;
+  margin: 0;
+  padding: 0.55rem 0.7rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.auth-menu-ids dt {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  align-self: center;
+}
+.auth-menu-ids dd {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.auth-menu-ids dd.is-absent {
+  color: var(--text-dim);
+  font-style: italic;
 }
 .auth-menu-item {
   background: none;
