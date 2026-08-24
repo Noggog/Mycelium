@@ -11,7 +11,8 @@ export interface PlexLinkStatus {
 }
 
 // 'pending' is the normal answer while the user is still approving in their browser tab.
-export type PlexLinkOutcome = 'linked' | 'pending' | 'expired' | 'noserveraccess'
+// 'invalidtoken' only comes back from the paste path — the PIN flow can't produce a bad token.
+export type PlexLinkOutcome = 'linked' | 'pending' | 'expired' | 'noserveraccess' | 'invalidtoken'
 
 export interface PlexLinkCompletion {
   outcome: PlexLinkOutcome
@@ -44,6 +45,23 @@ export async function completePlexLink(): Promise<PlexLinkCompletion> {
     throw new Error(`Couldn't finish the Plex link: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as PlexLinkCompletion
+}
+
+// Links a pasted token instead of running the PIN flow — for signing in as a Plex Home / managed user
+// who has no app.plex.tv browser session to approve with. POST body, never a query string: the token
+// would otherwise be written verbatim into the backend's request log. The server answers 400 when it
+// rejects the token, but the body still carries the outcome, so read it before checking res.ok.
+export async function linkPlexWithToken(token: string): Promise<PlexLinkCompletion> {
+  const res = await fetch('/api/plex/link/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  const body = (await res.json().catch(() => null)) as PlexLinkCompletion | null
+  if (!body) {
+    throw new Error(`Couldn't link that Plex token: ${res.status} ${res.statusText}`)
+  }
+  return body
 }
 
 export async function unlinkPlex(): Promise<void> {

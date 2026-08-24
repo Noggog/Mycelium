@@ -3,13 +3,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   completePlexLink,
   getPlexLink,
+  linkPlexWithToken,
   startPlexLink,
   unlinkPlex,
+  type PlexLinkOutcome,
   type PlexLinkStatus,
 } from '../api/playlists'
 import { useAuth } from './AuthContext'
 
 const UNLINKED: PlexLinkStatus = { linked: false, username: null, email: null, linkedAt: null }
+
+// Why a paste was refused, in words the person who pasted it can act on.
+const TOKEN_REFUSALS: Partial<Record<PlexLinkOutcome, string>> = {
+  invalidtoken: "Plex doesn't recognise that token — check it copied whole, and that it hasn't been reset.",
+  noserveraccess: "That token is valid, but its account can't see this server's music library.",
+}
 
 export interface PlexLinkController {
   status: PlexLinkStatus | undefined
@@ -24,6 +32,9 @@ export interface PlexLinkController {
   /** Whatever went wrong with the link attempt, in words. */
   problem: string | null
   connect: (forwardUrl?: string) => Promise<void>
+  /** Links a pasted token instead. Resolves true when the link took. */
+  linkWithToken: (token: string) => Promise<boolean>
+  linkingToken: boolean
   cancel: () => void
   disconnect: () => void
   disconnecting: boolean
@@ -127,6 +138,27 @@ export function usePlexLink(): PlexLinkController {
     }
   }
 
+  // The paste path shares `problem` with the PIN flow: they're two ways to do one thing, and the
+  // header has room for one line of bad news either way.
+  const tokenLink = useMutation({
+    mutationFn: linkPlexWithToken,
+    onSuccess: (completion) => {
+      if (completion.outcome !== 'linked') {
+        setProblem(TOKEN_REFUSALS[completion.outcome] ?? "That token didn't work.")
+        return
+      }
+      // A completed paste supersedes any PIN approval still being polled for, exactly as it does
+      // server-side — otherwise the poll would keep running against a link that's already made.
+      setWaiting(false)
+      setProblem(null)
+      setFallbackUrl(null)
+      authTab.current?.close()
+      queryClient.setQueryData(['plex-link'], completion.status)
+      queryClient.invalidateQueries({ queryKey: ['stock-playlists'] })
+    },
+    onError: (e: Error) => setProblem(e.message),
+  })
+
   const disconnect = useMutation({
     mutationFn: unlinkPlex,
     onSuccess: () => {
@@ -144,6 +176,17 @@ export function usePlexLink(): PlexLinkController {
     fallbackUrl,
     problem,
     connect,
+    linkWithToken: async (token: string) => {
+      setProblem(null)
+      try {
+        const completion = await tokenLink.mutateAsync(token)
+        return completion.outcome === 'linked'
+      } catch {
+        // onError has already put the message on `problem`; the caller only needs the verdict.
+        return false
+      }
+    },
+    linkingToken: tokenLink.isPending,
     cancel: () => setWaiting(false),
     disconnect: () => disconnect.mutate(),
     disconnecting: disconnect.isPending,

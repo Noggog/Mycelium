@@ -51,6 +51,7 @@ export default function Playlists() {
 
 function PlexConnection() {
   const plex = usePlexLink()
+  const [token, setToken] = useState('')
 
   if (plex.isLoading) {
     return (
@@ -104,6 +105,38 @@ function PlexConnection() {
           </p>
         )}
         {plex.problem && <p className="error">{plex.problem}</p>}
+
+        {/* The approval flow links whoever is signed in at app.plex.tv in this browser, which can't
+            reach a Plex Home / managed user — they have no session of their own. Pasting their token
+            names the account directly. Same control as the one in the header menu. */}
+        <details className="playlist-token">
+          <summary>Or paste a Plex token</summary>
+          <p className="dev-status">
+            For signing in as a Plex Home or managed user, who has no app.plex.tv session to approve
+            with. Only the server-scoped token is kept — whatever you paste is used once to ask Plex
+            who it belongs to, then discarded.
+          </p>
+          <form
+            className="controls"
+            onSubmit={async (e) => {
+              e.preventDefault()
+              if (await plex.linkWithToken(token)) setToken('')
+            }}
+          >
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="X-Plex-Token"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Plex token"
+            />
+            <button type="submit" disabled={plex.linkingToken || token.trim() === ''}>
+              {plex.linkingToken ? 'Checking…' : 'Link token'}
+            </button>
+          </form>
+        </details>
       </div>
     )
   }

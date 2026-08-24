@@ -543,6 +543,52 @@ code {
   cursor: default;
 }
 
+/* The token paste box, revealed inside the menu. Wider than the menu's natural width because a Plex
+   token is 20 characters of noise and a box that shows four of them is no help at all. */
+.auth-token {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 17rem;
+}
+.auth-token-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--purple-light);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.45rem;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+.auth-token-input:focus {
+  outline: none;
+  box-shadow: var(--glow-purple);
+}
+.auth-token .auth-btn {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+/* The Playlists page's disclosure for the same token paste. */
+.playlist-token {
+  margin-top: 1rem;
+}
+.playlist-token > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.playlist-token > summary:hover {
+  color: var(--cyan);
+}
+.playlist-token input {
+  min-width: 18rem;
+  flex: 0 1 22rem;
+}
+
 /* Popup-blocked / timed-out notes from the Plex link attempt, sitting under the header controls. */
 .auth-note {
   position: absolute;

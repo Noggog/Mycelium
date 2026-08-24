@@ -17,17 +17,25 @@ function AuthBox() {
   const { user, isLoading, isRedirecting, needsManualLogin, login, logout } = useAuth()
   const plex = usePlexLink()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [tokenOpen, setTokenOpen] = useState(false)
+  const [token, setToken] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
+
+  const closeMenu = () => {
+    setMenuOpen(false)
+    setTokenOpen(false)
+    setToken('')
+  }
 
   // Close the menu on an outside click or Escape. Bound only while it's open, so the listeners cost
   // nothing in the state the header spends virtually all its time in.
   useEffect(() => {
     if (!menuOpen) return
     const onDown = (e: MouseEvent) => {
-      if (!boxRef.current?.contains(e.target as Node)) setMenuOpen(false)
+      if (!boxRef.current?.contains(e.target as Node)) closeMenu()
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false)
+      if (e.key === 'Escape') closeMenu()
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -65,7 +73,7 @@ function AuthBox() {
       {linked ? (
         <button
           className="auth-chip"
-          onClick={() => setMenuOpen((o) => !o)}
+          onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
           title={`Plex: ${plex.status!.username ?? 'connected'} · signed in as ${appName}`}
           aria-expanded={menuOpen}
         >
@@ -84,7 +92,7 @@ function AuthBox() {
           </button>
           <button
             className="auth-chip is-bare"
-            onClick={() => setMenuOpen((o) => !o)}
+            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
             title={`Signed in as ${appName}`}
             aria-label="Account menu"
             aria-expanded={menuOpen}
@@ -97,6 +105,44 @@ function AuthBox() {
       {menuOpen && (
         <div className="auth-menu">
           <div className="auth-menu-who">{appName}</div>
+
+          {/* The approval flow can only ever link whoever is signed in at app.plex.tv in this browser.
+              Pasting a token is how you link a *different* account — a Plex Home / managed user who
+              has no browser session of their own. Kept behind a disclosure because it's the unusual
+              path, and because a token box on permanent display invites pasting the wrong thing. */}
+          <button className="auth-menu-item" onClick={() => setTokenOpen((o) => !o)}>
+            {linked ? 'Switch Plex account by token' : 'Use a Plex token instead'}
+          </button>
+
+          {tokenOpen && (
+            <form
+              className="auth-token"
+              onSubmit={async (e) => {
+                e.preventDefault()
+                if (await plex.linkWithToken(token)) closeMenu()
+              }}
+            >
+              <input
+                type="password"
+                className="auth-token-input"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="X-Plex-Token"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Plex token"
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="auth-btn"
+                disabled={plex.linkingToken || token.trim() === ''}
+              >
+                {plex.linkingToken ? 'Checking…' : 'Link'}
+              </button>
+            </form>
+          )}
+
           {linked && (
             <button
               className="auth-menu-item"

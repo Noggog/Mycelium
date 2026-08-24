@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using Microsoft.Extensions.Logging;
 using Mycelium.Interfaces;
 using Mycelium.Plex.Services.Singletons;
@@ -25,6 +26,9 @@ public enum PlexLinkOutcome
 
     /// <summary>They approved, but that Plex account can't see this server — nothing we made would reach them.</summary>
     NoServerAccess,
+
+    /// <summary>plex.tv doesn't recognise the pasted token. Only reachable from the paste path.</summary>
+    InvalidToken,
 }
 
 public record PlexLinkCompletion(PlexLinkOutcome Outcome, PlexLinkStatus Status);
@@ -124,6 +128,72 @@ public class PlexLinkService
 
         await _links.Upsert(link);
         _logger.LogInformation("Linked Plex account {Username} to app user.", account.Username);
+
+        return new PlexLinkCompletion(
+            PlexLinkOutcome.Linked,
+            new PlexLinkStatus(true, link.Username, link.Email, link.LinkedAt));
+    }
+
+    /// <summary>
+    /// Links an account from a token the user pasted, rather than through the PIN flow. The PIN flow can
+    /// only ever link whoever is already signed in at app.plex.tv in that browser, which makes one case
+    /// impossible: acting as a Plex Home / managed user, who has no browser session of their own to
+    /// approve with. Pasting their token is how you name a <em>specific</em> account.
+    ///
+    /// <para>Verified against plex.tv before anything is written, so a truncated or revoked paste is
+    /// refused rather than stored and left to fail every later call. And as with the PIN flow, only the
+    /// <em>server-scoped</em> token comes back from <see cref="IPlexAccountApi.ResolveAccount"/> and is
+    /// kept — whatever was pasted is used once to ask who it belongs to, then discarded. Pasting an
+    /// account-wide token therefore doesn't leave an account-wide credential in the database.</para>
+    /// </summary>
+    public async Task<PlexLinkCompletion> LinkWithToken(string subject, string? token)
+    {
+        var pasted = token?.Trim();
+        if (string.IsNullOrEmpty(pasted))
+        {
+            return new PlexLinkCompletion(PlexLinkOutcome.InvalidToken, await Status(subject));
+        }
+
+        var machineId = await _plexApi.GetMachineIdentifier()
+                        ?? throw new InvalidOperationException(
+                            "Can't verify the Plex link: the server is unreachable.");
+
+        PlexAccount? account;
+        try
+        {
+            account = await _accounts.ResolveAccount(pasted, machineId);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode
+                   is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+        {
+            // plex.tv doesn't know this token — a partial paste or a revoked token, which is the user's
+            // to correct. Anything else (a plex.tv outage, a network failure) still throws: that's not
+            // the same answer and shouldn't be reported to them as a bad token.
+            _logger.LogInformation("A pasted Plex token was rejected by plex.tv ({Status}).", ex.StatusCode);
+            return new PlexLinkCompletion(PlexLinkOutcome.InvalidToken, await Status(subject));
+        }
+
+        if (account is null)
+        {
+            _logger.LogWarning("A pasted Plex token is valid but has no access to this server.");
+            return new PlexLinkCompletion(PlexLinkOutcome.NoServerAccess, await Status(subject));
+        }
+
+        // A completed paste supersedes any half-finished PIN flow — the last thing the user did wins,
+        // the same rule Start() applies.
+        _pending.TryRemove(subject, out _);
+
+        var link = new PlexLink(
+            Subject: subject,
+            AccountId: account.AccountId,
+            Username: account.Username,
+            Email: account.Email,
+            ServerToken: account.ServerToken,
+            LinkedAt: DateTimeOffset.UtcNow);
+
+        await _links.Upsert(link);
+        _logger.LogInformation(
+            "Linked Plex account {Username} to app user from a pasted token.", account.Username);
 
         return new PlexLinkCompletion(
             PlexLinkOutcome.Linked,

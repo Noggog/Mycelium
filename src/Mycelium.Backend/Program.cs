@@ -855,6 +855,25 @@ plexLink.MapPost("/complete", async (HttpContext http, PlexLinkService links) =>
     })
     .WithName("CompletePlexLink");
 
+// Link from a token the user pasted instead of running the PIN flow — the way to act as a Plex Home
+// or managed user, who has no browser session at app.plex.tv of their own to approve with. A POST
+// body, never a query parameter: the credential must not reach the request log, proxies or history.
+// 400 (like the ARL paste) when the token is rejected — that's input for the user to correct, and the
+// body carries the outcome either way so the paste box can say which of the two things went wrong.
+plexLink.MapPost("/token", async (HttpContext http, PlexTokenLinkRequest body, PlexLinkService links) =>
+    {
+        var completion = await links.LinkWithToken(http.User.GetSubject()!, body.Token);
+        var payload = new
+        {
+            outcome = completion.Outcome.ToString().ToLowerInvariant(),
+            status = completion.Status,
+        };
+        return completion.Outcome == PlexLinkOutcome.Linked
+            ? Results.Ok(payload)
+            : Results.BadRequest(payload);
+    })
+    .WithName("LinkPlexWithToken");
+
 // Forgets the account and its stored token. Playlists already created stay put — they're the user's.
 plexLink.MapDelete("", async (HttpContext http, PlexLinkService links) =>
     {
@@ -938,6 +957,12 @@ app.Run();
 /// a URL — where it would be logged by the request logger, proxies, and browser history alike.
 /// </summary>
 internal record ArlUpdateRequest(string? Arl);
+
+/// <summary>
+/// Body of a Plex token paste. Same reasoning as <see cref="ArlUpdateRequest"/>: a credential in a
+/// query string would be written to the request log verbatim.
+/// </summary>
+internal record PlexTokenLinkRequest(string? Token);
 
 /// <summary>
 /// Body of a manual album add: whatever the user pasted. A POST body rather than a query parameter
