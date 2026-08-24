@@ -884,6 +884,16 @@ input[type='checkbox'] {
   color: var(--good);
   white-space: nowrap;
 }
+/* The same marker when it's a link into Plex — reads as the marker until you're on it, and the owned
+   row's dimming is lifted under the cursor so the target doesn't look inert. */
+.album-owned-link {
+  text-decoration: none;
+}
+.album-owned-link:hover,
+.album-owned-link:focus-visible {
+  color: var(--text);
+  text-shadow: 0 0 16px rgba(56, 232, 160, 0.55);
+}
 .album-state {
   display: inline-flex;
   align-items: center;
@@ -892,9 +902,13 @@ input[type='checkbox'] {
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* Owned albums are non-actionable — dim them slightly so the actionable (missing) ones stand out. */
+/* Owned albums are non-actionable — dim them slightly so the actionable (missing) ones stand out.
+   Except while the Plex link is being aimed at: that one is actionable. */
 .disc-sub-album.owned {
   opacity: 0.72;
+}
+.disc-sub-album.owned:has(.album-owned-link:hover) {
+  opacity: 1;
 }
 
 /* ========================================================================== */

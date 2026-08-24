@@ -566,12 +566,16 @@ api.MapGet("/discovery/artist-albums", async (string artist, HttpContext http, D
     .WithName("GetArtistAlbums");
 
 // An owned artist's full Deezer discography for the Artists-page drill-down: every LP flagged owned
-// vs. missing, missing ones overlaid with the user's verdict. One Deezer call per expand.
-api.MapGet("/discovery/artist-discography", async (string artist, HttpContext http, DiscoveryEngine engine) =>
+// vs. missing, missing ones overlaid with the user's verdict. One Deezer call per expand. The owned
+// rows are deep linked into Plex here rather than in the engine, which knows only the abstract
+// library — same split as the merge picker's suggestions below.
+api.MapGet("/discovery/artist-discography", async (
+        string artist, HttpContext http, DiscoveryEngine engine, PlexAlbumLinker links) =>
     {
         try
         {
-            return Results.Ok(await engine.ArtistDiscography(http.User.GetSubject()!, artist));
+            var albums = await engine.ArtistDiscography(http.User.GetSubject()!, artist);
+            return Results.Ok(await links.WithLinks(albums));
         }
         catch (DeezerUnavailableException)
         {

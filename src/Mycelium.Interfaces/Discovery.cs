@@ -172,7 +172,9 @@ public record ArtistRating(ArtistKey Artist, string? ImageUrl, DiscoveryStatus S
 /// <paramref name="RecordType"/> is Deezer's own classification ("album" / "ep" / "single" /
 /// "compilation"), shown as a badge on the row. This listing carries every type while the feed takes
 /// only LPs and EPs, so the badge is what tells a single apart from an album here; null for an owned
-/// album Deezer doesn't list.
+/// album Deezer doesn't list. <paramref name="PlexUrl"/> deep links an owned album into Plex, so the
+/// copy we have can be opened from the row that says we have it; null for a missing album, for one
+/// whose Plex rating key isn't captured yet, or when Plex couldn't be reached.
 /// </summary>
 public record ArtistAlbumItem(
     ArtistKey Artist,
@@ -183,4 +185,5 @@ public record ArtistAlbumItem(
     DiscoveryStatus? Verdict,
     int? Year = null,
     bool Blocked = false,
-    string? RecordType = null);
+    string? RecordType = null,
+    string? PlexUrl = null);

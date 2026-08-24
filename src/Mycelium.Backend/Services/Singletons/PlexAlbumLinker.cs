@@ -23,13 +23,14 @@ public static class PlexDeepLink
 }
 
 /// <summary>
-/// Fills in the "open in Plex" link on the merge picker's suggestions, so a near-miss title ("Doom:
-/// Original Game Soundtrack" offered for Deezer's "DOOM (Original Game Soundtrack)") can be eyeballed
-/// against the real album before the merge is recorded.
+/// Fills in the "open in Plex" links on albums: the merge picker's suggestions, so a near-miss title
+/// ("Doom: Original Game Soundtrack" offered for Deezer's "DOOM (Original Game Soundtrack)") can be
+/// eyeballed against the real album before the merge is recorded, and the owned rows of an artist's
+/// discography, so the "In library" marker opens the copy it's claiming we have.
 ///
 /// Best-effort throughout: an album whose Plex rating key isn't captured yet (catalog synced before
-/// keys were stored), or a Plex server we can't reach to identify, just yields a suggestion without a
-/// link rather than failing the picker.
+/// keys were stored), or a Plex server we can't reach to identify, just yields the album without a
+/// link rather than failing the request.
 /// </summary>
 public class PlexAlbumLinker
 {
@@ -49,17 +50,7 @@ public class PlexAlbumLinker
     {
         if (options.Length == 0) return options;
 
-        string? machineId;
-        try
-        {
-            machineId = await _plex.GetMachineIdentifier();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Couldn't fetch Plex machineIdentifier for merge suggestion links");
-            machineId = null;
-        }
-
+        var machineId = await MachineIdentifier();
         if (string.IsNullOrEmpty(machineId)) return options;
 
         // Only the artists actually offered — the suggestion list is short, and a whole-library search
@@ -72,5 +63,74 @@ public class PlexAlbumLinker
                 ? o with { PlexUrl = PlexDeepLink.ToItem(machineId, key) }
                 : o)
             .ToArray();
+    }
+
+    /// <summary>
+    /// The same discography with <see cref="ArtistAlbumItem.PlexUrl"/> set on the owned rows, so the
+    /// "In library" marker can open the copy we have. Missing rows are left alone — there's nothing in
+    /// Plex to point at.
+    ///
+    /// Matched on the canonical title rather than the literal one: an owned row surfaces Deezer's
+    /// spelling of the title ("DOOM (Original Game Soundtrack)") while the rating key is stored under
+    /// Plex's ("Doom: Original Game Soundtrack"), and those are the same album by
+    /// <see cref="AlbumTitleMatcher"/>'s definition — the one the ownership flag itself was decided by.
+    /// </summary>
+    public async Task<IReadOnlyList<ArtistAlbumItem>> WithLinks(IReadOnlyList<ArtistAlbumItem> albums)
+    {
+        if (!albums.Any(a => a.Owned)) return albums;
+
+        var machineId = await MachineIdentifier();
+        if (string.IsNullOrEmpty(machineId)) return albums;
+
+        // A discography is one artist's, but a row can be credited to a collaborator, so key off the
+        // rows themselves rather than assuming a single name.
+        var artists = albums
+            .Where(a => a.Owned)
+            .Select(a => a.Artist.ArtistName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var keys = await _catalog.GetAlbumPlexRatingKeys(artists);
+        var byCanonicalTitle = keys.ToDictionary(
+            e => e.Key,
+            e => Canonicalize(e.Value),
+            StringComparer.OrdinalIgnoreCase);
+
+        return albums
+            .Select(a => a.Owned
+                && byCanonicalTitle.TryGetValue(a.Artist.ArtistName, out var titles)
+                && titles.TryGetValue(AlbumTitleMatcher.Normalize(a.Album), out var key)
+                    ? a with { PlexUrl = PlexDeepLink.ToItem(machineId, key) }
+                    : a)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Album titles re-keyed by their canonical form. Two titles can canonicalize to one key ("The
+    /// Burgh Island EP" and "The Burgh Island"); either copy is a fine thing to open, so the first
+    /// wins rather than the lookup throwing.
+    /// </summary>
+    private static Dictionary<string, int> Canonicalize(Dictionary<string, int> keysByTitle)
+    {
+        var canonical = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (title, key) in keysByTitle)
+        {
+            canonical.TryAdd(AlbumTitleMatcher.Normalize(title), key);
+        }
+
+        return canonical;
+    }
+
+    /// <summary>The server id every deep link is built from, or null when Plex can't be reached.</summary>
+    private async Task<string?> MachineIdentifier()
+    {
+        try
+        {
+            return await _plex.GetMachineIdentifier();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Couldn't fetch Plex machineIdentifier for album links");
+            return null;
+        }
     }
 }

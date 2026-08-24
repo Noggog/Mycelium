@@ -74,6 +74,64 @@ public class PlexAlbumLinkerTests
         await _plex.DidNotReceive().GetMachineIdentifier();
     }
 
+    // ---- Discography rows ----
+
+    private static ArtistAlbumItem Row(string album, bool owned, string artist = Artist) =>
+        new(new ArtistKey(artist), album, null, owned ? null : 99L, owned, null);
+
+    [Fact]
+    public async Task Links_an_owned_discography_row_to_the_copy_in_the_library()
+    {
+        StoredKeys(Artist, (Album, 4242));
+
+        var linked = await _sut.WithLinks(new[] { Row(Album, owned: true) });
+
+        linked.Should().ContainSingle().Which.PlexUrl.Should()
+            .Be($"https://app.plex.tv/desktop/#!/server/{MachineId}/details?key=%2Flibrary%2Fmetadata%2F4242");
+    }
+
+    [Fact]
+    public async Task Links_an_owned_row_titled_the_way_deezer_spells_it()
+    {
+        // The row carries Deezer's title while the key is stored under Plex's — the same album by the
+        // matcher that decided the row was owned in the first place.
+        StoredKeys(Artist, ("The Burgh Island E.P.", 11));
+
+        var linked = await _sut.WithLinks(new[] { Row("The Burgh Island EP", owned: true) });
+
+        linked.Should().ContainSingle().Which.PlexUrl.Should().EndWith("%2Flibrary%2Fmetadata%2F11");
+    }
+
+    [Fact]
+    public async Task Leaves_a_missing_row_unlinked_even_when_a_key_exists_under_that_title()
+    {
+        StoredKeys(Artist, (Album, 4242));
+
+        var linked = await _sut.WithLinks(new[] { Row(Album, owned: false) });
+
+        linked.Should().ContainSingle().Which.PlexUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Asks_plex_for_nothing_when_no_row_is_owned()
+    {
+        var linked = await _sut.WithLinks(new[] { Row(Album, owned: false) });
+
+        linked.Should().ContainSingle().Which.PlexUrl.Should().BeNull();
+        await _plex.DidNotReceive().GetMachineIdentifier();
+    }
+
+    [Fact]
+    public async Task Returns_the_discography_unlinked_when_plex_cant_be_reached()
+    {
+        StoredKeys(Artist, (Album, 4242));
+        _plex.GetMachineIdentifier().Returns<string?>(_ => throw new HttpRequestException("down"));
+
+        var linked = await _sut.WithLinks(new[] { Row(Album, owned: true) });
+
+        linked.Should().ContainSingle().Which.PlexUrl.Should().BeNull();
+    }
+
     [Fact]
     public async Task Looks_up_only_the_artists_actually_offered()
     {

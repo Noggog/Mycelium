@@ -600,9 +600,24 @@ function AlbumSubRow({
         </div>
         <div className="disc-actions" onClick={(e) => e.stopPropagation()}>
           {a.owned ? (
-            <span className="album-owned" title="Already in your library">
-              <IconCheck size={15} /> In library
-            </span>
+            // The marker doubles as the way into the copy we have — a new tab, so the discography (and
+            // any preview playing under it) stays put. Plain text when the album's Plex rating key
+            // isn't captured yet, or Plex couldn't be reached to build the link.
+            a.plexUrl ? (
+              <a
+                className="album-owned album-owned-link"
+                href={a.plexUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Open “${a.album}” in Plex`}
+              >
+                <IconCheck size={15} /> In library ↗
+              </a>
+            ) : (
+              <span className="album-owned" title="Already in your library">
+                <IconCheck size={15} /> In library
+              </span>
+            )
           ) : a.blocked ? (
             // Blocked for everyone — it's filtered out of all the feeds, and shown here (the one place
             // a block is reviewable) purely so it can be lifted again.

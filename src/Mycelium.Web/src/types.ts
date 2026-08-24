@@ -225,6 +225,9 @@ export interface ArtistAlbumItem {
   // type while the Discover feed takes only albums and EPs, so the badge built from this is what tells
   // a single apart from an LP here. Null for an owned album Deezer doesn't list.
   recordType: string | null
+  // Deep link into Plex for an owned album, so the "In library" marker opens the copy we have. Null on
+  // a missing album, on one whose Plex rating key isn't captured yet, and when Plex was unreachable.
+  plexUrl: string | null
 }
 
 // Mirror LibraryAlbumOption (Album.cs) — one album already in the library, offered as a merge target
