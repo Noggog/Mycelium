@@ -200,6 +200,17 @@ public class AlbumTitleMatcherTests
             .Should().Be(AlbumOverrideKey.For("cfcf", "Radiance and Submission"));
     }
 
+    [Theory]
+    [InlineData("Animal (Expanded Edition)", "animal")]
+    [InlineData("Settle (Special Edition)", "settle")]
+    [InlineData("I Forgot Where We Were (Tenth Anniversary Edition)", "i forgot where we were")]
+    [InlineData("I Forgot Where We Were [Twentieth Anniversary Edition]", "i forgot where we were")]
+    [InlineData("I Forgot Where We Were - Twenty-Fifth Anniversary", "i forgot where we were")]
+    public void Spelled_out_ordinals_fold_away_like_their_digit_form(string title, string expected)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be(expected);
+    }
+
     [Fact]
     public void Override_keys_agree_across_an_edition_suffix()
     {

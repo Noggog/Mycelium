@@ -230,6 +230,14 @@ public static partial class AlbumTitleMatcher
     {
         "the", "a", "an", "and", "of", "with", "plus", "in", "track", "tracks", "disc", "disk",
         "cd", "cds", "vinyl", "digital", "audio", "year", "years", "st", "nd", "rd", "th",
+        // Spelled-out ordinals ("Tenth Anniversary Edition") carry the same no-identity role as a
+        // digit ordinal ("10th Anniversary") — the digit form is caught separately by IsQualifier's
+        // leading-digit check, so only the word form needs listing here.
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+        "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth",
+        "eighteenth", "nineteenth", "twentieth", "thirtieth", "fortieth", "fiftieth", "sixtieth",
+        "seventieth", "eightieth", "ninetieth", "hundredth",
+        "twenty-fifth", "thirty-fifth", "forty-fifth", "fifty-fifth", "seventy-fifth",
     };
 
     /// <summary>A run of at least two single-letter-plus-dot pairs: the "E.P." / "M.I.A." shape.</summary>
