@@ -119,6 +119,52 @@ public class DeezerApi : IDeezerApi
         return result?.data.ToArray();
     }
 
+    // Deezer's album search pages at 100 and answers for every artist with a name like the one asked
+    // for, so the artist's own releases are scattered through the result set rather than sitting at the
+    // front: Walk Off The Earth's 154 releases came out of a 206-result search. Five pages is well past
+    // where a real artist's tail ends, and bounds the walk if Deezer keeps handing back a next link.
+    private const int AlbumSearchPageSize = 100;
+    private const int MaxAlbumSearchPages = 5;
+
+    public async Task<DeezerAlbum[]?> SearchArtistAlbums(string artistName)
+    {
+        // The field-scoped form of Deezer's search grammar: artist:"..." keeps the whole name together
+        // as one term instead of matching any album whose title happens to share a word with it.
+        var query = Uri.EscapeDataString($"artist:\"{artistName}\"");
+        var albums = new List<DeezerAlbum>();
+        for (var page = 0; page < MaxAlbumSearchPages; page++)
+        {
+            // The offset steps by the page size, not by how many rows came back. Search pages are not
+            // dense — Deezer answered index=0 of a 230-result search with 87 rows and a next link — and
+            // walking by rows received would re-ask for ground already covered and never reach the end.
+            var url = $"{_endpointInfo.BaseUri}/search/album"
+                      + $"?limit={AlbumSearchPageSize}&index={page * AlbumSearchPageSize}&q={query}";
+            var result = await Get<DeezerAlbumList>(url);
+            // One unanswered page poisons the whole answer, so say so rather than hand back a short
+            // list: the caller can't tell a truncated walk from an artist with nothing else, and it
+            // persists the difference. Same reasoning as GetAlbums returning null.
+            if (result is null)
+            {
+                return null;
+            }
+
+            albums.AddRange(result.data);
+            // Deezer's own "there is more" flag is the only reliable end marker here, precisely because
+            // a short page doesn't mean the last page.
+            if (result.next is null)
+            {
+                return albums.ToArray();
+            }
+        }
+
+        // Fell out of the loop with Deezer still offering more: the walk is bounded, so say so rather
+        // than let a short catalog read as the whole one.
+        _logger.LogWarning(
+            "Deezer album search for \"{Artist}\" hit the {Pages}-page cap at {Count} results; "
+            + "later releases may be missing", artistName, MaxAlbumSearchPages, albums.Count);
+        return albums.ToArray();
+    }
+
     public async Task<DeezerAlbum?> GetAlbum(long albumId)
     {
         var url = $"{_endpointInfo.BaseUri}/album/{albumId}";

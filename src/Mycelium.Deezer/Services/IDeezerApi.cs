@@ -47,6 +47,21 @@ public interface IDeezerApi
     Task<DeezerAlbum[]?> GetAlbums(long artistId);
 
     /// <summary>
+    /// Albums found by searching for the artist's name — the backfill for what
+    /// <see cref="GetAlbums"/> leaves out. Deezer's discography listing is not the whole catalog: it
+    /// omits releases Deezer itself credits to that artist (all of Against Me!'s post-2011 era; 87 of
+    /// Walk Off The Earth's 154 releases), and those come back from album search. The search matches
+    /// on name, so the results are for <em>everyone</em> with a similar one — the caller keeps only the
+    /// rows whose <see cref="DeezerAlbum.artist"/> is the id it resolved. Paged internally, because the
+    /// first page of a common name is mostly other acts.
+    ///
+    /// <c>null</c> means a page never got an answer, with the same force as in <see cref="GetAlbums"/>:
+    /// a short result set is indistinguishable from "there is nothing else", and the caller persists
+    /// that difference. Never partially truthful — either the whole walk answered or it's null.
+    /// </summary>
+    Task<DeezerAlbum[]?> SearchArtistAlbums(string artistName);
+
+    /// <summary>
     /// A single album by its id, including its album-artist (the discography listing omits that).
     /// Null if none/error. Used to learn the real credited act for a collaboration album.
     /// </summary>

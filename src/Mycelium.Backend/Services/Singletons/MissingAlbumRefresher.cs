@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Mycelium.Deezer.Models;
 using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
 
@@ -167,7 +168,8 @@ public class MissingAlbumRefresher
     }
 
     /// <summary>
-    /// Resolves the artist on Deezer and walks its discography once, splitting it into the full
+    /// Resolves the artist on Deezer, gathers their catalog (the discography listing, backfilled from
+    /// album search — see <see cref="Backfill"/>), and walks it once, splitting it into the full
     /// annotated list (every listed record type and every pressing, flagged owned/missing) and the missing
     /// subset, each row tagged with its record type — and pressings after the first tagged as such — so
     /// the feed can decide for itself what to push. Returns null when the artist has no Deezer match.
@@ -204,6 +206,8 @@ public class MissingAlbumRefresher
                 $"Deezer didn't answer the discography listing for '{artist.ArtistName}'");
         }
 
+        var catalog = await Backfill(deezerId.Value, lookup.Value!.Name ?? artist.ArtistName, listing);
+
         // Normalized owned titles per artist name, computed lazily and memoised for this pass — so the
         // common (scanning artist) lookup and any album-artist lookup share the work.
         var normalizedOwned = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
@@ -235,7 +239,7 @@ public class MissingAlbumRefresher
         var verdicts = new Dictionary<string, (bool Owned, ArtistKey AlbumArtist)>(StringComparer.Ordinal);
         var all = new List<DiscographyAlbum>();
         var missing = new List<MissingAlbum>();
-        foreach (var album in listing)
+        foreach (var album in catalog)
         {
             var title = album.title;
             var record = NormalizeTitle(title);
@@ -295,6 +299,48 @@ public class MissingAlbumRefresher
 
             return (false, artist);
         }
+    }
+
+    /// <summary>
+    /// The artist's discography listing plus the releases it leaves out. Deezer's
+    /// <c>/artist/{id}/albums</c> is not the whole catalog: it omits releases Deezer itself credits to
+    /// that artist — everything Against Me! put out after 2011, and 87 of Walk Off The Earth's 154
+    /// releases, whole albums among them — which is why an album could be missing from an artist's
+    /// readout while its own Deezer page sat there working. Album search reaches those, so it backfills
+    /// the listing.
+    ///
+    /// Search answers for every artist whose name resembles the one asked for, so the results are
+    /// filtered down to the id we resolved; that check is what makes a fuzzy search safe to merge. The
+    /// listing comes first and search-only rows follow, so a release Deezer lists properly keeps the
+    /// richer row (search results carry no release date, hence no year) and stays the pressing the feed
+    /// offers.
+    /// </summary>
+    /// <exception cref="DeezerUnavailableException">
+    /// The search never answered. The listing alone would be a smaller catalog than last night's, and
+    /// the caller <em>replaces</em> the artist's stored rows with what it's given — so a release only
+    /// search knows about would drop out, taking the Deezer id a queued download needs with it. Better
+    /// to skip the artist and leave their rows standing, exactly as for an unanswered listing.
+    /// </exception>
+    private async Task<IReadOnlyList<DeezerAlbum>> Backfill(
+        long deezerId, string searchName, DeezerAlbum[] listing)
+    {
+        var found = await _deezer.SearchArtistAlbums(searchName);
+        if (found is null)
+        {
+            throw new DeezerUnavailableException(
+                $"Deezer didn't answer the album search for '{searchName}'");
+        }
+
+        var known = listing.Select(a => a.id).ToHashSet();
+        var extra = found.Where(a => a.artist?.id == deezerId && known.Add(a.id)).ToList();
+        if (extra.Count > 0)
+        {
+            _logger.LogInformation(
+                "Deezer's discography for {Artist} omitted {Count} release(s) it credits to them; "
+                + "recovered by search", searchName, extra.Count);
+        }
+
+        return listing.Concat(extra).ToList();
     }
 
     /// <summary>

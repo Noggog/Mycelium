@@ -39,6 +39,15 @@ public class MissingAlbumRefresherTests
     private static DeezerAlbum Album(string title, string recordType = "album", long id = 1) =>
         new() { id = id, title = title, record_type = recordType };
 
+    /// <summary>An album-search hit, which — unlike a discography row — names the artist it belongs to.</summary>
+    private static DeezerAlbum SearchHit(
+        string title, long id, long artistId = DeezerId, string recordType = "album") =>
+        new()
+        {
+            id = id, title = title, record_type = recordType,
+            artist = new DeezerArtist { id = artistId },
+        };
+
     private static Dictionary<string, HashSet<string>> Owned(params (string Artist, string[] Albums)[] entries)
     {
         var d = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
@@ -142,6 +151,104 @@ public class MissingAlbumRefresherTests
         {
             ("lp record", "album"), ("ep record", "ep"), ("a single", "single"), ("a comp", "compilation"),
         });
+    }
+
+    // ---- The search backfill: Deezer's discography listing is not the whole catalog ----
+    //
+    // /artist/{id}/albums omits releases Deezer itself credits to the artist — Against Me!'s entire
+    // post-2011 output, 87 of Walk Off The Earth's 154 releases. Album search reaches them.
+
+    [Fact]
+    public async Task Search_recovers_releases_the_discography_listing_omits()
+    {
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("listed lp", id: 1) });
+        _deezer.SearchArtistAlbums(Arg.Any<string>()).Returns(new[]
+        {
+            SearchHit("listed lp", id: 1),
+            SearchHit("omitted lp", id: 2),
+            SearchHit("omitted single", id: 3, recordType: "single"),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Select(a => a.Title).Should().Equal("listed lp", "omitted lp", "omitted single");
+        // Recovered rows are persisted like any other, so they carry the Deezer id a queued download
+        // needs — the whole point of surfacing them rather than just showing them.
+        CapturedMissing().Select(m => (m.Album.AlbumName, m.DeezerAlbumId))
+            .Should().Equal(("listed lp", 1L), ("omitted lp", 2L), ("omitted single", 3L));
+    }
+
+    [Fact]
+    public async Task Search_hits_for_a_different_artist_are_ignored()
+    {
+        // Deezer's album search matches on name, so it answers for every act with a similar one. The
+        // artist-id check is what makes a fuzzy search safe to merge into a discography.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("listed lp", id: 1) });
+        _deezer.SearchArtistAlbums(Arg.Any<string>()).Returns(new[]
+        {
+            SearchHit("someone else's lp", id: 2, artistId: 999),
+            SearchHit("no artist at all", id: 3, artistId: 0),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Select(a => a.Title).Should().Equal("listed lp");
+    }
+
+    [Fact]
+    public async Task A_release_in_both_the_listing_and_the_search_is_still_one_row()
+    {
+        // Two ways the same release arrives twice: the same Deezer id in both sources, and a second id
+        // for what is really the same listing. Neither may double a row in the readout.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            new DeezerAlbum { id = 1, title = "listed lp", record_type = "album", release_date = "2004-02-02" },
+        });
+        _deezer.SearchArtistAlbums(Arg.Any<string>()).Returns(new[]
+        {
+            SearchHit("listed lp", id: 1),
+            SearchHit("Listed LP", id: 77),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        var row = listed.Should().ContainSingle().Subject;
+        // And it's the listing's row that survives: search hits carry no release date, so preferring
+        // them would cost the year the UI shows beside the title.
+        row.DeezerAlbumId.Should().Be(1);
+        row.Year.Should().Be(2004);
+    }
+
+    [Fact]
+    public async Task A_pressing_only_search_knows_about_is_listed_but_not_pushed()
+    {
+        // The two features meeting: the remaster is a row of its own (it's a separate pressing), and it
+        // is the alternate one (the listing's pressing came first), so the feed still asks once.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Both Sides (Deluxe Edition)", id: 1) });
+        _deezer.SearchArtistAlbums(Arg.Any<string>())
+            .Returns(new[] { SearchHit("Both Sides (2015 Remaster)", id: 2) });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Select(a => a.Title)
+            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
+        CapturedMissing().Select(m => (m.Album.AlbumName, m.AlternatePressing)).Should().Equal(
+            ("Both Sides (Deluxe Edition)", false), ("Both Sides (2015 Remaster)", true));
+    }
+
+    [Fact]
+    public async Task Unanswered_album_search_does_not_replace_the_stored_rows()
+    {
+        // The listing answered, the backfill didn't. Persisting the listing alone would drop every row
+        // only search knows about — and with it the Deezer id a queued download reads — so the artist is
+        // skipped instead, exactly as when the listing itself goes unanswered.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("listed lp", id: 1) });
+        _deezer.SearchArtistAlbums(Arg.Any<string>()).Returns((DeezerAlbum[]?)null);
+
+        var act = () => _sut.Discography(new ArtistKey(Artist), Owned());
+
+        await act.Should().ThrowAsync<DeezerUnavailableException>();
+        await _missing.DidNotReceiveWithAnyArgs().ReplaceForArtist(default!, default!);
     }
 
     // ---- Pressings: Deezer lists the deluxe edition and the remaster as separate releases ----

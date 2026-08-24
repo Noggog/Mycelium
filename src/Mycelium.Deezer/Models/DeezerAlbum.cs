@@ -48,4 +48,11 @@ public class DeezerAlbum
 public class DeezerAlbumList
 {
     public List<DeezerAlbum> data { get; set; } = new();
+
+    /// <summary>
+    /// Absolute URL of the next page, or null on the last one — read only as a "there is more" flag,
+    /// the same way the track listing uses it. Absent on the endpoints that don't page (a discography
+    /// listing asks for the whole thing in one go), which reads as null: no next page.
+    /// </summary>
+    public string? next { get; set; }
 }
