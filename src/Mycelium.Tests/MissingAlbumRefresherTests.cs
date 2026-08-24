@@ -144,6 +144,83 @@ public class MissingAlbumRefresherTests
         });
     }
 
+    // ---- Pressings: Deezer lists the deluxe edition and the remaster as separate releases ----
+
+    [Fact]
+    public async Task Every_pressing_of_a_record_gets_its_own_discography_row()
+    {
+        // Collapsing pressings onto the normalized title used to hide whichever Deezer listed second —
+        // Phil Collins' "Both Sides (2015 Remaster)" never appeared, because the deluxe edition had
+        // already claimed the row.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("Both Sides (Deluxe Edition)", id: 12194438),
+            Album("Both Sides (2015 Remaster)", id: 12308830),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Select(a => a.Title)
+            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
+        // Each with its own Deezer id, because the row is what hands the downloader an id when the
+        // pressing is queued from the drill-down.
+        listed.Select(a => a.DeezerAlbumId).Should().Equal(12194438L, 12308830L);
+        // Both persisted, but only the first is pushed at anyone: the feed asks once per record.
+        CapturedMissing().Select(m => (m.Album.AlbumName, m.AlternatePressing)).Should().Equal(
+            ("Both Sides (Deluxe Edition)", false), ("Both Sides (2015 Remaster)", true));
+    }
+
+    [Fact]
+    public async Task A_title_deezer_repeats_verbatim_is_still_one_row()
+    {
+        // Listing pressings separately is not the same as listing everything: the same release under
+        // the same name (a regional duplicate, differing only in typography) is one row, as before.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("Don’t Look Now", id: 1),
+            Album("Don't Look Now", id: 2),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Select(a => a.Title).Should().Equal("Don’t Look Now");
+    }
+
+    [Fact]
+    public async Task Neither_pressing_of_an_owned_record_is_missing()
+    {
+        // Ownership is still per record, not per pressing: the library has "Both Sides", so both of
+        // Deezer's pressings of it are owned and neither is a gap.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("Both Sides (Deluxe Edition)", id: 1),
+            Album("Both Sides (2015 Remaster)", id: 2),
+        });
+
+        var listed = await _sut.Discography(
+            new ArtistKey(Artist), Owned((Artist, new[] { "Both Sides" })));
+
+        listed.Should().OnlyContain(a => a.Owned);
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Pressings_of_one_record_cost_one_album_artist_lookup()
+    {
+        // The /album/{id} call behind the ownership verdict is the expensive part of the diff, and it
+        // answers for the record rather than the pressing — listing pressings separately must not
+        // multiply it.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("Both Sides (Deluxe Edition)", id: 1),
+            Album("Both Sides (2015 Remaster)", id: 2),
+        });
+
+        await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        await _deezer.Received(1).GetAlbum(Arg.Any<long>());
+    }
+
     [Fact]
     public async Task Owned_single_is_not_reported_missing()
     {

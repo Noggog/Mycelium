@@ -132,8 +132,11 @@ public class MissingAlbumRefresher
     /// Artists-page drill-down. Persists the missing subset as a side effect (same as
     /// <see cref="RefreshOne"/>) so a later like carries the Deezer id to the downloader — including for
     /// singles and compilations, which are queueable from here even though the Discover feed passes over
-    /// them (<see cref="AlbumRecordType.IsFeedEligible"/>). Owned albums the library has that Deezer
-    /// doesn't list at all are appended (without art/id/type) so the picture is complete.
+    /// them (<see cref="AlbumRecordType.IsFeedEligible"/>). Every pressing Deezer lists gets its own row —
+    /// the deluxe edition and the remaster are two entries here, even though they are one record for the
+    /// purpose of owning it — so nothing in an artist's discography is hidden behind another edition of
+    /// itself. Owned albums the library has that Deezer doesn't list at all are appended (without
+    /// art/id/type) so the picture is complete.
     /// </summary>
     /// <exception cref="DeezerUnavailableException">
     /// Deezer didn't answer. Nothing is persisted and nothing is returned — the caller surfaces this
@@ -165,11 +168,12 @@ public class MissingAlbumRefresher
 
     /// <summary>
     /// Resolves the artist on Deezer and walks its discography once, splitting it into the full
-    /// annotated list (every listed record type, flagged owned/missing) and the missing subset, each row
-    /// tagged with its record type so the feed can decide for itself what to push. Returns null when the
-    /// artist has no Deezer match. Compares on a normalized title so punctuation/casing differences
-    /// between Plex and Deezer (e.g. a typographic vs. straight apostrophe) don't make an owned album
-    /// look missing; the original Deezer title is still what we surface.
+    /// annotated list (every listed record type and every pressing, flagged owned/missing) and the missing
+    /// subset, each row tagged with its record type — and pressings after the first tagged as such — so
+    /// the feed can decide for itself what to push. Returns null when the artist has no Deezer match.
+    /// Ownership compares on a normalized title so neither punctuation/casing differences between Plex and
+    /// Deezer (a typographic vs. straight apostrophe) nor edition decoration ("(Deluxe Edition)") makes an
+    /// owned album look missing; the original Deezer title is still what we surface.
     /// </summary>
     /// <exception cref="DeezerUnavailableException">
     /// Deezer never answered — so nothing learned here is evidence of anything. Distinct from a null
@@ -218,54 +222,79 @@ public class MissingAlbumRefresher
             .Select(o => AlbumOverrideKey.For(o.MatchArtist, o.DeezerTitle))
             .ToHashSet();
 
+        // Two keys per release, and the gap between them is the point. The record key (edition
+        // decoration stripped) answers "do we have this album?" — Plex's "Both Sides" is what Deezer
+        // lists as "Both Sides (Deluxe Edition)". The listing key keeps the decoration, so each pressing
+        // Deezer lists stays a row of its own; only a title Deezer repeats verbatim is dropped as the
+        // duplicate it is. Collapsing pressings here is what used to make an artist's discography hide
+        // the 2015 remaster behind the deluxe edition.
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Ownership resolved once per record rather than per pressing: every pressing of an album is
+        // owned (or missing) together, and the album-artist call behind that verdict is the expensive
+        // part — memoising keeps it at one call per record, as it was when pressings were collapsed.
+        var verdicts = new Dictionary<string, (bool Owned, ArtistKey AlbumArtist)>(StringComparer.Ordinal);
         var all = new List<DiscographyAlbum>();
         var missing = new List<MissingAlbum>();
         foreach (var album in listing)
         {
             var title = album.title;
-            var key = NormalizeTitle(title);
-            if (string.IsNullOrEmpty(key)
+            var record = NormalizeTitle(title);
+            if (string.IsNullOrEmpty(record)
                 || album.record_type is null
                 || !ListedRecordTypes.Contains(album.record_type)
-                || !seen.Add(key))
+                || !seen.Add(AlbumTitleMatcher.NormalizeEdition(title)))
             {
                 continue;
             }
 
-            // Owned under the scanning artist (their own catalogued album) — the cheap, common case;
-            // or a user-recorded merge into a near-miss library title under the scanning artist.
-            var isOwned = scannedOwned.Contains(key)
-                          || overrideKeys.Contains(AlbumOverrideKey.For(artist.ArtistName, title));
-            var albumArtist = artist;
-            if (!isOwned)
+            // The first pressing of a record carries the feed; the ones after it are browsable in the
+            // discography and queueable from there, but never pushed at anyone (see
+            // MissingAlbum.AlternatePressing) — one album shouldn't ask the same question twice.
+            var alternatePressing = verdicts.TryGetValue(record, out var verdict);
+            if (!alternatePressing)
             {
-                // Not in the scanning artist's owned set. It may be a collaboration the listing surfaces
-                // via one member (e.g. a duo record) but the library files under the duo name. Resolve
-                // the real album-artist so we can (a) tell whether Plex already has it under that name,
-                // and (b) record it so reconcile later matches the act Plex filed it under. Bounded:
-                // only the gap is resolved, and results are cached across the sweep.
-                var resolved = await ResolveAlbumArtist(album.id);
-                if (!string.IsNullOrWhiteSpace(resolved)
-                    && !string.Equals(resolved, artist.ArtistName, StringComparison.OrdinalIgnoreCase))
-                {
-                    albumArtist = new ArtistKey(resolved);
-                    isOwned = OwnedTitlesFor(resolved).Contains(key)
-                              || overrideKeys.Contains(AlbumOverrideKey.For(resolved, title));
-                }
+                verdicts[record] = verdict = await OwnershipOf(record, title, album.id);
             }
 
             all.Add(new DiscographyAlbum(
-                title, album.BestCoverUrl, album.id, isOwned, album.Year, album.record_type));
-            if (!isOwned)
+                title, album.BestCoverUrl, album.id, verdict.Owned, album.Year, album.record_type));
+            if (!verdict.Owned)
             {
                 missing.Add(new MissingAlbum(
-                    artist, new AlbumKey(title), album.BestCoverUrl, album.id, albumArtist, album.Year,
-                    album.record_type));
+                    artist, new AlbumKey(title), album.BestCoverUrl, album.id, verdict.AlbumArtist,
+                    album.Year, album.record_type, alternatePressing));
             }
         }
 
         return (all, missing);
+
+        // Whether the library already has this record, and the act it files it under.
+        async Task<(bool Owned, ArtistKey AlbumArtist)> OwnershipOf(string record, string title, long albumId)
+        {
+            // Owned under the scanning artist (their own catalogued album) — the cheap, common case;
+            // or a user-recorded merge into a near-miss library title under the scanning artist.
+            if (scannedOwned.Contains(record)
+                || overrideKeys.Contains(AlbumOverrideKey.For(artist.ArtistName, title)))
+            {
+                return (true, artist);
+            }
+
+            // Not in the scanning artist's owned set. It may be a collaboration the listing surfaces
+            // via one member (e.g. a duo record) but the library files under the duo name. Resolve
+            // the real album-artist so we can (a) tell whether Plex already has it under that name,
+            // and (b) record it so reconcile later matches the act Plex filed it under. Bounded:
+            // only the gap is resolved, and results are cached across the sweep.
+            var resolved = await ResolveAlbumArtist(albumId);
+            if (!string.IsNullOrWhiteSpace(resolved)
+                && !string.Equals(resolved, artist.ArtistName, StringComparison.OrdinalIgnoreCase))
+            {
+                var albumArtist = new ArtistKey(resolved);
+                return (OwnedTitlesFor(resolved).Contains(record)
+                        || overrideKeys.Contains(AlbumOverrideKey.For(resolved, title)), albumArtist);
+            }
+
+            return (false, artist);
+        }
     }
 
     /// <summary>

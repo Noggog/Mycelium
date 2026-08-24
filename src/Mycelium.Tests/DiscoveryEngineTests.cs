@@ -396,6 +396,48 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
+    public async Task Missing_album_feed_offers_one_pressing_per_record()
+    {
+        // The discography lists the deluxe edition and the remaster separately, and each needs a
+        // persisted row to be queueable from there — but they're one record to acquire, so the feed
+        // asks once rather than dealing the same album twice.
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Phil Collins" });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("Phil Collins"), new AlbumKey("Both Sides (Deluxe Edition)"),
+                "art1", 12194438, RecordType: "album"),
+            new MissingAlbum(new ArtistKey("Phil Collins"), new AlbumKey("Both Sides (2015 Remaster)"),
+                "art2", 12308830, RecordType: "album", AlternatePressing: true),
+        });
+
+        var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+        page.Items.Select(i => i.Album).Should().Equal("Both Sides (Deluxe Edition)");
+    }
+
+    [Fact]
+    public async Task ArtistDiscography_lists_every_pressing_of_a_record()
+    {
+        // The drill-down is the surface that stopped merging: both pressings show, each carrying its
+        // own Deezer id so either can be queued.
+        _deezer.SearchArtists("Phil Collins", Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = 186, name = "Phil Collins" } });
+        _deezer.GetAlbums(186).Returns(new[]
+        {
+            new DeezerAlbum { id = 12194438, title = "Both Sides (Deluxe Edition)", record_type = "album" },
+            new DeezerAlbum { id = 12308830, title = "Both Sides (2015 Remaster)", record_type = "album" },
+        });
+        _albumRatings.GetRated(User).Returns(Array.Empty<AlbumRating>());
+
+        var listed = await _sut.ArtistDiscography(User, "Phil Collins");
+
+        listed.Select(a => (a.Album, a.DeezerAlbumId)).Should().BeEquivalentTo(new[]
+        {
+            ("Both Sides (Deluxe Edition)", (long?)12194438), ("Both Sides (2015 Remaster)", 12308830),
+        });
+    }
+
+    [Fact]
     public async Task Missing_album_feed_still_surfaces_rows_written_before_record_types()
     {
         // Rows persisted before record-type tracking carry no type. They predate singles being synced at

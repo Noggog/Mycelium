@@ -163,6 +163,27 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.Normalize(title).Should().Be(expected);
     }
 
+    // Two pressings of one record: the same album to own, two rows in an artist's discography.
+    [Fact]
+    public void Edition_keys_tell_pressings_of_one_record_apart()
+    {
+        AlbumTitleMatcher.NormalizeEdition("Both Sides (Deluxe Edition)")
+            .Should().NotBe(AlbumTitleMatcher.NormalizeEdition("Both Sides (2015 Remaster)"));
+        // ...while the record they're both pressings of is still one album.
+        AlbumTitleMatcher.Normalize("Both Sides (Deluxe Edition)")
+            .Should().Be(AlbumTitleMatcher.Normalize("Both Sides (2015 Remaster)"));
+    }
+
+    [Theory]
+    [InlineData("Don’t Look Now [Deluxe Edition]")]
+    [InlineData("  Don't  Look  Now  [Deluxe Edition]  ")]
+    public void An_edition_key_still_folds_typography(string title)
+    {
+        // Keeping the decoration is not the same as taking the title verbatim: a source writing the
+        // same pressing with a curly apostrophe hasn't listed a second release.
+        AlbumTitleMatcher.NormalizeEdition(title).Should().Be("don't look now [deluxe edition]");
+    }
+
     [Fact]
     public void Distinct_titles_still_normalize_differently()
     {

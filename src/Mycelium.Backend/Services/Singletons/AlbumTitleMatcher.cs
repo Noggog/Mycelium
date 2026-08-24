@@ -19,6 +19,20 @@ public static partial class AlbumTitleMatcher
     /// </summary>
     public static string Normalize(string? title)
     {
+        var edition = NormalizeEdition(title);
+        return edition.Length == 0 ? string.Empty : StripReleaseQualifiers(edition);
+    }
+
+    /// <summary>
+    /// Canonical form that still tells pressings apart: the same typography fold and dotted-initialism
+    /// collapse as <see cref="Normalize"/>, with the release qualifiers left on. "Both Sides (Deluxe
+    /// Edition)" and "Both Sides (2015 Remaster)" keep distinct keys here — they are two rows in an
+    /// artist's discography — while a title a source lists twice in different typography still collapses
+    /// to one. Use this to ask "is this the same listing?"; use <see cref="Normalize"/> to ask "is this
+    /// the same record?", which is what ownership turns on.
+    /// </summary>
+    public static string NormalizeEdition(string? title)
+    {
         var folded = FoldTypography(title);
         if (folded.Length == 0)
         {
@@ -27,9 +41,7 @@ public static partial class AlbumTitleMatcher
 
         // "e.p." → "ep", "m.i.a." → "mia". Done after the typography fold so the input is already
         // lower-cased and space-collapsed; "mr. bungle" is untouched (a lone initial isn't a run).
-        folded = InitialismDots().Replace(folded, m => m.Value.Replace(".", string.Empty));
-
-        return StripReleaseQualifiers(folded);
+        return InitialismDots().Replace(folded, m => m.Value.Replace(".", string.Empty));
     }
 
     /// <summary>
