@@ -46,7 +46,7 @@ public class PurchaseServiceTests
         _users.GetAll().Returns(Array.Empty<AppUser>());
         _albumRatings.GetAllLikedByUser().Returns(Array.Empty<LikedAlbum>());
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase));
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase));
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
         _downloader.Name.Returns("test-backend");
         _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
@@ -172,9 +172,9 @@ public class PurchaseServiceTests
         await _purchases.SetStatus(PurchaseKey.ForAlbum("Milo", likedTitle), PurchaseStatus.Sent);
 
         // It has since landed in Plex under the typographically-different title.
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Milo"] = new(StringComparer.OrdinalIgnoreCase) { plexTitle },
+            ["Milo"] = new(StringComparer.OrdinalIgnoreCase) { [plexTitle] = null },
         });
 
         var active = await _sut.GetActive();
@@ -202,9 +202,9 @@ public class PurchaseServiceTests
         await _purchases.SetStatus(PurchaseKey.ForAlbum("Milo", "Nostrum Grocers"), PurchaseStatus.Sent);
 
         // It has since landed in Plex, filed under the album-artist "Nostrum Grocers" — not "Milo".
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Nostrum Grocers"] = new(StringComparer.OrdinalIgnoreCase) { "Nostrum Grocers" },
+            ["Nostrum Grocers"] = new(StringComparer.OrdinalIgnoreCase) { ["Nostrum Grocers"] = null },
         });
 
         var active = await _sut.GetActive();
@@ -338,9 +338,9 @@ public class PurchaseServiceTests
         (await _sut.GetActive()).Single(p => p.Id == id).Status.Should().Be(PurchaseStatus.Pending);
 
         // The library owns it under the near-miss title; the user merges the two by hand.
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Mick Gordon"] = new(StringComparer.OrdinalIgnoreCase) { plexTitle },
+            ["Mick Gordon"] = new(StringComparer.OrdinalIgnoreCase) { [plexTitle] = null },
         });
         (await _sut.MergeCandidates("Mick Gordon", deezerTitle, null))
             .Should().Equal(new LibraryAlbumOption("Mick Gordon", plexTitle));
@@ -367,10 +367,10 @@ public class PurchaseServiceTests
         // The library files "Care Tracts" under "Matthewdavid's Mindflight"; Deezer lists it under the
         // plain "Matthewdavid", which the library also has (with an unrelated album). Nothing owned
         // under the listing artist matches, so the suggestion has to come from the same-title sweep.
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Matthewdavid"] = new(StringComparer.OrdinalIgnoreCase) { "Outmind" },
-            ["Matthewdavid's Mindflight"] = new(StringComparer.OrdinalIgnoreCase) { "Care Tracts" },
+            ["Matthewdavid"] = new(StringComparer.OrdinalIgnoreCase) { ["Outmind"] = null },
+            ["Matthewdavid's Mindflight"] = new(StringComparer.OrdinalIgnoreCase) { ["Care Tracts"] = null },
         });
 
         var candidates = await _sut.MergeCandidates("Matthewdavid", "Care Tracts", null);
@@ -465,9 +465,9 @@ public class PurchaseServiceTests
 
         // Plex files a compilation under its "Various Artists" bucket, which is exactly the act the row
         // was filed under — so the ordinary ownership check closes the loop, with no special case.
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { "Cluster Flies" },
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
         });
 
         (await _sut.GetActive()).Should().BeEmpty();
@@ -511,9 +511,9 @@ public class PurchaseServiceTests
     public async Task Manual_add_of_an_owned_album_reports_it_rather_than_queueing_a_redundant_grab()
     {
         DeezerAlbum(99, "Farmhouse", "Phish");
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Phish"] = new(StringComparer.OrdinalIgnoreCase) { "Farmhouse" },
+            ["Phish"] = new(StringComparer.OrdinalIgnoreCase) { ["Farmhouse"] = null },
         });
 
         (await _sut.AddManual("99")).Result.Should().Be(ManualAddResult.AlreadyOwned);
@@ -645,5 +645,62 @@ public class PurchaseServiceTests
         // These tests construct UserQualityService with a Lossless default.
         active.Single(p => p.Kind == FeedKind.MissingAlbum).TargetQuality
             .Should().Be(AudioQuality.Lossless);
+    }
+
+    // ---- Re-fetching when the target outgrows what was actually downloaded ----
+
+    [Fact]
+    public async Task A_row_downloaded_below_what_is_now_wanted_is_sent_back_to_be_refetched()
+    {
+        // Kelsey liked it first, so it came down as 320 and closed out. Justin then likes the same
+        // album. Ownership is a boolean, so without this the row simply reads as "we have it" and his
+        // request is silently satisfied by her copy.
+        UserTier("kelsey", AudioQuality.Lossy);
+        UserTier("justin", AudioQuality.Lossless);
+        _purchases.Seed(new PurchaseItem(
+            PurchaseKey.ForAlbum("Alvvays", "Blue Rev"), FeedKind.MissingAlbum,
+            new ArtistKey("Alvvays"), "Blue Rev", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Sent, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1,
+            AcquiredQuality: AudioQuality.Lossy));
+        LikedBy(("kelsey", "Alvvays", "Blue Rev"), ("justin", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        var row = active.Single(p => p.Kind == FeedKind.MissingAlbum);
+        row.Status.Should().Be(PurchaseStatus.Pending);
+        row.TargetQuality.Should().Be(AudioQuality.Lossless);
+    }
+
+    [Fact]
+    public async Task A_row_that_already_got_what_is_wanted_is_left_alone()
+    {
+        UserTier("justin", AudioQuality.Lossless);
+        _purchases.Seed(new PurchaseItem(
+            PurchaseKey.ForAlbum("Alvvays", "Blue Rev"), FeedKind.MissingAlbum,
+            new ArtistKey("Alvvays"), "Blue Rev", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Sent, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1,
+            AcquiredQuality: AudioQuality.Lossless));
+        LikedBy(("justin", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).Status.Should().Be(PurchaseStatus.Sent);
+    }
+
+    [Fact]
+    public async Task A_row_that_never_recorded_what_it_got_is_not_refetched()
+    {
+        // Every row written before quality tracking looks like this. Treating "we don't know" as
+        // "it fell short" would re-queue the entire back catalogue on the first reconcile.
+        UserTier("justin", AudioQuality.Lossless);
+        _purchases.Seed(new PurchaseItem(
+            PurchaseKey.ForAlbum("Alvvays", "Blue Rev"), FeedKind.MissingAlbum,
+            new ArtistKey("Alvvays"), "Blue Rev", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Sent, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1));
+        LikedBy(("justin", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).Status.Should().Be(PurchaseStatus.Sent);
     }
 }

@@ -51,12 +51,17 @@ public class MissingAlbumRefresherTests
             artist = new DeezerArtist { id = artistId },
         };
 
-    private static Dictionary<string, HashSet<string>> Owned(params (string Artist, string[] Albums)[] entries)
+    /// <summary>
+    /// The owned-albums map. Quality is null throughout — "we haven't determined it" — which is what
+    /// these cases want: they are about which albums are owned, not how good the copies are.
+    /// </summary>
+    private static Dictionary<string, Dictionary<string, AudioQuality?>> Owned(
+        params (string Artist, string[] Albums)[] entries)
     {
-        var d = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var d = new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase);
         foreach (var (artist, albums) in entries)
         {
-            d[artist] = new HashSet<string>(albums, StringComparer.OrdinalIgnoreCase);
+            d[artist] = albums.ToDictionary(a => a, _ => (AudioQuality?)null, StringComparer.OrdinalIgnoreCase);
         }
         return d;
     }
@@ -72,9 +77,9 @@ public class MissingAlbumRefresherTests
     {
         // Plex stored the title with a typographic apostrophe + title casing; Deezer returns a straight
         // apostrophe, all lower-case. Same album — it must not be reported as missing.
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            [Artist] = new(StringComparer.OrdinalIgnoreCase) { "So the Flies Don’t Come" },
+            [Artist] = new(StringComparer.OrdinalIgnoreCase) { ["So the Flies Don’t Come"] = null },
         });
         _deezer.GetAlbums(DeezerId).Returns(new[] { Album("so the flies don't come") });
 
@@ -86,9 +91,9 @@ public class MissingAlbumRefresherTests
     [Fact]
     public async Task Genuinely_absent_album_is_still_reported_missing()
     {
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            [Artist] = new(StringComparer.OrdinalIgnoreCase) { "So the Flies Don’t Come" },
+            [Artist] = new(StringComparer.OrdinalIgnoreCase) { ["So the Flies Don’t Come"] = null },
         });
         _deezer.GetAlbums(DeezerId).Returns(new[]
         {

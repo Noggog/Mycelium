@@ -1,3 +1,5 @@
+using Mycelium.Interfaces;
+
 namespace Mycelium.Backend.Services.Download;
 
 /// <summary>
@@ -30,6 +32,27 @@ public static class DownloadStaging
     };
 
     public static bool IsAudio(string path) => AudioExtensions.Contains(Path.GetExtension(path));
+
+    // Which container extensions are lossless. Mirrors AudioQualityTier.FromCodec, which works off
+    // Plex's codec names; here the only evidence is the filename streamrip chose.
+    private static readonly HashSet<string> LosslessExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { ".flac", ".alac", ".wav", ".aiff", ".aif", ".wv" };
+
+    /// <summary>
+    /// The tier of what is sitting in <paramref name="dir"/>, by the same majority rule the library
+    /// scan uses — so an album that came down lossless except for the one track Deezer would only
+    /// serve at 320 reads as lossless in both places. Null when there are no audio files to judge.
+    /// </summary>
+    public static AudioQuality? QualityOf(string dir)
+    {
+        var files = AudioFiles(dir);
+        return files.Count == 0
+            ? null
+            : AudioQualityTier.Majority(files.Select(f =>
+                (AudioQuality?)(LosslessExtensions.Contains(Path.GetExtension(f))
+                    ? AudioQuality.Lossless
+                    : AudioQuality.Lossy)));
+    }
 
     /// <summary>Every audio file anywhere under <paramref name="dir"/>; empty if it doesn't exist.</summary>
     public static IReadOnlyList<string> AudioFiles(string dir) =>

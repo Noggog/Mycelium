@@ -39,6 +39,8 @@ public class AlbumSyncService : BackgroundService
     {
         try
         {
+            // The Deezer diff, not the Plex catalog read — it works off whatever ownership (and
+            // album quality) the last catalog sync stored.
             await _refresher.Refresh();
             // Albums that have since landed in the library close out their purchase rows.
             await _purchases.Reconcile();

@@ -18,6 +18,8 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     private const string FieldAlbumKeys = "albumKeys";
     private const string FieldAlbumKeyTitle = "title";
     private const string FieldAlbumKeyRatingKey = "key";
+    private const string FieldAlbumQuality = "albumQuality";
+    private const string FieldAlbumKeyQuality = "quality";
     private const string FieldGenres = "genres";
     private const string FieldPlexRatingKeys = "plexRatingKeys";
     private const string FieldDeezerId = "deezerId";
@@ -153,16 +155,27 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             new UpdateOptions { IsUpsert = false });
     }
 
-    public async Task SyncAlbums(IReadOnlyList<ArtistAlbums> artistAlbums)
+    public async Task SyncAlbums(IReadOnlyList<ArtistAlbums> artistAlbums, bool qualityKnown = false)
     {
         var writes = new List<WriteModel<BsonDocument>>();
         foreach (var entry in artistAlbums)
         {
+            var update = Builders<BsonDocument>.Update
+                .Set(FieldAlbums, new BsonArray(entry.Albums.Select(a => a.Title)))
+                .Set(FieldAlbumKeys, new BsonArray(entry.Albums.Select(ToAlbumKeyDoc)));
+
+            // Quality is only overwritten by a sync that actually read it. The frequent callers are
+            // settle passes, which skip the (expensive) track sweep — writing their empty result here
+            // would erase what the last daily sweep learned and blank the upgrade feed between syncs.
+            if (qualityKnown)
+            {
+                update = update.Set(
+                    FieldAlbumQuality,
+                    new BsonArray(entry.Albums.Where(a => a.Quality is not null).Select(ToAlbumQualityDoc)));
+            }
+
             writes.Add(new UpdateOneModel<BsonDocument>(
-                Builders<BsonDocument>.Filter.Eq("_id", entry.Artist.ArtistName),
-                Builders<BsonDocument>.Update
-                    .Set(FieldAlbums, new BsonArray(entry.Albums.Select(a => a.Title)))
-                    .Set(FieldAlbumKeys, new BsonArray(entry.Albums.Select(ToAlbumKeyDoc))))
+                Builders<BsonDocument>.Filter.Eq("_id", entry.Artist.ArtistName), update)
             {
                 // Albums come from the same Plex pull as the artist list, so the doc already exists;
                 // never create phantom entries for an artist not in the catalog.
@@ -174,25 +187,44 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         await Collection.BulkWriteAsync(writes);
     }
 
-    public async Task<Dictionary<string, HashSet<string>>> GetOwnedAlbums()
+    public async Task<Dictionary<string, Dictionary<string, AudioQuality?>>> GetOwnedAlbums()
     {
         var cursor = await Collection.FindAsync(
             Builders<BsonDocument>.Filter.Eq(FieldPresent, true),
             new FindOptions<BsonDocument>
             {
-                Projection = Builders<BsonDocument>.Projection.Include(FieldName).Include(FieldAlbums),
+                Projection = Builders<BsonDocument>.Projection
+                    .Include(FieldName).Include(FieldAlbums).Include(FieldAlbumQuality),
             });
 
-        var result = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase);
         foreach (var doc in await cursor.ToListAsync())
         {
             var name = doc.TryGetValue(FieldName, out var n) && !n.IsBsonNull ? n.AsString : doc["_id"].AsString;
-            var albums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // The flat title array stays the authority on *which* albums are owned; quality is
+            // overlaid from its own array, which only quality-bearing syncs write. An album with no
+            // entry there is simply undetermined.
+            var qualities = new Dictionary<string, AudioQuality?>(StringComparer.OrdinalIgnoreCase);
+            if (doc.TryGetValue(FieldAlbumQuality, out var stored) && stored.IsBsonArray)
+            {
+                foreach (var entry in stored.AsBsonArray.OfType<BsonDocument>())
+                {
+                    if (entry.TryGetValue(FieldAlbumKeyTitle, out var title) && title.IsString
+                        && entry.TryGetValue(FieldAlbumKeyQuality, out var q) && q.IsString)
+                    {
+                        qualities[title.AsString] = AudioQualityTier.Parse(q.AsString);
+                    }
+                }
+            }
+
+            var albums = new Dictionary<string, AudioQuality?>(StringComparer.OrdinalIgnoreCase);
             if (doc.TryGetValue(FieldAlbums, out var a) && a.IsBsonArray)
             {
                 foreach (var item in a.AsBsonArray.Where(x => !x.IsBsonNull))
                 {
-                    albums.Add(item.AsString);
+                    var title = item.AsString;
+                    albums[title] = qualities.TryGetValue(title, out var quality) ? quality : null;
                 }
             }
             result[name] = albums;
@@ -239,6 +271,20 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     {
         { FieldAlbumKeyTitle, album.Title },
         { FieldAlbumKeyRatingKey, album.PlexRatingKey },
+    };
+
+    /// <summary>
+    /// One album's determined quality, as an array entry rather than a map key: album titles contain
+    /// dots ("Vol. 1"), which BSON field names cannot safely carry.
+    ///
+    /// <para>Albums whose quality we couldn't determine are omitted entirely — "we never looked" and
+    /// "we looked and learned nothing" are the same answer (don't know), and neither should imply an
+    /// upgrade is due.</para>
+    /// </summary>
+    private static BsonDocument ToAlbumQualityDoc(OwnedAlbum album) => new()
+    {
+        { FieldAlbumKeyTitle, album.Title },
+        { FieldAlbumKeyQuality, album.Quality!.Value.ToString() },
     };
 
     public async Task<string[]> FindCombinedArtistNames()

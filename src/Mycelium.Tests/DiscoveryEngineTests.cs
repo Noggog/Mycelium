@@ -50,7 +50,7 @@ public class DiscoveryEngineTests
         _queue.CountPending(User).Returns(0);
         _queue.GetPending(User, Arg.Any<int>(), Arg.Any<int>())
             .Returns(new DiscoveryPage(Array.Empty<DiscoveryCandidate>(), 0, 20, 0));
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase));
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase));
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
         _albumRatings.GetDecidedKeys(User).Returns(new HashSet<string>());
         _blocks.GetAll().Returns(Array.Empty<AlbumBlock>());
@@ -657,9 +657,9 @@ public class DiscoveryEngineTests
             new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
             new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("U.F.O.F."), "art", DiscoveryStatus.Liked),
         });
-        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Big Thief"] = new(StringComparer.OrdinalIgnoreCase) { "Capacity" }, // now owned -> hidden
+            ["Big Thief"] = new(StringComparer.OrdinalIgnoreCase) { ["Capacity"] = null }, // now owned -> hidden
         });
 
         var ratings = await _sut.GetRatings(User);

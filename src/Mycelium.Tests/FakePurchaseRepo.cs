@@ -27,12 +27,22 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 AlbumArtist = item.AlbumArtist ?? existing.AlbumArtist,
                 DeezerAlbumId = item.DeezerAlbumId ?? existing.DeezerAlbumId,
                 Manual = existing.Manual,
+                // What a previous download produced is history, not a display field — a reconcile
+                // must not erase it. (The Mongo repo gets this for free: its upsert never names this
+                // field, so the stored value is left alone. Here the whole record is replaced, so it
+                // has to be carried across explicitly.) TargetQuality is deliberately NOT carried:
+                // it is recomputed from who currently wants the album, and must be free to rise.
+                AcquiredQuality = existing.AcquiredQuality,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;
     }
 
-    public Task<bool> SetStatus(string id, PurchaseStatus status, DownloadFailure failure = DownloadFailure.None)
+    public Task<bool> SetStatus(
+        string id,
+        PurchaseStatus status,
+        DownloadFailure failure = DownloadFailure.None,
+        AudioQuality? acquired = null)
     {
         if (!_items.TryGetValue(id, out var item))
         {
@@ -45,6 +55,9 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
             // Mirrors the Mongo repo: the reason is only meaningful on a Failed row, and any other
             // transition clears it so a retry doesn't inherit the last explanation.
             Failure = status == PurchaseStatus.Failed ? failure : DownloadFailure.None,
+            // Also mirrors the Mongo repo: only ever written, never cleared, so a backend that
+            // couldn't say what it got doesn't erase what an earlier attempt reported.
+            AcquiredQuality = acquired ?? item.AcquiredQuality,
         };
         return Task.FromResult(true);
     }

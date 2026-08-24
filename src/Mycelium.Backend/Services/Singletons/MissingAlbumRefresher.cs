@@ -124,7 +124,7 @@ public class MissingAlbumRefresher
     /// rather than replaced with an empty set we have no evidence for.
     /// </exception>
     public async Task<IReadOnlyList<MissingAlbum>> RefreshOne(
-        ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
+        ArtistKey artist, IReadOnlyDictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums)
     {
         var diff = await FetchAndDiff(artist, ownedAlbums, ArtistResolution.Full);
         var missing = diff?.Missing ?? new List<MissingAlbum>();
@@ -159,14 +159,14 @@ public class MissingAlbumRefresher
     /// would otherwise see (and the client would cache) as "this artist has no albums".
     /// </exception>
     public async Task<IReadOnlyList<DiscographyAlbum>> Discography(
-        ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
+        ArtistKey artist, IReadOnlyDictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums)
     {
         var diff = await FetchAndDiff(artist, ownedAlbums, ArtistResolution.OwnershipOnly);
         await _missing.ReplaceForArtist(artist.ArtistName, diff?.Missing ?? new List<MissingAlbum>());
 
         var all = diff?.All.ToList() ?? new List<DiscographyAlbum>();
         var ownedAlbumTitles = ownedAlbums.TryGetValue(artist.ArtistName, out var ownedSet)
-            ? (IEnumerable<string>)ownedSet
+            ? (IEnumerable<string>)ownedSet.Keys
             : Array.Empty<string>();
         // Fold in owned albums Deezer didn't surface at all (no match, or a title too far off to pair)
         // so the library's view is the source of truth for what we have.
@@ -220,7 +220,7 @@ public class MissingAlbumRefresher
     /// </exception>
     private async Task<(List<DiscographyAlbum> All, List<MissingAlbum> Missing)?> FetchAndDiff(
         ArtistKey artist,
-        IReadOnlyDictionary<string, HashSet<string>> ownedAlbums,
+        IReadOnlyDictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums,
         ArtistResolution resolution)
     {
         var lookup = await _resolver.Lookup(artist.ArtistName);
@@ -245,15 +245,35 @@ public class MissingAlbumRefresher
 
         var catalog = await Backfill(deezerId.Value, lookup.Value!.Name ?? artist.ArtistName, listing);
 
-        // Normalized owned titles per artist name, computed lazily and memoised for this pass — so the
-        // common (scanning artist) lookup and any album-artist lookup share the work.
-        var normalizedOwned = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> OwnedTitlesFor(string artistName) =>
-            normalizedOwned.TryGetValue(artistName, out var n)
-                ? n
-                : normalizedOwned[artistName] = (ownedAlbums.TryGetValue(artistName, out var set)
-                    ? set.Select(NormalizeTitle)
-                    : Enumerable.Empty<string>()).ToHashSet(StringComparer.Ordinal);
+        // Normalized owned titles per artist name, mapped to the quality of the copy on disk, computed
+        // lazily and memoised for this pass — so the common (scanning artist) lookup and any
+        // album-artist lookup share the work. Presence answers "do we own it"; the value answers "is
+        // what we have good enough", which is a separate question the diff asks second.
+        var normalizedOwned = new Dictionary<string, Dictionary<string, AudioQuality?>>(
+            StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, AudioQuality?> OwnedTitlesFor(string artistName)
+        {
+            if (normalizedOwned.TryGetValue(artistName, out var cached))
+            {
+                return cached;
+            }
+
+            var byTitle = new Dictionary<string, AudioQuality?>(StringComparer.Ordinal);
+            if (ownedAlbums.TryGetValue(artistName, out var albums))
+            {
+                foreach (var (title, quality) in albums)
+                {
+                    // Two library titles can normalize to the same key (a punctuation variant). Keep
+                    // the better copy: owning a record twice, once lossless, is not owning a lossy one.
+                    var key = NormalizeTitle(title);
+                    if (!byTitle.TryGetValue(key, out var existing) || quality > existing)
+                    {
+                        byTitle[key] = quality;
+                    }
+                }
+            }
+            return normalizedOwned[artistName] = byTitle;
+        }
 
         var scannedOwned = OwnedTitlesFor(artist.ArtistName);
 
@@ -268,7 +288,7 @@ public class MissingAlbumRefresher
         // against — the two ways a release not in the scanning artist's own set can still turn out to be
         // owned. Both are whole-library sets, so they're built only if something actually asks.
         var ownedAnywhere = new Lazy<HashSet<string>>(() => ownedAlbums.Values
-            .SelectMany(titles => titles)
+            .SelectMany(albums => albums.Keys)
             .Select(NormalizeTitle)
             .ToHashSet(StringComparer.Ordinal));
         var mergedTitles = new Lazy<HashSet<string>>(() => overrides
@@ -303,7 +323,7 @@ public class MissingAlbumRefresher
                 continue;
             }
 
-            var owned = scannedOwned.Contains(key)
+            var owned = scannedOwned.ContainsKey(key)
                         || overrideKeys.Contains(AlbumOverrideKey.For(artist.ArtistName, album.title));
             rows.Add((album, key, owned));
         }
@@ -329,7 +349,7 @@ public class MissingAlbumRefresher
                 && !string.Equals(resolved, artist.ArtistName, StringComparison.OrdinalIgnoreCase))
             {
                 albumArtist = new ArtistKey(resolved);
-                isOwned = OwnedTitlesFor(resolved).Contains(key)
+                isOwned = OwnedTitlesFor(resolved).ContainsKey(key)
                           || overrideKeys.Contains(AlbumOverrideKey.For(resolved, album.title));
             }
 

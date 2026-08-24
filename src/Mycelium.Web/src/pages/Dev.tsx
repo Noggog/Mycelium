@@ -16,6 +16,7 @@ import {
   getUserQualities,
   reapplyPlexTags,
   rebuildPlexTags,
+  runQualitySweep,
   setUserQuality,
   startSimilarityWarm,
   type RebuildResult,
@@ -51,6 +52,7 @@ export default function Dev() {
     <section>
       <h1>Dev tools</h1>
       <CatalogRefresh />
+      <QualitySweep />
       <UserQuality />
       <CleanupTool />
       <PlexTagTools />
@@ -104,6 +106,47 @@ function QueueRebuild() {
       {rebuild.isError && <p className="error">Rebuild failed: {(rebuild.error as Error).message}</p>}
       {rebuild.isSuccess && (
         <p className="dev-status">✓ Rebuilt {rebuild.data?.rebuilt ?? 'all'} recommendation queues.</p>
+      )}
+    </div>
+  )
+}
+
+// ---- One-off audio-quality catch-up ----
+
+function QualitySweep() {
+  const queryClient = useQueryClient()
+  const sweep = useMutation({
+    mutationFn: runQualitySweep,
+    onSuccess: () => {
+      // Ownership now carries quality, which the feed and the to-buy list both read.
+      queryClient.invalidateQueries({ queryKey: ['feed'] })
+      queryClient.invalidateQueries({ queryKey: ['purchases'] })
+    },
+  })
+
+  return (
+    <div className="dev-tool">
+      <h2>Audio quality sweep</h2>
+      <p>
+        Reads every track in the Plex library to work out what format each album is actually in.
+        Needed <strong>once</strong>, to fill in albums that predate quality tracking — after that the
+        ordinary syncs resolve new arrivals a few at a time, whether they came from a download or were
+        dropped into the library by hand.
+      </p>
+      <p>
+        Takes roughly <strong>20&ndash;30 seconds</strong> on a large library and only reads from Plex
+        — nothing is moved, changed or downloaded.
+      </p>
+
+      <div className="controls">
+        <button type="button" onClick={() => sweep.mutate()} disabled={sweep.isPending}>
+          {sweep.isPending ? 'Sweeping…' : 'Run quality sweep'}
+        </button>
+      </div>
+
+      {sweep.isError && <p className="error">Sweep failed: {(sweep.error as Error).message}</p>}
+      {sweep.isSuccess && (
+        <p className="dev-status">✓ Swept the library ({sweep.data?.artists ?? 0} artists).</p>
       )}
     </div>
   )

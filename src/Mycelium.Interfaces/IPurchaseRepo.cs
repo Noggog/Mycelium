@@ -65,7 +65,13 @@ public record PurchaseItem(
     // since a lossy user riding along on a lossless request costs nothing while the reverse would
     // quietly cheat the lossless user. Null on rows written before tiers existed and on artist rows
     // (nothing downloads for an artist); the downloader falls back to its configured quality then.
-    AudioQuality? TargetQuality = null);
+    AudioQuality? TargetQuality = null,
+    // What the last successful download actually produced, which the fallback ladder means is often
+    // below what was asked for. Distinguishes "Deezer has nothing better than this" from "nobody has
+    // asked for better yet" — without it, an album fetched as 320 for a lossy user looks identical to
+    // one nobody has tried, and would be re-offered as an upgrade forever. Null on rows that have
+    // never downloaded, and on everything written before tiers existed.
+    AudioQuality? AcquiredQuality = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -164,7 +170,11 @@ public interface IPurchaseRepo
     /// Any non-Failed status clears the stored reason, so a row that later succeeds or is re-queued
     /// doesn't keep displaying a stale explanation.
     /// </summary>
-    Task<bool> SetStatus(string id, PurchaseStatus status, DownloadFailure failure = DownloadFailure.None);
+    Task<bool> SetStatus(
+        string id,
+        PurchaseStatus status,
+        DownloadFailure failure = DownloadFailure.None,
+        AudioQuality? acquired = null);
 
     /// <summary>Removes a row entirely (no longer wanted).</summary>
     Task Remove(string id);

@@ -27,6 +27,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldFailure = "failure";
     private const string FieldManual = "manual";
     private const string FieldTargetQuality = "targetQuality";
+    private const string FieldAcquiredQuality = "acquiredQuality";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -89,7 +90,10 @@ public class PurchaseRepo : IPurchaseRepo
     }
 
     public async Task<bool> SetStatus(
-        string id, PurchaseStatus status, DownloadFailure failure = DownloadFailure.None)
+        string id,
+        PurchaseStatus status,
+        DownloadFailure failure = DownloadFailure.None,
+        AudioQuality? acquired = null)
     {
         // Written on every transition, not just failures: a row moving back to Queued/Pending for a
         // retry must lose the previous reason, or the page would keep explaining a failure that no
@@ -100,6 +104,13 @@ public class PurchaseRepo : IPurchaseRepo
         if (status == PurchaseStatus.Sent)
         {
             update = update.Set(FieldSentAt, DateTimeOffset.UtcNow.UtcDateTime);
+        }
+
+        // Only ever written, never cleared: a backend that couldn't report what it got shouldn't
+        // erase what an earlier attempt did report.
+        if (acquired is not null)
+        {
+            update = update.Set(FieldAcquiredQuality, acquired.Value.ToString());
         }
 
         var result = await Collection.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", id), update);
@@ -144,6 +155,7 @@ public class PurchaseRepo : IPurchaseRepo
             StrN(FieldAlbumArtist), failure, manual,
             // Absent on rows written before tiers existed; the downloader then uses its configured
             // quality, which is exactly what those rows would have downloaded at anyway.
-            AudioQualityTier.Parse(StrN(FieldTargetQuality)));
+            AudioQualityTier.Parse(StrN(FieldTargetQuality)),
+            AudioQualityTier.Parse(StrN(FieldAcquiredQuality)));
     }
 }

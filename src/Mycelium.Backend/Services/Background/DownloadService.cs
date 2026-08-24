@@ -207,7 +207,8 @@ public class DownloadService : BackgroundService
         await _repo.SetStatus(
             item.Id,
             outcome.Accepted ? PurchaseStatus.Sent : PurchaseStatus.Failed,
-            outcome.Failure);
+            outcome.Failure,
+            outcome.Acquired);
         return true;
     }
 
@@ -357,7 +358,10 @@ public class DownloadService : BackgroundService
 
             _logger.LogInformation(
                 "Settle pass: {Waiting} downloaded album(s) awaiting the library; refreshing the catalog", waiting);
-            var result = await _catalog.Refresh();
+            // Gap-fill: this pass runs every few minutes for hours, but the only albums it can find
+            // without a recorded quality are the ones that just landed — so the album this settle
+            // pass is waiting for gets its quality the moment it appears, for one small read.
+            var result = await _catalog.Refresh(CatalogRefresher.QualityRead.GapFill);
             await _purchases.Reconcile();
             // This is the payoff moment for an artist liked before the library had it: the album just
             // landed, so stamp the verdict mood the rating couldn't write back then.

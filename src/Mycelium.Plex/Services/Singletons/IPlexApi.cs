@@ -17,6 +17,25 @@ public interface IPlexApi
     Task<PlexMusicAlbum[]> GetMusicAlbums(int library);
 
     /// <summary>
+    /// Every track in the library, each carrying the album it belongs to and the codec of its media —
+    /// the only place Plex exposes what format the files actually are (the album listing has no media
+    /// info at all, and asking per album would be one request each).
+    ///
+    /// <para>Paged internally via <c>X-Plex-Container-Start/Size</c>, since this is the whole library
+    /// in one call: measured at ~82k tracks in ~22s over 17 pages. Genre/Image/Mood/Style/Collection
+    /// are excluded from the response — they roughly halve the payload and nothing here reads
+    /// them.</para>
+    /// </summary>
+    Task<PlexLibraryTrack[]> GetMusicTracks(int library);
+
+    /// <summary>
+    /// The tracks of one album, for reading its codecs without sweeping the whole library. ~14ms per
+    /// call against a real server, so resolving a handful of newly-arrived albums is far cheaper than
+    /// re-reading all ~82k tracks. Empty when the rating key no longer resolves.
+    /// </summary>
+    Task<PlexLibraryTrack[]> GetAlbumTracks(int albumRatingKey);
+
+    /// <summary>
     /// Every track ("leaf") under an artist rating key, across all their albums, carrying each track's
     /// per-account <c>userRating</c> (Plex's 0–10 scale; null when unrated). Empty when the key no longer
     /// resolves. Used to summarise the user's song ratings for an artist in the discovery readout.

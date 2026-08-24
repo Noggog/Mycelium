@@ -41,14 +41,25 @@ public interface IArtistCatalogRepo
     /// Stores the owned album titles for each artist (from the same Plex pull as the artist list),
     /// so the missing-album diff can run against the local catalog. Only touches artists already
     /// present — never creates phantom entries.
+    ///
+    /// <para><paramref name="qualityKnown"/> says whether this pull actually determined each album's
+    /// format. Only then is the stored quality overwritten: the frequent callers are settle passes
+    /// that skip the expensive track sweep, and writing their empty result would erase what the last
+    /// full sweep learned.</para>
     /// </summary>
-    Task SyncAlbums(IReadOnlyList<ArtistAlbums> artistAlbums);
+    Task SyncAlbums(IReadOnlyList<ArtistAlbums> artistAlbums, bool qualityKnown = false);
 
     /// <summary>
-    /// The owned album titles per artist, keyed by artist name (case-insensitive). Used by the
-    /// missing-album diff and to hide ratings for albums that have since been acquired.
+    /// The owned albums per artist — outer key artist name, inner key album title, both
+    /// case-insensitive — each mapped to how good the copy on disk is. Used by the missing-album diff
+    /// and to hide ratings for albums that have since been acquired.
+    ///
+    /// <para>Presence in the inner dictionary is what "we own this" means; the value is a separate
+    /// question. A null value is "we haven't determined the quality" (synced before quality tracking,
+    /// or Plex reported no codecs) and must never be read as "needs upgrading" — see
+    /// <see cref="AudioQuality"/> for why that falls out of the comparison for free.</para>
     /// </summary>
-    Task<Dictionary<string, HashSet<string>>> GetOwnedAlbums();
+    Task<Dictionary<string, Dictionary<string, AudioQuality?>>> GetOwnedAlbums();
 
     /// <summary>
     /// The Plex rating key of each owned album title, for the named artists only — outer key artist,

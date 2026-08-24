@@ -66,6 +66,20 @@ export async function rebuildPlexTags(): Promise<RebuildResult> {
   return (await res.json()) as RebuildResult
 }
 
+export interface QualitySweepResult {
+  artists: number
+}
+
+// Re-derive every owned album's audio quality from a full read of the Plex library. Needed once, to
+// fill in a library that predates quality tracking; ordinary syncs gap-fill new arrivals after that.
+export async function runQualitySweep(): Promise<QualitySweepResult> {
+  const res = await fetch('/api/dev/catalog/quality-sweep', { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Quality sweep failed: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as QualitySweepResult
+}
+
 // Progress of a whole-library similarity warm (mirrors SimilarityWarmStatus on the backend).
 export interface SimilarityWarmStatus {
   running: boolean

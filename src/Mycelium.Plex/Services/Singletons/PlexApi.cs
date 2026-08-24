@@ -115,6 +115,81 @@ public class PlexApi : IPlexApi
     }
 
     /// <summary>
+    /// The whole library's tracks, paged. Plex caps a container at whatever it feels like, so the loop
+    /// trusts <c>totalSize</c> and the count actually returned rather than assuming the page size was
+    /// honoured; a page that comes back empty ends the sweep so a server that disagrees about paging
+    /// can't spin here forever.
+    /// </summary>
+    public async Task<PlexLibraryTrack[]> GetMusicTracks(int library)
+    {
+        const int pageSize = 5000;
+        var results = new List<PlexLibraryTrack>();
+        var start = 0;
+        int? total = null;
+
+        while (total is null || start < total)
+        {
+            // type=10 is the track metadata type. The excludes drop tag arrays we never read here and
+            // roughly halve the response.
+            var url = $"{_endpointInfo.BaseUri}/library/sections/{library}/all?type=10"
+                      + $"&X-Plex-Container-Start={start}&X-Plex-Container-Size={pageSize}"
+                      + "&excludeElements=Genre,Image,Mood,Style,Collection";
+            _logger.LogDebug("Plex GetMusicTracks page from {Start}: {Url}", start, url);
+
+            var data = JObject.Parse(await httpClient.GetStringAsync(url));
+            var container = data["MediaContainer"];
+            total ??= container?["totalSize"]?.Value<int>() ?? container?["size"]?.Value<int>() ?? 0;
+
+            var metadata = container?["Metadata"] as JArray;
+            var returned = metadata?.Count ?? 0;
+            if (returned == 0)
+            {
+                break;
+            }
+
+            foreach (var item in metadata!)
+            {
+                results.Add(new PlexLibraryTrack
+                {
+                    // The album this track sits under. Plex hands back rating keys as strings here.
+                    AlbumRatingKey = int.TryParse(item["parentRatingKey"]?.ToString(), out var key) ? key : 0,
+                    AudioCodec = item["Media"]?.FirstOrDefault()?["audioCodec"]?.ToString(),
+                });
+            }
+
+            start += returned;
+        }
+
+        _logger.LogInformation(
+            "Plex GetMusicTracks: read {Count} track(s) from library {Library}", results.Count, library);
+        return results.ToArray();
+    }
+
+    public async Task<PlexLibraryTrack[]> GetAlbumTracks(int albumRatingKey)
+    {
+        var url = $"{_endpointInfo.BaseUri}/library/metadata/{albumRatingKey}/children";
+        _logger.LogDebug("Plex GetAlbumTracks {RatingKey}: {Url}", albumRatingKey, url);
+        var response = await httpClient.GetAsync(url);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            // The album was removed, or a library rebuild shifted the keys. Not an error: the next
+            // catalog sync re-reads the key, and an album we can't read simply has no known quality.
+            return Array.Empty<PlexLibraryTrack>();
+        }
+
+        response.EnsureSuccessStatusCode();
+        var data = JObject.Parse(await response.Content.ReadAsStringAsync());
+        var metadata = data["MediaContainer"]?["Metadata"] as JArray;
+        return metadata?
+            .Select(item => new PlexLibraryTrack
+            {
+                AlbumRatingKey = albumRatingKey,
+                AudioCodec = item["Media"]?.FirstOrDefault()?["audioCodec"]?.ToString(),
+            })
+            .ToArray() ?? Array.Empty<PlexLibraryTrack>();
+    }
+
+    /// <summary>
     /// All tracks under an artist via <c>/library/metadata/{ratingKey}/allLeaves</c> — Plex flattens the
     /// artist's albums into one track list. Each track carries <c>userRating</c> (0–10, the token
     /// account's rating; absent when unrated). Returns empty when the key 404s (item removed / keys
@@ -359,6 +434,21 @@ public record PlexMusicArtist
 public record PlexTag
 {
     public string Tag { get; set; }
+}
+
+/// <summary>
+/// One track from the library-wide sweep, cut down to the two things the quality diff needs: which
+/// album it belongs to, and what it is encoded as. Deliberately not <see cref="PlexTrack"/> — that is
+/// the per-artist <c>allLeaves</c> shape and carries <c>userRating</c>, which is per-account and has
+/// no meaning on an untokenised library-wide read.
+/// </summary>
+public record PlexLibraryTrack
+{
+    /// <summary>The album's rating key (Plex's <c>parentRatingKey</c>); 0 when it didn't parse.</summary>
+    public int AlbumRatingKey { get; set; }
+
+    /// <summary>e.g. "flac", "mp3", "aac". Null when Plex reported no media for the track.</summary>
+    public string? AudioCodec { get; set; }
 }
 
 public record PlexMusicAlbum

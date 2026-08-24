@@ -41,7 +41,7 @@ public class DownloadServiceTests
         _libraryQuery.QueryAllAlbums().Returns(Array.Empty<ArtistAlbums>());
         _catalogRepo.SyncFromLibrary(Arg.Any<IReadOnlyList<ArtistMetadata>>(), Arg.Any<DateTimeOffset>())
             .Returns(new CatalogSyncResult(0, 0, 0, Array.Empty<string>()));
-        _catalogRepo.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase));
+        _catalogRepo.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase));
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _queue.GetAllLiked().Returns(Array.Empty<DiscoveryCandidate>());
         _albumRatings.GetAllLiked().Returns(Array.Empty<AlbumRating>());
@@ -350,9 +350,9 @@ public class DownloadServiceTests
     {
         _repo.Seed(Album("Big Thief", "Capacity", 1, PurchaseStatus.Sent) with { SentAt = DateTimeOffset.UtcNow });
         // The file has landed and Plex now lists it, so the refresh this pass triggers finds it owned.
-        _catalogRepo.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        _catalogRepo.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Big Thief"] = new(StringComparer.Ordinal) { "capacity" },
+            ["Big Thief"] = new(StringComparer.Ordinal) { ["capacity"] = null },
         });
 
         await Sut().SettleOnce();

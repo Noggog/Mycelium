@@ -42,7 +42,9 @@ public class CatalogSyncService : BackgroundService
     {
         try
         {
-            var result = await _refresher.Refresh();
+            // Gap-fill, not a full sweep: after the one-off catch-up the only albums without a
+            // recorded quality are new arrivals, and those cost one small read each.
+            var result = await _refresher.Refresh(CatalogRefresher.QualityRead.GapFill);
             // Newly-arrived artists close out their purchase rows (→ in-library, off the buy list).
             await _purchases.Reconcile();
             // ...and finally get the verdict mood their rating couldn't write while they were outside

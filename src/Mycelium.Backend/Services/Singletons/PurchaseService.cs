@@ -147,10 +147,7 @@ public class PurchaseService
             return new ManualAddOutcome(ManualAddResult.AlreadyQueued, existing);
         }
 
-        var ownedAlbums = (await _catalog.GetOwnedAlbums()).ToDictionary(
-            kvp => kvp.Key,
-            kvp => kvp.Value.Select(AlbumTitleMatcher.Normalize).ToHashSet(StringComparer.Ordinal),
-            StringComparer.OrdinalIgnoreCase);
+        var ownedAlbums = NormalizeOwned(await _catalog.GetOwnedAlbums());
         if (AlbumIsOwned(ownedAlbums, await LoadOverrideKeys(), artist, title))
         {
             return new ManualAddOutcome(ManualAddResult.AlreadyOwned, null);
@@ -237,10 +234,7 @@ public class PurchaseService
         // Normalize the owned album titles up front so typography / whitespace / zero-width
         // differences between Plex and Deezer can't keep an already-owned album stuck in the queue.
         // This is the same canonical match the missing-album diff uses, so the two agree.
-        var ownedAlbums = (await _catalog.GetOwnedAlbums()).ToDictionary(
-            kvp => kvp.Key,
-            kvp => kvp.Value.Select(AlbumTitleMatcher.Normalize).ToHashSet(StringComparer.Ordinal),
-            StringComparer.OrdinalIgnoreCase);
+        var ownedAlbums = NormalizeOwned(await _catalog.GetOwnedAlbums());
         // User-asserted merges (near-miss titles the normalizer can't collapse): an album carrying an
         // override key is treated as owned, so it leaves the queue and stays gone across reconciles.
         var overrideKeys = await LoadOverrideKeys();
@@ -317,6 +311,27 @@ public class PurchaseService
                 ? AlbumIsOwned(ownedAlbums, overrideKeys, MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist), row.Album ?? "")
                 : owned.Contains(row.Artist.ArtistName);
 
+            // A row that already downloaded, at a quality below what is now being asked of it, is not
+            // finished — someone entitled to better has since asked for this album. Send it back to be
+            // fetched again rather than letting it close out on the copy that is already on disk.
+            //
+            // Only for a row we know came down short: AcquiredQuality is what the last download
+            // actually produced. Null (never downloaded, or too old to have recorded it) is not
+            // evidence of anything and must not trigger a re-fetch — that would re-queue the entire
+            // back catalogue on the first reconcile after an upgrade.
+            if (desired.TryGetValue(row.Id, out var want)
+                && row.AcquiredQuality is { } have
+                && want.TargetQuality is { } target
+                && have < target
+                && row.Status is PurchaseStatus.Sent or PurchaseStatus.InLibrary)
+            {
+                _logger.LogInformation(
+                    "Re-queueing \"{Album}\" ({Artist}): downloaded at {Have} but now wanted at {Target}",
+                    row.Album, row.Artist.ArtistName, have, target);
+                await _purchases.SetStatus(row.Id, PurchaseStatus.Pending);
+                continue;
+            }
+
             if (nowOwned)
             {
                 if (row.Status != PurchaseStatus.InLibrary)
@@ -341,9 +356,40 @@ public class PurchaseService
         }
     }
 
+    /// <summary>
+    /// Canonicalises the owned map's titles for matching, keeping each album's quality alongside.
+    /// Typography, whitespace and zero-width differences between Plex and Deezer would otherwise keep
+    /// an album we already have stuck in the queue; this is the same canonical match the missing-album
+    /// diff uses, so the two agree. Where two library titles collapse to one key the better copy wins:
+    /// owning a record twice, once losslessly, is not owning a lossy one.
+    /// </summary>
+    private static Dictionary<string, Dictionary<string, AudioQuality?>> NormalizeOwned(
+        Dictionary<string, Dictionary<string, AudioQuality?>> owned)
+    {
+        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (artist, albums) in owned)
+        {
+            var byTitle = new Dictionary<string, AudioQuality?>(StringComparer.Ordinal);
+            foreach (var (title, quality) in albums)
+            {
+                var key = AlbumTitleMatcher.Normalize(title);
+                if (!byTitle.TryGetValue(key, out var existing) || quality > existing)
+                {
+                    byTitle[key] = quality;
+                }
+            }
+            result[artist] = byTitle;
+        }
+        return result;
+    }
+
     private static bool AlbumIsOwned(
-        Dictionary<string, HashSet<string>> ownedAlbums, HashSet<string> overrideKeys, string artist, string album) =>
-        (ownedAlbums.TryGetValue(artist, out var set) && set.Contains(AlbumTitleMatcher.Normalize(album)))
+        Dictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums,
+        HashSet<string> overrideKeys,
+        string artist,
+        string album) =>
+        (ownedAlbums.TryGetValue(artist, out var set)
+         && set.ContainsKey(AlbumTitleMatcher.Normalize(album)))
         || overrideKeys.Contains(AlbumOverrideKey.For(artist, album));
 
     /// <summary>The merge lookup keys (see <see cref="AlbumOverrideKey"/>), one per recorded override.</summary>
@@ -366,7 +412,7 @@ public class PurchaseService
     public async Task<LibraryAlbumOption[]> MergeCandidates(string artist, string album, string? query)
     {
         var all = (await _catalog.GetOwnedAlbums())
-            .SelectMany(kvp => kvp.Value.Select(title => new LibraryAlbumOption(kvp.Key, title)));
+            .SelectMany(kvp => kvp.Value.Keys.Select(title => new LibraryAlbumOption(kvp.Key, title)));
 
         var q = query?.Trim();
         if (!string.IsNullOrEmpty(q))

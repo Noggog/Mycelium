@@ -378,7 +378,10 @@ api.MapPost("/artists/deezer/resolve-all", async (ILibraryProvider library, Deez
 // Daily reads (GET /artists) serve from that catalog, so this is the only Plex-touching path.
 api.MapPost("/catalog/refresh", (CatalogRefresher refresher) =>
     {
-        return refresher.Refresh();
+        // Gap-fill like the scheduled syncs. Re-deriving every album's quality is a separate,
+        // explicitly-named dev action (POST /api/dev/catalog/quality-sweep) rather than a side
+        // effect of pressing "refresh".
+        return refresher.Refresh(CatalogRefresher.QualityRead.GapFill);
     })
     .WithName("RefreshCatalog");
 
@@ -700,6 +703,18 @@ dev.MapPost("/rebuild", async (PlexTagMaintenance maint) =>
         return Results.Ok(new { cleared = result.Cleared, applied = result.Applied });
     })
     .WithName("DevRebuildPlexTags");
+
+// --- Dev panel: audio-quality catch-up sweep ---
+// Re-derives every owned album's format from a paged read of the whole library (~82k tracks, ~22s).
+// Needed once, to fill in a library that predates quality tracking; after that the ordinary syncs
+// gap-fill new arrivals one small read at a time and this is only for recomputing from scratch.
+api.MapPost("/dev/catalog/quality-sweep", async (CatalogRefresher refresher) =>
+    {
+        var result = await refresher.Refresh(CatalogRefresher.QualityRead.Full);
+        return Results.Ok(new { artists = result.TotalPresent });
+    })
+    .RequireAuthorization("DevUser")
+    .WithName("DevAudioQualitySweep");
 
 // --- Dev panel: per-user download quality ---
 // Who is allowed to pull down lossless. The list is the app's own user store, which is populated on

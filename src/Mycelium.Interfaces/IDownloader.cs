@@ -62,9 +62,19 @@ public static class DownloadFailureExtensions
 /// <param name="Accepted">True if the backend acquired/accepted the item (caller advances it to
 /// <see cref="PurchaseStatus.Sent"/>).</param>
 /// <param name="Failure">Why it didn't, or <see cref="DownloadFailure.None"/> when it did.</param>
-public readonly record struct DownloadOutcome(bool Accepted, DownloadFailure Failure = DownloadFailure.None)
+/// <param name="Acquired">
+/// What actually came down, which is not the same as what was asked for: the fallback ladder means a
+/// lossless request routinely returns 320 for an album Deezer has no lossless master of. Only the
+/// downloader can know this — the files alone can't say what was <em>wanted</em> — and it is what
+/// tells a later pass whether re-requesting the album could ever do better. Null when the backend
+/// couldn't say (or nothing was acquired).
+/// </param>
+public readonly record struct DownloadOutcome(
+    bool Accepted,
+    DownloadFailure Failure = DownloadFailure.None,
+    AudioQuality? Acquired = null)
 {
-    public static DownloadOutcome Success() => new(true);
+    public static DownloadOutcome Success(AudioQuality? acquired = null) => new(true, Acquired: acquired);
 
     public static DownloadOutcome Failed(DownloadFailure failure = DownloadFailure.Unknown) =>
         new(false, failure);

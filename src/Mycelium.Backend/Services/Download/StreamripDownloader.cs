@@ -284,11 +284,26 @@ public class StreamripDownloader : IDownloader
                 item.Artist.ArtistName, item.Album, landed, expected, last.Output);
         }
 
+        // Read before promoting: afterwards the files have moved out of staging. This is what the
+        // ladder actually produced, which the row records so a later pass can tell "we already tried
+        // and Deezer has nothing better" apart from "we never asked for better".
+        var acquired = DownloadStaging.QualityOf(preferredDir);
         DownloadStaging.Promote(preferredDir, _config.DownloadDir);
         _logger.LogInformation(
-            "Downloaded {Artist} — {Album}: {Landed} track(s) promoted to {Dir}",
-            item.Artist.ArtistName, item.Album, landed, _config.DownloadDir);
-        return DownloadOutcome.Success();
+            "Downloaded {Artist} — {Album}: {Landed} track(s) promoted to {Dir} as {Acquired}",
+            item.Artist.ArtistName, item.Album, landed, _config.DownloadDir,
+            acquired?.ToString() ?? "unknown quality");
+
+        if (item.TargetQuality is { } wanted && acquired is { } got2 && got2 < wanted)
+        {
+            // Not a failure — a 320 copy is still worth having — but the one fact that stops the
+            // album being re-offered as an upgrade forever.
+            _logger.LogInformation(
+                "{Artist} — {Album} was requested at {Wanted} but Deezer only served {Got}",
+                item.Artist.ArtistName, item.Album, wanted, got2);
+        }
+
+        return DownloadOutcome.Success(acquired);
     }
 
     /// <summary>

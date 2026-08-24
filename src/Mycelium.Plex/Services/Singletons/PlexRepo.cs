@@ -53,9 +53,40 @@ public class PlexRepo : ILibraryQuery
             .ToArray()
         ?? Array.Empty<string>();
 
+    public async Task<Dictionary<int, AudioQuality?>> QueryAlbumQuality(
+        IReadOnlyCollection<int> albumRatingKeys)
+    {
+        var result = new Dictionary<int, AudioQuality?>();
+        foreach (var key in albumRatingKeys.Distinct())
+        {
+            var tracks = await _plexApi.GetAlbumTracks(key);
+            if (tracks.Length == 0)
+            {
+                // No tracks (or the key no longer resolves) is no evidence — leave it absent so it
+                // stays "don't know" rather than being recorded as some quality it isn't.
+                continue;
+            }
+            result[key] = AudioQualityTier.Majority(
+                tracks.Select(t => AudioQualityTier.FromCodec(t.AudioCodec)));
+        }
+        return result;
+    }
+
+    public async Task<Dictionary<int, AudioQuality?>> QueryAllAlbumQuality()
+    {
+        var plexLibrary = await _plexApi.ResolveLibrary();
+        return (await _plexApi.GetMusicTracks(plexLibrary.Key))
+            .Where(t => t.AlbumRatingKey != 0)
+            .GroupBy(t => t.AlbumRatingKey)
+            .ToDictionary(
+                g => g.Key,
+                g => AudioQualityTier.Majority(g.Select(t => AudioQualityTier.FromCodec(t.AudioCodec))));
+    }
+
     public async Task<ArtistAlbums[]> QueryAllAlbums()
     {
         var plexLibrary = await _plexApi.ResolveLibrary();
+
         // Split a ';'-joined ParentTitle so a collaborative album is credited to each artist, then
         // regroup by the real artist name (matching the split done in QueryAllArtistMetadata).
         return (await _plexApi.GetMusicAlbums(plexLibrary.Key))

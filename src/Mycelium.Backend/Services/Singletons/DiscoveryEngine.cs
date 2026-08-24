@@ -637,8 +637,9 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
         return artistItems.Concat(albumItems).ToArray();
     }
 
-    private static bool AlbumIsOwned(Dictionary<string, HashSet<string>> ownedAlbums, string artist, string album) =>
-        ownedAlbums.TryGetValue(artist, out var set) && set.Contains(album);
+    private static bool AlbumIsOwned(
+        Dictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums, string artist, string album) =>
+        ownedAlbums.TryGetValue(artist, out var set) && set.ContainsKey(album);
 
     // ---- Frontier expansion ----
 

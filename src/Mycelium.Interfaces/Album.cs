@@ -10,8 +10,13 @@ public record ArtistAlbums(ArtistKey Artist, IReadOnlyList<OwnedAlbum> Albums);
 /// One album the library holds: the title the missing-album diff matches against, plus the Plex
 /// rating key it lives under so the UI can deep link straight to it (see PlexDeepLink). Captured on
 /// the same pull as the titles, so a library rebuild that shifts keys self-heals on the next sync.
+///
+/// <para><paramref name="Quality"/> is how good the copy on disk is — the majority tier of its
+/// tracks (see <see cref="AudioQualityTier.Majority"/>). Null means we haven't determined it: Plex
+/// reported no codecs, or the album was synced before quality tracking existed. Null deliberately
+/// never reads as "needs upgrading" — see <see cref="AudioQuality"/>.</para>
 /// </summary>
-public record OwnedAlbum(string Title, int PlexRatingKey);
+public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality = null);
 
 /// <summary>
 /// An album that exists on Deezer for an artist the user owns, but isn't in the library — a
