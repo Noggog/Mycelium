@@ -764,6 +764,36 @@ input[type='checkbox'] {
   font-style: italic;
 }
 
+/* Dev panel tables (e.g. the per-user download quality list). Scrolls inside its own box so a long
+   username can't push the whole page sideways. */
+.dev-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+  display: block;
+  overflow-x: auto;
+}
+.dev-table th,
+.dev-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.dev-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dev-table tr:last-child td {
+  border-bottom: none;
+}
+.dev-muted {
+  color: var(--text-dim);
+}
+
 .related-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

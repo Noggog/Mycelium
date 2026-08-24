@@ -15,6 +15,7 @@ public class PurchaseServiceTests
     private readonly FakePurchaseRepo _purchases = new();
     private readonly IUserQueueRepo _queue = Substitute.For<IUserQueueRepo>();
     private readonly IUserAlbumRatingRepo _albumRatings = Substitute.For<IUserAlbumRatingRepo>();
+    private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly ILibraryProvider _library = Substitute.For<ILibraryProvider>();
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
@@ -36,16 +37,32 @@ public class PurchaseServiceTests
             new FakeAppSettingsRepo(), NullLogger<DownloadSettings>.Instance);
         _sut = new PurchaseService(
             _purchases, _queue, _albumRatings, _library, _catalog, _missing, _overrides, _downloader,
-            _deezer, Config, settings, new JitterPolicy(0.3), _schedule,
+            _deezer, Config, settings, new UserQualityService(_users, AudioQuality.Lossless),
+            new JitterPolicy(0.3), _schedule,
             NullLogger<PurchaseService>.Instance);
 
         _queue.GetAllLiked().Returns(Array.Empty<DiscoveryCandidate>());
         _albumRatings.GetAllLiked().Returns(Array.Empty<AlbumRating>());
+        _users.GetAll().Returns(Array.Empty<AppUser>());
+        _albumRatings.GetAllLikedByUser().Returns(Array.Empty<LikedAlbum>());
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _catalog.GetOwnedAlbums().Returns(new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase));
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
         _downloader.Name.Returns("test-backend");
         _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+    }
+
+    /// <summary>
+    /// Stubs both reads of the liked albums at once. Reconcile goes through GetAllLikedByUser (it
+    /// needs whose entitlement each like carries) while other callers use GetAllLiked, and a test
+    /// that set only one would exercise a state the repo can never actually be in. Everything is
+    /// attributed to one user; the cases that care about who liked what use LikedBy instead.
+    /// </summary>
+    private void AllLiked(AlbumRating[] liked)
+    {
+        _albumRatings.GetAllLiked().Returns(liked);
+        _albumRatings.GetAllLikedByUser().Returns(
+            liked.Select(r => new LikedAlbum("test-user", r)).ToArray());
     }
 
     private void Owned(params string[] artists) =>
@@ -60,7 +77,7 @@ public class PurchaseServiceTests
             new DiscoveryCandidate(new ArtistKey("Phoebe Bridgers"), null, 3, new[] { "boygenius" }, 1),
             new DiscoveryCandidate(new ArtistKey("Owned Band"), null, 1, Array.Empty<string>(), 0), // owned -> excluded
         });
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Owned Band"), new AlbumKey("New One"), "art", DiscoveryStatus.Liked),
         });
@@ -82,7 +99,7 @@ public class PurchaseServiceTests
             new DiscoveryCandidate(new ArtistKey("Phoebe Bridgers"), null, 3, new[] { "boygenius" }, 1),
             new DiscoveryCandidate(new ArtistKey("Phoebe Bridgers"), "img", 5, new[] { "Bright Eyes" }, 1),
         });
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
             new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art2", DiscoveryStatus.Liked),
@@ -147,7 +164,7 @@ public class PurchaseServiceTests
         // reconcile must match it the same canonical way the missing-album diff does.
         const string plexTitle = "Who told you to ​think??!!?!?!?!";
 
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Milo"), new AlbumKey(likedTitle), "art", DiscoveryStatus.Liked),
         });
@@ -172,7 +189,7 @@ public class PurchaseServiceTests
         // A collaboration surfaced/liked under "Milo", but the library files it under the duo
         // "Nostrum Grocers" (Deezer's album-artist, carried on the missing record). Reconcile must
         // match ownership under the album-artist, not the display artist, and close the row out.
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Milo"), new AlbumKey("Nostrum Grocers"), "art", DiscoveryStatus.Liked),
         });
@@ -199,7 +216,7 @@ public class PurchaseServiceTests
     [Fact]
     public async Task Album_items_carry_the_deezer_album_id_from_the_missing_set()
     {
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
         });
@@ -216,7 +233,7 @@ public class PurchaseServiceTests
     [Fact]
     public async Task Failed_items_stay_on_the_active_list_for_retry()
     {
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
         });
@@ -231,7 +248,7 @@ public class PurchaseServiceTests
     [Fact]
     public async Task Snapshot_reports_backend_and_counts_by_stage()
     {
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("A"), new AlbumKey("queued"), null, DiscoveryStatus.Liked),
             new AlbumRating(new ArtistKey("B"), new AlbumKey("sent"), null, DiscoveryStatus.Liked),
@@ -257,7 +274,7 @@ public class PurchaseServiceTests
     [Fact]
     public async Task Snapshot_raises_a_blocking_flag_only_for_failures_no_retry_can_fix()
     {
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("A"), new AlbumKey("geo blocked"), null, DiscoveryStatus.Liked),
             new AlbumRating(new ArtistKey("B"), new AlbumKey("bad login"), null, DiscoveryStatus.Liked),
@@ -312,7 +329,7 @@ public class PurchaseServiceTests
         // as Pending because reconcile can't see it's owned.
         const string deezerTitle = "DOOM (Original Game Soundtrack)";
         const string plexTitle = "Doom: Original Game Soundtrack";
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Mick Gordon"), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),
         });
@@ -534,7 +551,7 @@ public class PurchaseServiceTests
     {
         // Deleting one directly would only have the next reconcile re-add it from the still-standing
         // like, which would read as a button that does nothing.
-        _albumRatings.GetAllLiked().Returns(new[]
+        AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Phish"), new AlbumKey("Farmhouse"), null, DiscoveryStatus.Liked),
         });
@@ -549,5 +566,84 @@ public class PurchaseServiceTests
     public async Task Removing_an_unknown_row_is_refused()
     {
         (await _sut.RemoveManual("album:nobody nothing")).Should().BeFalse();
+    }
+
+    // ---- Per-row target quality: whose entitlement a shared album is fetched at ----
+
+    /// <summary>Stubs the liked-albums read with explicit per-user attribution.</summary>
+    private void LikedBy(params (string UserId, string Artist, string Album)[] likes)
+    {
+        var rows = likes
+            .Select(l => new LikedAlbum(
+                l.UserId,
+                new AlbumRating(new ArtistKey(l.Artist), new AlbumKey(l.Album), null, DiscoveryStatus.Liked)))
+            .ToArray();
+        _albumRatings.GetAllLikedByUser().Returns(rows);
+        _albumRatings.GetAllLiked().Returns(rows.Select(r => r.Rating).ToArray());
+    }
+
+    private void UserTier(string subject, AudioQuality quality) =>
+        _users.Get(subject).Returns(new AppUser(subject, subject, null, null, default, default, quality));
+
+    [Fact]
+    public async Task An_album_only_a_lossy_user_wants_is_queued_at_the_lossy_tier()
+    {
+        UserTier("kelsey", AudioQuality.Lossy);
+        LikedBy(("kelsey", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).TargetQuality
+            .Should().Be(AudioQuality.Lossy);
+    }
+
+    [Fact]
+    public async Task An_album_two_users_want_is_queued_at_the_better_of_their_tiers()
+    {
+        UserTier("kelsey", AudioQuality.Lossy);
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(
+            ("kelsey", "Alvvays", "Blue Rev"),
+            ("justin", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        // One global list, so the album is fetched once. Taking the best entitlement lets the lossy
+        // user ride along for free; taking the worst would quietly cheat the lossless one.
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).TargetQuality
+            .Should().Be(AudioQuality.Lossless);
+    }
+
+    [Fact]
+    public async Task A_later_liker_with_a_better_tier_raises_the_target_before_it_downloads()
+    {
+        UserTier("kelsey", AudioQuality.Lossy);
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(("kelsey", "Alvvays", "Blue Rev"));
+        await _sut.GetActive();
+
+        // Justin likes the same album afterwards. The row already exists as Pending, and Upsert
+        // deliberately doesn't touch status — but the target is derived from who currently wants it,
+        // so it has to be re-Set, or his request would be silently satisfied by her 320.
+        LikedBy(
+            ("kelsey", "Alvvays", "Blue Rev"),
+            ("justin", "Alvvays", "Blue Rev"));
+        var active = await _sut.GetActive();
+
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).TargetQuality
+            .Should().Be(AudioQuality.Lossless);
+    }
+
+    [Fact]
+    public async Task A_user_with_no_tier_falls_to_the_deployment_default()
+    {
+        // _users.Get returns null for an unstubbed subject — a user who has never been given a tier.
+        LikedBy(("someone", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        // These tests construct UserQualityService with a Lossless default.
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).TargetQuality
+            .Should().Be(AudioQuality.Lossless);
     }
 }

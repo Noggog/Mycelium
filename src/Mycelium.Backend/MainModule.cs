@@ -111,12 +111,22 @@ public class MainModule : Autofac.Module
         // assembly scan below). Off unless PLEX_RESCAN_AFTER_DOWNLOAD is set; debounce defaults to 5m.
         builder.RegisterInstance(BuildLibraryScannerConfig());
 
+        // Per-user download quality ceilings. The default is deliberately the *lower* tier so a new
+        // account can't quietly cost 3x the disk before anyone notices; existing users are lifted to
+        // lossless by a one-time backfill at startup (see Program.cs), so the default only ever
+        // applies to accounts created afterwards. Registered by hand for the same reason as
+        // JitterPolicy below: its constructor takes a bare value the assembly scan can't supply.
+        builder.RegisterType<UserQualityService>().AsSelf().SingleInstance()
+            .WithParameter("defaultQuality", DefaultAudioQuality());
+
         builder.RegisterAssemblyTypes(typeof(LibraryProvider).Assembly)
             .InNamespacesOf(
                 typeof(LibraryProvider))
             // JitterPolicy lives in this namespace but is configured above from the environment — the
             // scan would otherwise re-register it and fail, since its constructor takes a plain double.
             .Except<JitterPolicy>()
+            // Same story: UserQualityService is registered above with its default tier.
+            .Except<UserQualityService>()
             .AsImplementedInterfaces()
             .AsSelf()
             .SingleInstance();
@@ -149,6 +159,16 @@ public class MainModule : Autofac.Module
             ? Enumerable.Range(0, top).Reverse().Select(q => q.ToString()).ToArray()
             : Array.Empty<string>();
     }
+
+    /// <summary>
+    /// The quality tier applied to a user who has none set. <c>DEFAULT_AUDIO_QUALITY</c> takes
+    /// "Lossy" or "Lossless"; anything unrecognised (including unset) falls to
+    /// <see cref="AudioQuality.Lossy"/> — default-deny, so an account nobody has decided about
+    /// cannot pull down the expensive copies.
+    /// </summary>
+    internal static AudioQuality DefaultAudioQuality() =>
+        AudioQualityTier.Parse(Environment.GetEnvironmentVariable("DEFAULT_AUDIO_QUALITY"))
+        ?? AudioQuality.Lossy;
 
     private static DownloaderConfig BuildDownloaderConfig()
     {

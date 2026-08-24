@@ -13,11 +13,14 @@ import {
 import {
   clearPlexTags,
   getSimilarityWarmStatus,
+  getUserQualities,
   reapplyPlexTags,
   rebuildPlexTags,
+  setUserQuality,
   startSimilarityWarm,
   type RebuildResult,
 } from '../api/dev'
+import type { AudioQuality } from '../types'
 
 // The in-app dev panel: tooling that's only shown to (and only usable by) DEV_USERNAMES users.
 // Absorbs the old Related (dev) similarity debugger and adds the Plex tag maintenance controls.
@@ -48,6 +51,7 @@ export default function Dev() {
     <section>
       <h1>Dev tools</h1>
       <CatalogRefresh />
+      <UserQuality />
       <CleanupTool />
       <PlexTagTools />
       <SimilarityWarm />
@@ -100,6 +104,103 @@ function QueueRebuild() {
       {rebuild.isError && <p className="error">Rebuild failed: {(rebuild.error as Error).message}</p>}
       {rebuild.isSuccess && (
         <p className="dev-status">✓ Rebuilt {rebuild.data?.rebuilt ?? 'all'} recommendation queues.</p>
+      )}
+    </div>
+  )
+}
+
+// ---- Per-user download quality ----
+
+// Lossless runs ~3x the size of 320kbps for the same album, so this is really a disk-budget control:
+// it decides what each person's likes cost on the shared library volume, not what they can listen to
+// (Plex transcodes on playback regardless).
+const QUALITY_LABEL: Record<AudioQuality, string> = {
+  Lossy: 'MP3 320',
+  Lossless: 'FLAC',
+}
+
+function UserQuality() {
+  const queryClient = useQueryClient()
+
+  const { data, isPending, isError, error } = useQuery({
+    queryKey: ['dev', 'user-quality'],
+    queryFn: getUserQualities,
+  })
+
+  const update = useMutation({
+    mutationFn: ({ subject, quality }: { subject: string; quality: AudioQuality | null }) =>
+      setUserQuality(subject, quality),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dev', 'user-quality'] })
+      // A raised ceiling changes what pending albums download at, and the to-buy list shows it.
+      queryClient.invalidateQueries({ queryKey: ['purchases'] })
+    },
+  })
+
+  const users = data?.users ?? []
+
+  return (
+    <div className="dev-tool">
+      <h2>Download quality</h2>
+      <p>
+        What each account&apos;s requests are downloaded at. FLAC is roughly <strong>3x</strong> the
+        size of MP3 320 for the same album, so this caps what one person&apos;s likes cost on the
+        shared library. It doesn&apos;t affect listening — Plex transcodes on playback either way.
+      </p>
+      <p>
+        An album several people want is fetched <em>once</em>, at the best of their settings. Accounts
+        appear here after they have signed in at least once.
+      </p>
+
+      {isPending && <p><em>Loading users…</em></p>}
+      {isError && <p className="error">Failed to load users: {(error as Error).message}</p>}
+
+      {!isPending && !isError && users.length === 0 && (
+        <p><em>No users have signed in yet.</em></p>
+      )}
+
+      {users.length > 0 && (
+        <table className="dev-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Last login</th>
+              <th>Quality</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(u => (
+              <tr key={u.subject}>
+                <td>
+                  {u.displayName ?? u.username ?? u.subject}
+                  {u.username && u.displayName && <span className="dev-muted"> ({u.username})</span>}
+                </td>
+                <td>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : '—'}</td>
+                <td>
+                  <select
+                    value={u.maxQuality ?? ''}
+                    disabled={update.isPending}
+                    onChange={e =>
+                      update.mutate({
+                        subject: u.subject,
+                        quality: e.target.value === '' ? null : (e.target.value as AudioQuality),
+                      })
+                    }
+                  >
+                    {/* Empty = no explicit tier, so this account follows the deployment default. */}
+                    <option value="">Default ({QUALITY_LABEL[data!.defaultQuality]})</option>
+                    <option value="Lossy">{QUALITY_LABEL.Lossy}</option>
+                    <option value="Lossless">{QUALITY_LABEL.Lossless}</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {update.isError && (
+        <p className="error">Couldn&apos;t save: {(update.error as Error).message}</p>
       )}
     </div>
   )

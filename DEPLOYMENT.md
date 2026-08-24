@@ -117,6 +117,23 @@ The "Download now" button works as soon as the ARL is set. The queue also drains
 default — flip the **auto/manual switch** on the Download page to change that. That choice is stored
 in Mongo (not an env var), so it survives redeploys and takes effect without a restart.
 
+## Per-user download quality
+
+Lossless runs roughly **3x** the size of 320kbps MP3 for the same album (measured against a real
+library: ~260 MiB vs ~86 MiB for a median album). `DEFAULT_AUDIO_QUALITY` sets the tier for an
+account nobody has decided about, and **Dev tools -> Download quality** sets it per user.
+
+- The default is `Lossy`, so a new account can't quietly cost 3x the disk before you've looked at it.
+- Users already in the database when this first ships are **backfilled to `Lossless`** at startup, so
+  nobody is silently demoted. The default only ever applies to accounts created afterwards.
+- `DEEZER_QUALITY` remains the deployment **ceiling**: a user marked lossless on a deployment pinned
+  to 320 still gets 320.
+- An album several people want is downloaded **once**, at the best of their tiers — a lossy user
+  riding along on a lossless request costs nothing, where the reverse would cheat the lossless user.
+- This affects acquisition only, not listening: Plex transcodes on playback regardless.
+- Accounts appear in the panel only **after they have signed in at least once** — the user store is
+  populated on login and the IdP is never enumerated.
+
 ## Notes / troubleshooting
 
 - **Logs:** the app writes rolling logs to the `app_logs` volume (`/app/logs`) and to stdout

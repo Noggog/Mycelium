@@ -1,5 +1,29 @@
-// Dev-panel endpoints for the per-user Plex like/dislike mood tags. All are gated server-side by the
-// "DevUser" policy (DEV_USERNAMES), so a non-dev hitting them gets a 403 regardless of the UI.
+// Dev-panel endpoints. All are gated server-side by the "DevUser" policy (DEV_USERNAMES), so a
+// non-dev hitting them gets a 403 regardless of the UI.
+
+import type { AudioQuality, UserQualityList } from '../types'
+
+// Who is allowed to download lossless. The list comes from the app's own user store, which is
+// populated on login — someone who has never signed in won't appear here until they do.
+export async function getUserQualities(): Promise<UserQualityList> {
+  const res = await fetch('/api/dev/users/')
+  if (!res.ok) {
+    throw new Error(`Failed to load user qualities: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as UserQualityList
+}
+
+// Set one user's ceiling. Pass null to clear it, returning them to the deployment default.
+export async function setUserQuality(subject: string, quality: AudioQuality | null): Promise<void> {
+  const res = await fetch(`/api/dev/users/${encodeURIComponent(subject)}/quality`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quality }),
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to set quality: ${res.status} ${res.statusText}`)
+  }
+}
 
 export interface ClearResult {
   cleared: number

@@ -29,6 +29,7 @@ public class PurchaseService
     private readonly IDeezerApi _deezer;
     private readonly DownloaderConfig _config;
     private readonly DownloadSettings _settings;
+    private readonly UserQualityService _quality;
     private readonly JitterPolicy _jitter;
     private readonly DownloadSchedule _schedule;
     private readonly ILogger<PurchaseService> _logger;
@@ -45,11 +46,13 @@ public class PurchaseService
         IDeezerApi deezer,
         DownloaderConfig config,
         DownloadSettings settings,
+        UserQualityService quality,
         JitterPolicy jitter,
         DownloadSchedule schedule,
         ILogger<PurchaseService> logger)
     {
         _settings = settings;
+        _quality = quality;
         _jitter = jitter;
         _schedule = schedule;
         _purchases = purchases;
@@ -278,21 +281,27 @@ public class PurchaseService
                 PurchaseStatus.Pending, default, null, null, null);
         }
 
-        foreach (var g in (await _albumRatings.GetAllLiked())
-                     .Where(r => !AlbumIsOwned(ownedAlbums, overrideKeys, MatchArtistFor(r.Artist.ArtistName, r.Album.AlbumName, null), r.Album.AlbumName))
-                     .GroupBy(r => PurchaseKey.ForAlbum(r.Artist.ArtistName, r.Album.AlbumName)))
+        // Liked albums come back paired with the user who liked them, so a row shared by several
+        // people can be fetched once at the best of their entitlements.
+        foreach (var g in (await _albumRatings.GetAllLikedByUser())
+                     .Where(l => !AlbumIsOwned(ownedAlbums, overrideKeys, MatchArtistFor(l.Rating.Artist.ArtistName, l.Rating.Album.AlbumName, null), l.Rating.Album.AlbumName))
+                     .GroupBy(l => PurchaseKey.ForAlbum(l.Rating.Artist.ArtistName, l.Rating.Album.AlbumName)))
         {
-            var first = g.First();
+            var first = g.First().Rating;
             var ratingKey = AlbumRatingKey.For(first.Artist.ArtistName, first.Album.AlbumName);
             long? deezerAlbumId = deezerIds.TryGetValue(ratingKey, out var did) && did != 0 ? did : null;
             // Persist the album-artist on the row so it still reconciles once the album leaves the
             // missing set (it drops out as soon as the library owns it).
             var albumArtist = albumArtists.TryGetValue(ratingKey, out var aa) ? aa : null;
+            // Recomputed every reconcile rather than fixed at first request: a lossless user liking
+            // an album a lossy user already queued must raise its target before it downloads.
+            var target = await _quality.BestOf(g.Select(l => l.UserId));
             desired[g.Key] = new PurchaseItem(
                 g.Key, FeedKind.MissingAlbum, first.Artist, first.Album.AlbumName,
-                g.Select(r => r.AlbumArt).FirstOrDefault(a => a != null),
+                g.Select(l => l.Rating.AlbumArt).FirstOrDefault(a => a != null),
                 0, Array.Empty<string>(),
-                PurchaseStatus.Pending, default, null, deezerAlbumId, albumArtist);
+                PurchaseStatus.Pending, default, null, deezerAlbumId, albumArtist,
+                TargetQuality: target);
         }
 
         // Insert new wants as pending / refresh display fields on existing rows.

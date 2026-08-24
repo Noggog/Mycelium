@@ -87,6 +87,25 @@ app.UseExceptionHandler();
 // spot which endpoint failed and with what status.
 app.UseSerilogRequestLogging();
 
+// One-time migration for the arrival of per-user quality tiers. The deployment default is the
+// *lower* tier on purpose — a new account shouldn't quietly cost 3x the disk before anyone decides
+// it should — but applying that to people already using the app would demote them without warning:
+// their queued albums would start landing as 320, and the upgrade feed would go blank (it only
+// surfaces rows some user out-ranks, which nobody would). Lifting existing users to lossless makes
+// the default apply to accounts created afterwards, which is what it is for. Idempotent: it only
+// touches docs with no tier, so a user later set to lossy by hand is never lifted back.
+{
+    using var scope = app.Services.CreateScope();
+    var backfilled = await scope.ServiceProvider.GetRequiredService<IUserRepo>()
+        .BackfillMissingQuality(AudioQuality.Lossless);
+    if (backfilled > 0)
+    {
+        app.Logger.LogInformation(
+            "Quality tiers: backfilled {Count} existing user(s) to {Quality} (new accounts default to {Default})",
+            backfilled, AudioQuality.Lossless, MainModule.DefaultAudioQuality());
+    }
+}
+
 // Serve the built SPA (production: the Vite build is copied to wwwroot in the image). No-op in
 // local dev, where Vite serves the SPA itself and proxies /api + /auth to this backend.
 app.UseDefaultFiles();
@@ -124,7 +143,8 @@ app.MapGet("/auth/logout", () =>
     .WithName("Logout");
 
 // Current user (200 with profile, or 401 if not signed in) — the SPA polls this to know auth state.
-app.MapGet("/auth/me", (HttpContext http, DevUsers devUsers, ILoggerFactory loggerFactory) =>
+app.MapGet("/auth/me", async (
+        HttpContext http, DevUsers devUsers, UserQualityService qualities, ILoggerFactory loggerFactory) =>
     {
         var user = http.User;
         if (user.Identity?.IsAuthenticated != true)
@@ -133,6 +153,7 @@ app.MapGet("/auth/me", (HttpContext http, DevUsers devUsers, ILoggerFactory logg
         }
 
         var isDev = devUsers.Includes(user);
+        var quality = await qualities.For(user.GetSubject()!);
 
         // Diagnostic: dump every claim and the dev-match decision so we can see exactly what the IdP
         // sends (e.g. whether preferred_username is present, and under what value). Remove once the
@@ -154,6 +175,10 @@ app.MapGet("/auth/me", (HttpContext http, DevUsers devUsers, ILoggerFactory logg
             // Drives the in-app dev panel's visibility (DEV_USERNAMES). The dev endpoints enforce the
             // same check server-side, so this only governs what the UI bothers to show.
             isDev,
+            // What quality this account's requests download at, resolved (stored tier else the
+            // deployment default) so the UI never has to know the default itself. Lets an album card
+            // say "you'll get FLAC" rather than leaving the user to guess.
+            maxQuality = quality.ToString(),
         });
     })
     .WithName("Me");
@@ -676,6 +701,58 @@ dev.MapPost("/rebuild", async (PlexTagMaintenance maint) =>
     })
     .WithName("DevRebuildPlexTags");
 
+// --- Dev panel: per-user download quality ---
+// Who is allowed to pull down lossless. The list is the app's own user store, which is populated on
+// login — so a user who has never signed in cannot appear here or be given a tier until they do
+// (the IdP is the source of truth for identity and we never enumerate it). Same DevUser gate as the
+// tools above: this decides what other people's requests cost on the shared library volume.
+var devUsersApi = api.MapGroup("/dev/users").RequireAuthorization("DevUser");
+
+devUsersApi.MapGet("/", async (IUserRepo users, UserQualityService qualities) =>
+    {
+        var all = await users.GetAll();
+        return Results.Ok(new
+        {
+            defaultQuality = qualities.Default.ToString(),
+            users = all.Select(u => new
+            {
+                subject = u.Subject,
+                username = u.Username,
+                displayName = u.DisplayName,
+                email = u.Email,
+                lastLoginAt = u.LastLoginAt,
+                // Null when this user has never been given an explicit tier; `effectiveQuality` is
+                // what they actually download at, so the panel can show "Lossy (default)" without
+                // duplicating the fallback rule client-side.
+                maxQuality = u.MaxQuality?.ToString(),
+                effectiveQuality = (u.MaxQuality ?? qualities.Default).ToString(),
+            }),
+        });
+    })
+    .WithName("DevListUserQuality");
+
+devUsersApi.MapPost("/{subject}/quality", async (
+        string subject, UserQualityRequest body, IUserRepo users) =>
+    {
+        // An absent/blank quality clears the override, returning the user to the deployment default.
+        // A value we can't parse is a client bug, not a request to clear — say so rather than
+        // silently resetting someone's entitlement.
+        var wanted = AudioQualityTier.Parse(body.Quality);
+        if (wanted is null && !string.IsNullOrWhiteSpace(body.Quality))
+        {
+            return Results.BadRequest(new { error = $"Unknown quality '{body.Quality}'" });
+        }
+
+        if (await users.Get(subject) is null)
+        {
+            return Results.NotFound(new { error = "No such user" });
+        }
+
+        await users.SetMaxQuality(subject, wanted);
+        return Results.Ok(new { subject, maxQuality = wanted?.ToString() });
+    })
+    .WithName("DevSetUserQuality");
+
 // Whole-library similarity warm: force-populate every source's edges (Deezer + ListenBrainz) across
 // the entire catalog, instead of waiting for the lazy, usage-driven path. Long-running (bounded by
 // MusicBrainz's ~1 req/s), so it runs as a single-flight background job: POST kicks it off and
@@ -981,6 +1058,12 @@ internal record PlexTokenLinkRequest(string? Token, string? Label);
 /// would have to be escaped into a query param and unescaped back out for no gain.
 /// </summary>
 internal record ManualAddRequest(string? Url);
+
+/// <summary>
+/// Body of a per-user quality change. A POST body rather than a query parameter to match the other
+/// mutating dev endpoints; a null/blank <paramref name="Quality"/> clears the user's override.
+/// </summary>
+internal record UserQualityRequest(string? Quality);
 
 /// <summary>
 /// Reply to the fast-mode toggle: when the burst lapses, or null when it was switched off. Returned so

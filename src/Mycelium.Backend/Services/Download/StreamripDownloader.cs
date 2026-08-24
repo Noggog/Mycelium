@@ -102,6 +102,40 @@ public class StreamripDownloader : IDownloader
 
     public string Name => "streamrip (Deezer)";
 
+    /// <summary>
+    /// The streamrip <c>--quality</c> to fetch one row at, and the ladder to walk if it comes up
+    /// short. A row carries a <see cref="PurchaseItem.TargetQuality"/> when the reconcile knew whose
+    /// entitlements were behind it; rows written before tiers existed (and manual pastes, which no
+    /// rating stands behind) carry none and use the configured quality, exactly as they always did.
+    ///
+    /// <para>The configured <see cref="DownloaderConfig.Quality"/> is a <em>ceiling</em>, not just a
+    /// default: a target above it is clamped down. Otherwise a user marked lossless on a deployment
+    /// deliberately pinned to 320 would quietly override the operator's setting.</para>
+    ///
+    /// <para>The ladder is derived from the row's own quality rather than the configured one, so a
+    /// lossy row falls back 1 -> 0 instead of pretending it started at FLAC. It stays enabled for
+    /// every row: Deezer's catalogue has per-track gaps, and an album that is lossless except for
+    /// two tracks it will only serve at 320 is still the best copy obtainable.</para>
+    /// </summary>
+    private (string Quality, IReadOnlyList<string> Fallbacks) QualityFor(PurchaseItem item)
+    {
+        if (item.TargetQuality is not { } target)
+        {
+            return (_config.Quality, _config.FallbackQualities);
+        }
+
+        var wanted = target.ToStreamripQuality();
+        // Both are numeric rungs on streamrip's scale; a non-numeric configured quality means we
+        // can't compare, so the configured value simply wins.
+        if (!int.TryParse(_config.Quality, out var ceiling) || !int.TryParse(wanted, out var asked))
+        {
+            return (_config.Quality, _config.FallbackQualities);
+        }
+
+        var effective = Math.Min(asked, ceiling);
+        return (effective.ToString(), MainModule.ParseQualities(null, effective.ToString()));
+    }
+
     public async Task<DownloadOutcome> Request(PurchaseItem item)
     {
         if (item.Kind != FeedKind.MissingAlbum || item.DeezerAlbumId is null or 0)
@@ -152,7 +186,8 @@ public class StreamripDownloader : IDownloader
         var preferredDir = Path.Combine(staging, "preferred");
         DownloadStaging.Reset(staging);
 
-        var first = await RunAt(_config.Quality, url, item, preferredDir);
+        var (quality, fallbacks) = QualityFor(item);
+        var first = await RunAt(quality, url, item, preferredDir);
         if (first.Result == RunResult.TimedOut)
         {
             _logger.LogWarning(
@@ -178,9 +213,9 @@ public class StreamripDownloader : IDownloader
         // single downgrade isn't enough: an album with no FLAC can still serve a 320 master for one
         // track and only 128 for the rest, and stopping at 320 abandons those.
         var step = 0;
-        foreach (var fallback in _config.FallbackQualities)
+        foreach (var fallback in fallbacks)
         {
-            if (IsComplete(got, expected) || fallback == _config.Quality)
+            if (IsComplete(got, expected) || fallback == quality)
             {
                 continue;
             }
@@ -188,7 +223,7 @@ public class StreamripDownloader : IDownloader
             _logger.LogInformation(
                 "Quality {Q} has {Got}/{Expected} tracks for {Artist} — {Album}; trying {Fallback} "
                 + "and keeping only the tracks the earlier passes missed",
-                _config.Quality, got, expected > 0 ? expected.ToString() : "?",
+                quality, got, expected > 0 ? expected.ToString() : "?",
                 item.Artist.ArtistName, item.Album, fallback);
 
             // Indexed, not named by quality: the value comes from an env var and must never be able
@@ -233,8 +268,8 @@ public class StreamripDownloader : IDownloader
             _logger.LogWarning(
                 "No tracks downloaded for {Artist} — {Album} at quality {Q} or fallbacks {Fallbacks} — "
                 + "nothing promoted to the library. Last streamrip pass said:\n{Output}",
-                item.Artist.ArtistName, item.Album, _config.Quality,
-                string.Join(", ", _config.FallbackQualities), last.Output);
+                item.Artist.ArtistName, item.Album, quality,
+                string.Join(", ", fallbacks), last.Output);
             return DownloadOutcome.Failed(DownloadFailure.NoTracksAvailable);
         }
 
@@ -287,7 +322,8 @@ public class StreamripDownloader : IDownloader
     /// </summary>
     private async Task<DownloadOutcome> RunUnverified(string url, PurchaseItem item)
     {
-        var pass = await RunAt(_config.Quality, url, item, folder: null);
+        var (quality, fallbacks) = QualityFor(item);
+        var pass = await RunAt(quality, url, item, folder: null);
         if (pass.Result == RunResult.Success)
         {
             return DownloadOutcome.Success();
@@ -299,18 +335,18 @@ public class StreamripDownloader : IDownloader
             return DownloadOutcome.Failed(credential);
         }
 
-        foreach (var fallback in _config.FallbackQualities)
+        foreach (var fallback in fallbacks)
         {
             // A hang/timeout is systemic (bad ARL, network) — downgrading would just burn another
             // timeout. Only keep going while the previous quality cleanly failed.
-            if (pass.Result != RunResult.Failed || fallback == _config.Quality)
+            if (pass.Result != RunResult.Failed || fallback == quality)
             {
                 continue;
             }
 
             _logger.LogInformation(
                 "Quality {Q} pass failed for {Artist} — {Album}; retrying at fallback {Fallback}",
-                _config.Quality, item.Artist.ArtistName, item.Album, fallback);
+                quality, item.Artist.ArtistName, item.Album, fallback);
             pass = await RunAt(fallback, url, item, folder: null);
             if (pass.Result == RunResult.Success)
             {

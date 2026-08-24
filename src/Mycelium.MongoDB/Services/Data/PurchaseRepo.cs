@@ -26,6 +26,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldAlbumArtist = "albumArtist";
     private const string FieldFailure = "failure";
     private const string FieldManual = "manual";
+    private const string FieldTargetQuality = "targetQuality";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -71,6 +72,14 @@ public class PurchaseRepo : IPurchaseRepo
         if (item.AlbumArtist != null)
         {
             update = update.Set(FieldAlbumArtist, item.AlbumArtist);
+        }
+
+        // Unlike the two above, this is re-Set on every reconcile rather than learned once: it is
+        // derived from who currently wants the album, so a lossless user liking something a lossy
+        // user had already queued must raise the row's target before it downloads.
+        if (item.TargetQuality is not null)
+        {
+            update = update.Set(FieldTargetQuality, item.TargetQuality.Value.ToString());
         }
 
         return Collection.UpdateOneAsync(
@@ -132,6 +141,9 @@ public class PurchaseRepo : IPurchaseRepo
         return new PurchaseItem(
             doc["_id"].AsString, kind, new ArtistKey(Str(FieldArtist)), StrN(FieldAlbum),
             StrN(FieldImageUrl), score, sources, status, requestedAt, sentAt, deezerAlbumId,
-            StrN(FieldAlbumArtist), failure, manual);
+            StrN(FieldAlbumArtist), failure, manual,
+            // Absent on rows written before tiers existed; the downloader then uses its configured
+            // quality, which is exactly what those rows would have downloaded at anyway.
+            AudioQualityTier.Parse(StrN(FieldTargetQuality)));
     }
 }

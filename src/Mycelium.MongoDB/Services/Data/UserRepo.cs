@@ -15,6 +15,7 @@ public class UserRepo : IUserRepo
     private const string FieldDisplayName = "displayName";
     private const string FieldFirstSeenAt = "firstSeenAt";
     private const string FieldLastLoginAt = "lastLoginAt";
+    private const string FieldMaxQuality = "maxQuality";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -35,6 +36,8 @@ public class UserRepo : IUserRepo
             .Set(FieldLastLoginAt, user.LastLoginAt.UtcDateTime)
             // First-seen is written only on the initial insert, never overwritten on later logins.
             .SetOnInsert(FieldFirstSeenAt, user.FirstSeenAt.UtcDateTime);
+        // maxQuality is deliberately absent from this update: it is set from the dev panel, not by
+        // the IdP, and touching it here would undo an operator's decision on the user's next login.
 
         await Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", user.Subject),
@@ -47,6 +50,34 @@ public class UserRepo : IUserRepo
         var cursor = await Collection.FindAsync(Builders<BsonDocument>.Filter.Eq("_id", subject));
         var doc = await cursor.FirstOrDefaultAsync();
         return doc == null ? null : ToAppUser(doc);
+    }
+
+    public async Task<AppUser[]> GetAll()
+    {
+        var cursor = await Collection.FindAsync(Builders<BsonDocument>.Filter.Empty);
+        return (await cursor.ToListAsync())
+            .Select(ToAppUser)
+            .OrderBy(u => u.DisplayName ?? u.Username ?? u.Subject, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public Task SetMaxQuality(string subject, AudioQuality? quality)
+    {
+        var update = quality is null
+            ? Builders<BsonDocument>.Update.Unset(FieldMaxQuality)
+            : Builders<BsonDocument>.Update.Set(FieldMaxQuality, quality.Value.ToString());
+
+        // IsUpsert defaults to false: never conjure a user doc from a subject that isn't real.
+        return Collection.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", subject), update);
+    }
+
+    public async Task<int> BackfillMissingQuality(AudioQuality quality)
+    {
+        var result = await Collection.UpdateManyAsync(
+            Builders<BsonDocument>.Filter.Exists(FieldMaxQuality, false)
+            | Builders<BsonDocument>.Filter.Eq(FieldMaxQuality, BsonNull.Value),
+            Builders<BsonDocument>.Update.Set(FieldMaxQuality, quality.ToString()));
+        return (int)result.ModifiedCount;
     }
 
     private static AppUser ToAppUser(BsonDocument doc)
@@ -65,6 +96,9 @@ public class UserRepo : IUserRepo
             Email: Str(FieldEmail),
             DisplayName: Str(FieldDisplayName),
             FirstSeenAt: Date(FieldFirstSeenAt),
-            LastLoginAt: Date(FieldLastLoginAt));
+            LastLoginAt: Date(FieldLastLoginAt),
+            // Absent (every doc written before tiers existed) parses to null — "never set" — so the
+            // deployment default applies rather than an invented entitlement.
+            MaxQuality: AudioQualityTier.Parse(Str(FieldMaxQuality)));
     }
 }

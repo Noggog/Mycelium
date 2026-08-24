@@ -34,6 +34,9 @@ services:
       MUSIC_DOWNLOAD_DIR: /music
       DEEZER_QUALITY: ${DEEZER_QUALITY:-2}
       DEEZER_FALLBACK_QUALITY: ${DEEZER_FALLBACK_QUALITY:-1}
+      # Tier for an account with no per-user setting. Default-deny; existing users are backfilled to
+      # Lossless on first start, and tiers are set per user in the dev panel.
+      DEFAULT_AUDIO_QUALITY: ${DEFAULT_AUDIO_QUALITY:-Lossy}
       # The daily catalog/album syncs run at DAILY_SYNC_HOUR in *this container's* local time, so set
       # TZ if you want "6am" to mean 6am where the server is (the image is UTC otherwise).
       TZ: ${TZ:-UTC}

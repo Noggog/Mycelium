@@ -117,6 +117,24 @@ public class UserAlbumRatingRepo : IUserAlbumRatingRepo
     public Task<AlbumRating[]> GetAllLiked() =>
         Query(Builders<BsonDocument>.Filter.Eq(FieldStatus, StatusLiked));
 
+    public async Task<LikedAlbum[]> GetAllLikedByUser()
+    {
+        var cursor = await Collection.FindAsync(
+            Builders<BsonDocument>.Filter.Eq(FieldStatus, StatusLiked),
+            new FindOptions<BsonDocument> { Sort = Builders<BsonDocument>.Sort.Descending(FieldDecidedAt) });
+
+        return (await cursor.ToListAsync())
+            .Select(doc => (Doc: doc, UserId: doc.TryGetValue(FieldUserId, out var u) && !u.IsBsonNull
+                ? u.AsString
+                : null))
+            // A row with no userId can't have its entitlement resolved, and guessing one would either
+            // over- or under-serve somebody. Dropping it only loses it from the quality calculation:
+            // GetAllLiked still surfaces the same album, so it is still queued, just at the default.
+            .Where(x => x.UserId != null)
+            .Select(x => new LikedAlbum(x.UserId!, ToRating(x.Doc)))
+            .ToArray();
+    }
+
     public async Task<CombinedAlbumVerdict[]> FindCombinedRatings()
     {
         var filter = Builders<BsonDocument>.Filter.Regex(FieldArtist, new BsonRegularExpression(";"));

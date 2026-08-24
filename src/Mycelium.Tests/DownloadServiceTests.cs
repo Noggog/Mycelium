@@ -45,6 +45,8 @@ public class DownloadServiceTests
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _queue.GetAllLiked().Returns(Array.Empty<DiscoveryCandidate>());
         _albumRatings.GetAllLiked().Returns(Array.Empty<AlbumRating>());
+        _users.GetAll().Returns(Array.Empty<AppUser>());
+        _albumRatings.GetAllLikedByUser().Returns(Array.Empty<LikedAlbum>());
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
         _queue.GetAllUserIds().Returns(Array.Empty<string>());
     }
@@ -63,7 +65,8 @@ public class DownloadServiceTests
         var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
         var purchases = new PurchaseService(
             _repo, _queue, _albumRatings, _library, _catalogRepo, _missing, _overrides, _downloader,
-            Substitute.For<IDeezerApi>(), config, settings, _jitter, _schedule,
+            Substitute.For<IDeezerApi>(), config, settings,
+            new UserQualityService(_users, AudioQuality.Lossless), _jitter, _schedule,
             NullLogger<PurchaseService>.Instance);
         var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);
         var tagBackfill = new ArtistTagBackfill(
@@ -86,7 +89,12 @@ public class DownloadServiceTests
             _missingAlbums.Add(new MissingAlbum(
                 new ArtistKey(artist), new AlbumKey(album), null, deezerId.Value, new ArtistKey(artist)));
         }
+        // Both reads must stay in step: Reconcile uses GetAllLikedByUser (it needs whose
+        // entitlement each like carries), other callers use GetAllLiked. These tests don't exercise
+        // entitlements, so everything is attributed to one user.
         _albumRatings.GetAllLiked().Returns(_liked.ToArray());
+        _albumRatings.GetAllLikedByUser().Returns(
+            _liked.Select(r => new LikedAlbum("test-user", r)).ToArray());
         _missing.GetAll().Returns(_missingAlbums.ToArray());
     }
 

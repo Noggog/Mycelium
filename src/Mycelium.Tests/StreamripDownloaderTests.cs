@@ -122,9 +122,10 @@ public class StreamripDownloaderTests : IDisposable
             .Select(i => new DeezerTrack { id = i, title = $"Track {i}" }).ToArray());
 
     /// <summary>Null means the production default chain; an empty list means no fallback at all.</summary>
-    private StreamripDownloader Sut(IReadOnlyList<string>? fallbacks = null) =>
+    private StreamripDownloader Sut(
+        IReadOnlyList<string>? fallbacks = null, string configuredQuality = "2") =>
         new(new DownloaderConfig(
-                DownloadDir: _library, RipBinary: _rip, Quality: "2",
+                DownloadDir: _library, RipBinary: _rip, Quality: configuredQuality,
                 FallbackQualities: fallbacks ?? new[] { "1", "0" },
                 Codec: "", BatchSize: 1, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
                 DownloadTimeout: TimeSpan.FromMinutes(1), SettleInterval: TimeSpan.Zero,
@@ -132,10 +133,16 @@ public class StreamripDownloaderTests : IDisposable
             _deezer,
             NullLogger<StreamripDownloader>.Instance);
 
-    private static PurchaseItem Item() =>
+    /// <summary>
+    /// A queued album. <paramref name="target"/> is the quality the reconcile worked out from whoever
+    /// liked it; null is a row from before tiers existed (or a manual paste), which uses the
+    /// configured quality.
+    /// </summary>
+    private static PurchaseItem Item(AudioQuality? target = null) =>
         new("id", FeedKind.MissingAlbum, new ArtistKey("Food Pyramid"),
             "New Omni-Directional Healing Techniques", null, 0, Array.Empty<string>(),
-            PurchaseStatus.Queued, DateTimeOffset.UtcNow, null, AlbumId);
+            PurchaseStatus.Queued, DateTimeOffset.UtcNow, null, AlbumId,
+            TargetQuality: target);
 
     private string[] Landed() =>
         DownloadStaging.AudioFiles(_library).Select(Path.GetFileName).OrderBy(n => n).ToArray()!;
@@ -363,5 +370,76 @@ public class StreamripDownloaderTests : IDisposable
         (await Sut().Request(Item())).Accepted.Should().BeTrue();
 
         Landed().Should().Equal("01. Sun Ra.flac", "02. Prana Focus.flac");
+    }
+
+    // ---- Per-row quality: what a user's tier actually makes streamrip fetch ----
+
+    [Fact]
+    public async Task A_lossy_row_is_fetched_at_320_and_never_reaches_for_flac()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(2);
+        Plan("1", "01. A.mp3", "02. B.mp3");
+
+        var outcome = await Sut().Request(Item(AudioQuality.Lossy));
+
+        outcome.Accepted.Should().BeTrue();
+        // The whole point of the tier: a lossy user's like must not pull down the copy that costs
+        // 3x the disk, even though the deployment is configured for FLAC.
+        Calls().Should().Equal("1");
+    }
+
+    [Fact]
+    public async Task A_lossy_row_still_walks_down_when_320_comes_up_short()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(2);
+        Plan("1", "01. A.mp3");
+        Plan("0", "01. A.mp3", "02. B.mp3");
+
+        await Sut().Request(Item(AudioQuality.Lossy));
+
+        // Deezer's per-track gaps exist at every tier, not just at FLAC — the ladder still matters
+        // for a lossy row, it just starts a rung lower.
+        Calls().Should().Equal("1", "0");
+    }
+
+    [Fact]
+    public async Task A_lossless_row_starts_at_flac()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(2);
+        Plan("2", "01. A.flac", "02. B.flac");
+
+        await Sut().Request(Item(AudioQuality.Lossless));
+
+        Calls().Should().Equal("2");
+    }
+
+    [Fact]
+    public async Task A_row_with_no_target_downloads_exactly_as_it_always_did()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(2);
+        Plan("2", "01. A.flac", "02. B.flac");
+
+        // Rows written before tiers existed, and manual pastes no rating stands behind.
+        await Sut().Request(Item(target: null));
+
+        Calls().Should().Equal("2");
+    }
+
+    [Fact]
+    public async Task A_target_above_the_configured_quality_is_clamped_to_it()
+    {
+        if (Unsupported) { return; }
+        DeezerReports(2);
+        Plan("1", "01. A.mp3", "02. B.mp3");
+
+        // DEEZER_QUALITY is the operator's ceiling, not just a default for the untagged: a
+        // deployment deliberately pinned to 320 must not be overridden by marking a user lossless.
+        await Sut(configuredQuality: "1").Request(Item(AudioQuality.Lossless));
+
+        Calls().Should().Equal("1");
     }
 }

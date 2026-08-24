@@ -59,7 +59,13 @@ public record PurchaseItem(
     // exempts it. It exists for releases the artist-rooted discography walk can never reach — a
     // various-artists compilation (in no contributor's discography, and Deezer's own "Various Artists"
     // lists no albums at all), a regional reissue, a release filed under a differently-spelled act.
-    bool Manual = false);
+    bool Manual = false,
+    // How good a copy to fetch: the best entitlement among the users who asked for this. The list is
+    // global, so an album two people want is downloaded once — at the better of their two ceilings,
+    // since a lossy user riding along on a lossless request costs nothing while the reverse would
+    // quietly cheat the lossless user. Null on rows written before tiers existed and on artist rows
+    // (nothing downloads for an artist); the downloader falls back to its configured quality then.
+    AudioQuality? TargetQuality = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,

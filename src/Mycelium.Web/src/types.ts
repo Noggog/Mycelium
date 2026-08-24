@@ -342,4 +342,29 @@ export interface CurrentUser {
   displayName: string | null
   // True when this user is in DEV_USERNAMES — unlocks the in-app dev panel.
   isDev: boolean
+  // What quality this account's requests download at, already resolved server-side (their own tier
+  // if set, else the deployment default) — so the UI never has to know the fallback rule.
+  maxQuality: AudioQuality
+}
+
+// How good a copy of an album is. Ordered: 'Lossless' beats 'Lossy'. Mirrors AudioQuality on the
+// backend, where the same two names are the enum members.
+export type AudioQuality = 'Lossy' | 'Lossless'
+
+// One row of the dev panel's per-user quality table (mirrors GET /api/dev/users).
+export interface UserQualityEntry {
+  subject: string
+  username: string | null
+  displayName: string | null
+  email: string | null
+  lastLoginAt: string
+  // null when this user has never been given an explicit tier — they follow the deployment default.
+  maxQuality: AudioQuality | null
+  // What they actually download at: their own tier, or the default when they have none.
+  effectiveQuality: AudioQuality
+}
+
+export interface UserQualityList {
+  defaultQuality: AudioQuality
+  users: UserQualityEntry[]
 }
