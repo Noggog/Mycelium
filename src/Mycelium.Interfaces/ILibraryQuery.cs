@@ -24,4 +24,11 @@ public interface ILibraryQuery
     /// from scratch. Routine upkeep uses <see cref="QueryAlbumQuality"/> instead.
     /// </summary>
     Task<Dictionary<int, AudioQuality?>> QueryAllAlbumQuality();
+
+    /// <summary>
+    /// The files backing one owned album, as the library server reports them — <b>in that server's
+    /// path namespace</b>, which is not necessarily this process's. A caller that means to touch them
+    /// has to translate first. Empty when the album has no tracks or the key no longer resolves.
+    /// </summary>
+    Task<string[]> QueryAlbumFiles(int albumRatingKey);
 }

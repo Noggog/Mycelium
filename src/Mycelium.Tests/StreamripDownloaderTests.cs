@@ -131,6 +131,12 @@ public class StreamripDownloaderTests : IDisposable
                 DownloadTimeout: TimeSpan.FromMinutes(1), SettleInterval: TimeSpan.Zero,
                 SettleWindow: TimeSpan.Zero),
             _deezer,
+            // These cases cover gap downloads, which never reach the swap. The upgrade path has its
+            // own tests against a real path map and trash directory.
+            new UpgradeSwap(
+                Substitute.For<ILibraryQuery>(), Substitute.For<IArtistCatalogRepo>(),
+                new LibraryPathMap(null), new LibraryTrash(NullLogger<LibraryTrash>.Instance),
+                NullLogger<UpgradeSwap>.Instance),
             NullLogger<StreamripDownloader>.Instance);
 
     /// <summary>

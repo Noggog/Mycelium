@@ -27,6 +27,7 @@ public class DownloadServiceTests
     // The tagging side of the settle pass: a real ArtistTagBackfill over a substituted tagger, so a
     // settle test can assert the verdict mood lands once the artist finally shows up in Plex.
     private readonly IUserRepo _users = Substitute.For<IUserRepo>();
+    private readonly IAlbumBlockRepo _blocks = Substitute.For<IAlbumBlockRepo>();
     private readonly IArtistTagger _tagger = Substitute.For<IArtistTagger>();
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
     // No jitter in tests: waits stay exact (and zero), so nothing sleeps.
@@ -72,7 +73,8 @@ public class DownloadServiceTests
         var tagBackfill = new ArtistTagBackfill(
             _tagger, _queue, _users, NullLogger<ArtistTagBackfill>.Instance);
         return new DownloadService(_repo, _downloader, config, settings, purchases, catalog, tagBackfill,
-            _jitter, _schedule, Substitute.For<ILibraryScanner>(), NullLogger<DownloadService>.Instance);
+            _jitter, _schedule, Substitute.For<ILibraryScanner>(), _blocks,
+            NullLogger<DownloadService>.Instance);
     }
 
     /// <summary>

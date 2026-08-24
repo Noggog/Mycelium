@@ -49,6 +49,20 @@ public record DiscoveryPage(
 /// each as its own checkbox-toggleable, independently-paged section.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>What a <see cref="FeedKind"/> means for acquisition.</summary>
+public static class FeedKindExtensions
+{
+    /// <summary>
+    /// Whether a row of this kind is something the downloader can fetch. Artists are wishlist-only
+    /// (there is no such thing as downloading an artist); both album kinds are fetchable, and an
+    /// upgrade differs only in what has to happen to the copy already on disk before the new one
+    /// lands. One definition because five separate call sites gate on this, and a kind admitted by
+    /// four of them would queue and never drain.
+    /// </summary>
+    public static bool IsDownloadableAlbum(this FeedKind kind) =>
+        kind is FeedKind.MissingAlbum or FeedKind.UpgradeAlbum;
+}
+
 public enum FeedKind
 {
     /// <summary>A new artist not in the library, grown from the user's liked artists.</summary>
@@ -56,6 +70,20 @@ public enum FeedKind
 
     /// <summary>An album on Deezer for an owned artist that isn't in the library yet.</summary>
     MissingAlbum,
+
+    /// <summary>
+    /// An album the library already has, but at a lower quality than the user is entitled to — a
+    /// 320kbps copy where they could have lossless.
+    ///
+    /// <para>Its own kind rather than a flavour of <see cref="MissingAlbum"/> because the two are
+    /// different propositions in every way that matters: one grows the library and the other replaces
+    /// a record already in it. They are separately toggleable in the feed (someone may want gaps
+    /// filled but not care about re-fetching what they own), a thumbs-down means something different
+    /// on each (skip *this upgrade*, not dislike an album they own and like), and — carried onto the
+    /// purchase row — it is what tells the downloader an existing copy has to be moved aside rather
+    /// than merged with.</para>
+    /// </summary>
+    UpgradeAlbum,
 
     /// <summary>
     /// An owned library artist the user hasn't thumbed yet (either section, used for the Ratings
@@ -111,7 +139,11 @@ public record FeedItem(
     IReadOnlyList<string> Sources,
     long? DeezerAlbumId,
     int? Year = null,
-    ReconsiderSignal? Reconsider = null);
+    ReconsiderSignal? Reconsider = null,
+    // For a FeedKind.UpgradeAlbum card: how good the copy already in the library is, so the card can
+    // say what it is offering to replace ("You have this as MP3") rather than reading like a gap.
+    // Null on every other kind.
+    AudioQuality? OwnedQuality = null);
 
 /// <summary>
 /// Why the weekly sweep thinks a verdict was wrong — a keeper thumbed down, or a dud thumbed up: a

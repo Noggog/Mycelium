@@ -1,8 +1,25 @@
 # Per-user quality tiers & upgrade detection
 
-> **Parked design (2026-08-24).** Nothing here is built. Written up so the
-> thinking isn't redone later. See `PLAN.md` for the product vision and
-> `DEVELOPMENT.md` for how the current code is wired.
+> **Implemented 2026-08-24.** Steps 1-5 are built; this document is now the
+> record of *why* it is shaped the way it is, not a proposal. See `PLAN.md` for
+> the product vision and `DEPLOYMENT.md` for how to configure it.
+>
+> **What shipped**
+>
+> | | |
+> |---|---|
+> | Per-user tiers | `AudioQuality`, `AppUser.MaxQuality`, dev panel table, `DEFAULT_AUDIO_QUALITY` (default-deny, existing users backfilled to lossless) |
+> | Download at the right tier | `PurchaseItem.TargetQuality` = best entitlement among likers; `DEEZER_QUALITY` is the ceiling |
+> | Owned quality | Plex track sweep (majority rule), gap-filled per album on ordinary syncs, full re-derivation from *Dev tools → Audio quality sweep* |
+> | Upgrade detection | `MissingAlbum.OwnedQuality`, diffed against the ceiling, filtered per user into the `UpgradeAlbum` feed category (shown with missing albums) |
+> | Skip / snooze | `AlbumBlockScope.Upgrade` + `RetryAfter`; a thumbs-down is a skip, "Deezer has nothing better" a 180-day snooze |
+> | The swap | `LibraryPathMap`, `LibraryTrash` (move-aside + manifest, never delete), `UpgradeSwap` (complete *and* strictly-better gates) |
+>
+> **Deviations from the plan below, all deliberate:** gap-fill replaced the
+> periodic full sweep (per-album reads are ~14ms, so new arrivals resolve within
+> minutes from *any* source, not just downloads); `AcquiredQuality` was added so
+> a row records what it actually got rather than what it asked for; and the
+> `AlbumIsOwned` helpers were unified into a tier-aware `AlbumIsSatisfied`.
 
 ## What this is actually for
 

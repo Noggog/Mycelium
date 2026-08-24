@@ -52,6 +52,20 @@ const FAILURE_COPY: Record<
   None: undefined,
   Unknown: { note: "Couldn't download" },
   NoTracksAvailable: { note: 'Deezer served no tracks' },
+  // Not really failures — the library is fine, the upgrade just didn't happen. Worded so neither
+  // reads as "something broke", because in both cases the existing copy is untouched.
+  NoBetterQualityAvailable: { note: 'Deezer has nothing better' },
+  UpgradeNotPossible: {
+    note: "Couldn't replace the existing copy",
+    banner: {
+      title: "An upgrade couldn't be swapped in",
+      detail:
+        'A better copy downloaded, but the files it would replace could not be located from here — '
+        + 'so nothing was moved and the library is unchanged. This is almost always PLEX_PATH_MAP: '
+        + 'Plex reports paths in its own namespace, and each one needs a mapping onto the paths '
+        + 'mounted into this container (e.g. "/media/music:/music"). See DEPLOYMENT.md.',
+    },
+  },
   DeezerAuth: {
     note: 'Deezer login rejected',
     banner: {
@@ -483,6 +497,7 @@ export default function Purchases() {
         deezerAlbumId: item.deezerAlbumId,
         year: null,
         reconsider: null,
+        ownedQuality: null,
       }
       return clearRating(feedItem)
     },

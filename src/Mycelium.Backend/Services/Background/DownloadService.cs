@@ -27,6 +27,7 @@ namespace Mycelium.Backend.Services.Background;
 public class DownloadService : BackgroundService
 {
     private readonly IPurchaseRepo _repo;
+    private readonly IAlbumBlockRepo _blocks;
     private readonly IDownloader _downloader;
     private readonly DownloaderConfig _config;
     private readonly DownloadSettings _settings;
@@ -52,9 +53,11 @@ public class DownloadService : BackgroundService
         JitterPolicy jitter,
         DownloadSchedule schedule,
         ILibraryScanner scanner,
+        IAlbumBlockRepo blocks,
         ILogger<DownloadService> logger)
     {
         _repo = repo;
+        _blocks = blocks;
         _downloader = downloader;
         _config = config;
         _settings = settings;
@@ -76,7 +79,7 @@ public class DownloadService : BackgroundService
     public async Task<bool> RequestDownload(string id)
     {
         var item = (await _repo.GetAll()).FirstOrDefault(p => p.Id == id);
-        if (item is null || item.Kind != FeedKind.MissingAlbum || item.DeezerAlbumId is null or 0)
+        if (item is null || !item.Kind.IsDownloadableAlbum() || item.DeezerAlbumId is null or 0)
         {
             return false;
         }
@@ -184,7 +187,7 @@ public class DownloadService : BackgroundService
         var item = (await _repo.GetAll()).FirstOrDefault(p => p.Id == id);
         if (item is null
             || item.Status != PurchaseStatus.Queued
-            || item.Kind != FeedKind.MissingAlbum
+            || !item.Kind.IsDownloadableAlbum()
             || item.DeezerAlbumId is null or 0)
         {
             return false;
@@ -209,8 +212,48 @@ public class DownloadService : BackgroundService
             outcome.Accepted ? PurchaseStatus.Sent : PurchaseStatus.Failed,
             outcome.Failure,
             outcome.Acquired);
+
+        // An upgrade that found nothing better is a fact about the album, not a transient failure:
+        // without recording it, every sync would re-offer the same album and every attempt would burn
+        // a download slot reaching the same conclusion. Snoozed rather than blocked, because a
+        // catalogue can gain a lossless master later.
+        //
+        // Gated on the specific reason: a systemic failure (a dead ARL) makes *every* upgrade fail
+        // identically, and treating those as "no better copy exists" would silently write off the
+        // whole library from one expired credential.
+        if (outcome.Failure == DownloadFailure.NoBetterQualityAvailable
+            && item.Kind == FeedKind.UpgradeAlbum
+            && item.Album is { } albumName)
+        {
+            var until = DateTimeOffset.UtcNow.Add(UpgradeRetryAfter);
+            // Under both acts the album can be filed as — the artist whose discography surfaced it and
+            // the one Deezer credits it to — so a collaboration reachable through either member is not
+            // re-offered through the other. The row carries both, which is more reliable than looking
+            // them up again after the album has left the missing set.
+            foreach (var act in new[] { item.Artist.ArtistName, item.AlbumArtist }
+                         .Where(a => !string.IsNullOrWhiteSpace(a))
+                         .Select(a => a!)
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                await _blocks.Add(new AlbumBlock(
+                    act, albumName, BlockedBy: null, AlbumBlockScope.Upgrade, until));
+            }
+
+            _logger.LogInformation(
+                "Deezer had nothing better than the copy of \"{Album}\" ({Artist}) we already hold; "
+                + "not offering the upgrade again until {Until:d}",
+                albumName, item.Artist.ArtistName, until);
+        }
+
         return true;
     }
+
+    /// <summary>
+    /// How long an album sits out after Deezer turned out to have nothing better than the copy we
+    /// hold. Long enough that it isn't retried pointlessly, short enough that a catalogue which
+    /// later gains a lossless master is noticed within a season rather than never.
+    /// </summary>
+    private static readonly TimeSpan UpgradeRetryAfter = TimeSpan.FromDays(180);
 
     /// <summary>
     /// How often the enqueue pass re-checks for pending albums during a fast-mode burst. Short enough
@@ -303,7 +346,7 @@ public class DownloadService : BackgroundService
             await _purchases.Reconcile();
             var candidates = (await _repo.GetAll())
                 .Where(p => p.Status == PurchaseStatus.Pending
-                            && p.Kind == FeedKind.MissingAlbum
+                            && p.Kind.IsDownloadableAlbum()
                             && p.DeezerAlbumId is > 0)
                 .OrderBy(p => p.RequestedAt);
             var pending = (fast ? candidates : candidates.Take(_config.BatchSize)).ToList();

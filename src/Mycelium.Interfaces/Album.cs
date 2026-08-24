@@ -31,6 +31,12 @@ public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality 
 /// <see cref="Year"/> is the Deezer release year, surfaced beside the title so a recommendation can
 /// be placed in time; null when Deezer gave no date (or for rows written before year tracking).
 ///
+/// <see cref="OwnedQuality"/> is how good the copy already on disk is, and null when the library
+/// doesn't have the album at all. That is what separates a gap from an upgrade: the sync emits a row
+/// whenever the library is short of the best tier <em>any</em> user is entitled to, and the per-user
+/// feed then decides which of those to actually offer (a user capped at 320 is not shown an album
+/// they already have at 320).
+///
 /// <see cref="RecordType"/> is Deezer's classification of the release. Every type the sync lists is
 /// persisted, including the ones the Discover feed doesn't push (see
 /// <see cref="AlbumRecordType.IsFeedEligible"/>): the row is what carries
@@ -52,8 +58,17 @@ public record MissingAlbum(
     long DeezerAlbumId,
     ArtistKey? AlbumArtist = null,
     int? Year = null,
-    string? RecordType = null)
+    string? RecordType = null,
+    AudioQuality? OwnedQuality = null)
 {
+    /// <summary>
+    /// Whether this row is an <em>upgrade</em> — the library has the album, just not well enough —
+    /// rather than a genuine gap. The two are the same kind of row (both carry the Deezer id the
+    /// downloader needs) but they are entirely different propositions to a user: one grows the
+    /// library, the other replaces a record they already own. See <see cref="FeedKind.UpgradeAlbum"/>.
+    /// </summary>
+    public bool IsUpgrade => OwnedQuality is not null;
+
     /// <summary>The artist the library files this album under — <see cref="AlbumArtist"/> when known,
     /// else <see cref="Artist"/> (non-collaboration albums are filed under the listing artist).</summary>
     public ArtistKey MatchArtist => AlbumArtist ?? Artist;

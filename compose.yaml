@@ -37,6 +37,9 @@ services:
       # Tier for an account with no per-user setting. Default-deny; existing users are backfilled to
       # Lossless on first start, and tiers are set per user in the dev panel.
       DEFAULT_AUDIO_QUALITY: ${DEFAULT_AUDIO_QUALITY:-Lossy}
+      # Required for album upgrades: maps Plex's own file paths onto the mounts this container sees.
+      # Unset means upgrades are refused (safely) and everything else works as before.
+      PLEX_PATH_MAP: ${PLEX_PATH_MAP:-}
       # The daily catalog/album syncs run at DAILY_SYNC_HOUR in *this container's* local time, so set
       # TZ if you want "6am" to mean 6am where the server is (the image is UTC otherwise).
       TZ: ${TZ:-UTC}

@@ -88,15 +88,18 @@ public class StreamripDownloader : IDownloader
 
     private readonly DownloaderConfig _config;
     private readonly IDeezerApi _deezer;
+    private readonly UpgradeSwap _swap;
     private readonly ILogger<StreamripDownloader> _logger;
 
     public StreamripDownloader(
         DownloaderConfig config,
         IDeezerApi deezer,
+        UpgradeSwap swap,
         ILogger<StreamripDownloader> logger)
     {
         _config = config;
         _deezer = deezer;
+        _swap = swap;
         _logger = logger;
     }
 
@@ -138,7 +141,7 @@ public class StreamripDownloader : IDownloader
 
     public async Task<DownloadOutcome> Request(PurchaseItem item)
     {
-        if (item.Kind != FeedKind.MissingAlbum || item.DeezerAlbumId is null or 0)
+        if (!item.Kind.IsDownloadableAlbum() || item.DeezerAlbumId is null or 0)
         {
             _logger.LogInformation(
                 "Skipping {Id}: only Deezer albums are downloadable (artists are wishlist-only)", item.Id);
@@ -273,21 +276,42 @@ public class StreamripDownloader : IDownloader
             return DownloadOutcome.Failed(DownloadFailure.NoTracksAvailable);
         }
 
-        if (expected > 0 && landed < expected)
+        // Read before promoting: afterwards the files have moved out of staging. This is what the
+        // ladder actually produced, which the row records so a later pass can tell "we already tried
+        // and Deezer has nothing better" apart from "we never asked for better".
+        var acquired = DownloadStaging.QualityOf(preferredDir);
+
+        // An upgrade replaces something. Nothing is promoted until the copy it supersedes has been
+        // moved aside — the deployed folder naming puts both at the same path, so promoting first
+        // would interleave two encodings in one folder. The swap also refuses outright if what came
+        // down is short or is no better than what is held; a refusal leaves the library untouched.
+        if (item.Kind == FeedKind.UpgradeAlbum)
+        {
+            var swap = await _swap.PrepareForPromotion(item, preferredDir, landed, expected);
+            if (!swap.Swapped)
+            {
+                _logger.LogWarning(
+                    "Not upgrading {Artist} — {Album}: {Reason} ({Detail}). The library is unchanged.",
+                    item.Artist.ArtistName, item.Album, swap.Refusal, swap.Detail ?? "no detail");
+                return DownloadOutcome.Failed(swap.Refusal == SwapRefusal.NotAnUpgrade
+                    // Deezer served nothing better than we hold. Distinct from a transient failure:
+                    // it is the fact that puts the album to sleep instead of retrying it forever.
+                    ? DownloadFailure.NoBetterQualityAvailable
+                    : DownloadFailure.UpgradeNotPossible);
+            }
+        }
+        else if (expected > 0 && landed < expected)
         {
             // No quality helps a track Deezer won't serve at all (geo-blocking, a pulled master), so
             // retrying forever is pointless — take the partial album and say so loudly. The output is
             // attached for the same reason as above: the per-track reasons live only in there.
+            // (An *upgrade* never takes this branch: replacing a complete album with a partial one is
+            // a loss, so the swap refuses it above.)
             _logger.LogWarning(
                 "Promoting a PARTIAL album: {Artist} — {Album} landed {Landed} of {Expected} tracks. "
                 + "Last streamrip pass said:\n{Output}",
                 item.Artist.ArtistName, item.Album, landed, expected, last.Output);
         }
-
-        // Read before promoting: afterwards the files have moved out of staging. This is what the
-        // ladder actually produced, which the row records so a later pass can tell "we already tried
-        // and Deezer has nothing better" apart from "we never asked for better".
-        var acquired = DownloadStaging.QualityOf(preferredDir);
         DownloadStaging.Promote(preferredDir, _config.DownloadDir);
         _logger.LogInformation(
             "Downloaded {Artist} — {Album}: {Landed} track(s) promoted to {Dir} as {Acquired}",

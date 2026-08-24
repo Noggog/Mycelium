@@ -50,6 +50,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
     private readonly IUserAlbumRatingRepo _albumRatings;
     private readonly IAlbumBlockRepo _blocks;
     private readonly MissingAlbumRefresher _albumRefresher;
+    private readonly UserQualityService _qualities;
     private readonly ILogger<DiscoveryEngine> _logger;
 
     public DiscoveryEngine(
@@ -61,6 +62,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
         IUserAlbumRatingRepo albumRatings,
         IAlbumBlockRepo blocks,
         MissingAlbumRefresher albumRefresher,
+        UserQualityService qualities,
         ILogger<DiscoveryEngine> logger)
     {
         _queue = queue;
@@ -71,6 +73,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
         _albumRatings = albumRatings;
         _blocks = blocks;
         _albumRefresher = albumRefresher;
+        _qualities = qualities;
         _logger = logger;
     }
 
@@ -132,6 +135,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
         FeedKind.ReconsiderArtist => ReconsiderItems(userId),
         FeedKind.SecondThoughtsArtist => SecondThoughtsItems(userId),
         FeedKind.MissingAlbum => MissingAlbumItems(userId),
+        FeedKind.UpgradeAlbum => UpgradeAlbumItems(userId),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown feed kind"),
     };
 
@@ -270,7 +274,25 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
             0, Array.Empty<string>(), null, Reconsider: r.Signal))
         .ToList();
 
-    private async Task<List<FeedItem>> MissingAlbumItems(string userId)
+    private Task<List<FeedItem>> MissingAlbumItems(string userId) =>
+        AlbumItems(userId, upgrades: false);
+
+    /// <summary>
+    /// Albums the library already holds below what this user is entitled to. Same rows as the missing
+    /// feed — the sync emits one superset, diffed against the best tier anyone here could ask for —
+    /// narrowed to the ones this particular user out-ranks. A user capped at 320 is never shown a 320
+    /// album they already have, even though a lossless user would be.
+    /// </summary>
+    private Task<List<FeedItem>> UpgradeAlbumItems(string userId) =>
+        AlbumItems(userId, upgrades: true);
+
+    /// <summary>
+    /// The shared body of the two album feeds. They differ only in which half of the missing-album
+    /// rows they take and — for upgrades — the per-user quality test; everything else (frontier,
+    /// record type, prior verdicts, blocks) applies identically, and splitting the method would let
+    /// those rules drift apart.
+    /// </summary>
+    private async Task<List<FeedItem>> AlbumItems(string userId, bool upgrades)
     {
         // Gap-fill only for artists the user has thumbed up (the frontier) — not every owned artist.
         // A fresh user with no likes sees no missing albums until they like a band.
@@ -280,18 +302,30 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
             return new List<FeedItem>();
         }
 
+        var entitlement = upgrades ? await _qualities.For(userId) : (AudioQuality?)null;
         var decided = await _albumRatings.GetDecidedKeys(userId);
         var blocked = await BlockedKeys();
+        var skipped = upgrades ? await UpgradeSkippedKeys() : new HashSet<string>();
+
         return (await _missing.GetAll())
+            .Where(m => m.IsUpgrade == upgrades)
+            // For an upgrade, the copy on disk has to actually be worse than what this user can have.
+            // The sync diffed against the ceiling, so a row can exist for a tier this user doesn't
+            // reach — that row belongs to someone else's feed, not theirs.
+            .Where(m => !upgrades || m.OwnedQuality < entitlement)
             .Where(m => liked.Contains(m.Artist.ArtistName))
             // Singles and compilations are synced (so they're queueable from an artist's discography and
             // carry a Deezer id) but never pushed here — the feed would fill with radio edits.
             .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Where(m => !IsBlocked(blocked, m))
+            // Upgrades carry their own verdicts, kept apart from album ratings: declining to replace a
+            // record is not disliking it.
+            .Where(m => !skipped.Contains(AlbumOverrideKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Select(m => new FeedItem(
-                FeedKind.MissingAlbum, m.Artist, m.Album.AlbumName, m.AlbumArt, 0, Array.Empty<string>(),
-                m.DeezerAlbumId, m.Year))
+                upgrades ? FeedKind.UpgradeAlbum : FeedKind.MissingAlbum,
+                m.Artist, m.Album.AlbumName, m.AlbumArt, 0, Array.Empty<string>(),
+                m.DeezerAlbumId, m.Year, OwnedQuality: m.OwnedQuality))
             .ToList();
     }
 
@@ -302,8 +336,28 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
     /// </summary>
     private async Task<HashSet<string>> BlockedKeys() =>
         (await _blocks.GetAll())
+        .Where(b => b.Scope == AlbumBlockScope.Release)
         .Select(b => AlbumOverrideKey.For(b.Artist, b.Album))
         .ToHashSet();
+
+    /// <summary>
+    /// Albums whose upgrade has been declined — either by a user ("this copy is fine") or by the
+    /// downloader having already established Deezer has nothing better. An expired
+    /// <see cref="AlbumBlock.RetryAfter"/> drops out, so a "no lossless available" verdict lapses back
+    /// into candidacy rather than foreclosing on a catalogue that can change.
+    ///
+    /// <para>Kept apart from <see cref="BlockedKeys"/> deliberately: declining to replace a record is
+    /// not deciding the library shouldn't carry it, and blurring the two would hide an album the user
+    /// owns and likes from every other surface in the app.</para>
+    /// </summary>
+    private async Task<HashSet<string>> UpgradeSkippedKeys()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return (await _blocks.GetAll())
+            .Where(b => b.Scope == AlbumBlockScope.Upgrade && b.AppliesAt(now))
+            .Select(b => AlbumOverrideKey.For(b.Artist, b.Album))
+            .ToHashSet();
+    }
 
     /// <summary>
     /// Whether a missing album is blocked, checked under both acts it can be filed as — the artist
@@ -498,6 +552,53 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
     /// </summary>
     public Task RateAlbum(string userId, string artistName, string albumName, string? albumArt, DiscoveryStatus status) =>
         _albumRatings.Rate(userId, artistName, albumName, albumArt, status);
+
+    /// <summary>
+    /// A verdict on an <em>upgrade</em> — replacing a copy the library already has with a better one.
+    /// A thumbs-up rates the album like any other acquisition (that is what puts it on the to-buy
+    /// list); a thumbs-down records a skip instead.
+    ///
+    /// <para>The thumbs-down deliberately does <b>not</b> go through <see cref="RateAlbum"/>. The user
+    /// owns this album and presumably likes it — storing a dislike would put a record they enjoy on
+    /// their Ratings page as rejected, and drop it out of the liked set that drives the frontier. The
+    /// gesture means "keep the copy we have", which is a fact about the upgrade, not about the
+    /// music.</para>
+    /// </summary>
+    public async Task RateUpgrade(
+        string userId, string artistName, string albumName, string? albumArt, DiscoveryStatus status)
+    {
+        if (status == DiscoveryStatus.Liked)
+        {
+            await _albumRatings.Rate(userId, artistName, albumName, albumArt, status);
+            return;
+        }
+
+        await SkipUpgrade(userId, artistName, albumName, retryAfter: null);
+    }
+
+    /// <summary>
+    /// Stops an album being offered for upgrade. <paramref name="retryAfter"/> null is a standing
+    /// decision (a user saying the copy they have is fine); a stamp is a snooze, used when Deezer
+    /// turned out to have nothing better — a catalogue can gain a lossless master later, so that
+    /// verdict lapses rather than foreclosing forever.
+    ///
+    /// <para>Recorded under every act the album could be filed as, for the same reason a block is:
+    /// a collaboration reachable through either member must not come back through the other.</para>
+    /// </summary>
+    public async Task SkipUpgrade(
+        string userId, string artistName, string albumName, DateTimeOffset? retryAfter)
+    {
+        foreach (var act in await BlockActsFor(artistName, albumName))
+        {
+            await _blocks.Add(new AlbumBlock(
+                act, albumName, userId, AlbumBlockScope.Upgrade, retryAfter));
+        }
+
+        _logger.LogInformation(
+            "Upgrade skipped for \"{Album}\" ({Artist}){Until}",
+            albumName, artistName,
+            retryAfter is { } at ? $" until {at:u}" : " (standing)");
+    }
 
     /// <summary>
     /// Blocks an album for everyone — the escalation from a personal "meh". It stops being offered in

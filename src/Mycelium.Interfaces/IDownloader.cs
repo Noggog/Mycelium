@@ -38,6 +38,20 @@ public enum DownloadFailure
     /// master. Specific to this album; other downloads are unaffected.
     /// </summary>
     NoTracksAvailable,
+
+    /// <summary>
+    /// An upgrade was attempted and Deezer had nothing better than the copy already held — it has no
+    /// lossless master for this album. Not retryable in any useful sense today, but not permanent
+    /// either: a catalogue can gain one, which is why this snoozes the album rather than blocking it.
+    /// </summary>
+    NoBetterQualityAvailable,
+
+    /// <summary>
+    /// A better copy was downloaded but couldn't be swapped in — the existing files couldn't be
+    /// located or lie outside the configured path map, or the result was short of the album. The
+    /// download is discarded and the library left untouched; the fix is configuration, not a retry.
+    /// </summary>
+    UpgradeNotPossible,
 }
 
 /// <summary>

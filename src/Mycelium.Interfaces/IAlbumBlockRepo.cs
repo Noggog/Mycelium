@@ -7,7 +7,41 @@ namespace Mycelium.Interfaces;
 /// "meh" (<see cref="DiscoveryStatus.Disliked"/>, which only hides it from the one user who said so).
 /// <see cref="BlockedBy"/> is the user who placed it, kept for audit — anyone may lift it.
 /// </summary>
-public record AlbumBlock(string Artist, string Album, string? BlockedBy = null);
+public record AlbumBlock(
+    string Artist,
+    string Album,
+    string? BlockedBy = null,
+    AlbumBlockScope Scope = AlbumBlockScope.Release,
+    DateTimeOffset? RetryAfter = null)
+{
+    /// <summary>Whether this verdict is in force at <paramref name="now"/>.</summary>
+    public bool AppliesAt(DateTimeOffset now) => RetryAfter is null || RetryAfter > now;
+}
+
+/// <summary>
+/// What a block actually forbids. The distinction exists because declining to <em>replace</em> a
+/// record you own is not the same as deciding the library shouldn't carry it, and conflating them
+/// would make "no thanks, this one's fine as it is" hide an album from every surface in the app.
+/// </summary>
+public enum AlbumBlockScope
+{
+    /// <summary>
+    /// Don't offer this release at all — a bad Deezer entry, a duplicate reissue, a record the
+    /// library has decided against. Applies to every album surface.
+    /// </summary>
+    Release,
+
+    /// <summary>
+    /// Keep the copy we have: don't offer to replace it with a better one. The album stays visible
+    /// and owned everywhere else; only the upgrade feed passes over it.
+    ///
+    /// <para>Two things write this, told apart by <see cref="AlbumBlock.RetryAfter"/>: a user saying
+    /// "not this one" (no stamp — it stands until lifted), and the downloader discovering Deezer has
+    /// nothing better to offer (a stamp, since a catalogue can gain a lossless master later and
+    /// foreclosing on that permanently would be wrong).</para>
+    /// </summary>
+    Upgrade,
+}
 
 /// <summary>
 /// Durable, global store of blocked albums. Consulted when serving every album surface (the
@@ -23,9 +57,9 @@ public interface IAlbumBlockRepo
     /// <summary>Every block on record.</summary>
     Task<AlbumBlock[]> GetAll();
 
-    /// <summary>Records a block. Idempotent for the same (artist, album).</summary>
+    /// <summary>Records a block. Idempotent for the same (artist, album, scope).</summary>
     Task Add(AlbumBlock block);
 
     /// <summary>Lifts a block, returning the album to everyone's feeds.</summary>
-    Task Remove(string artist, string album);
+    Task Remove(string artist, string album, AlbumBlockScope scope = AlbumBlockScope.Release);
 }

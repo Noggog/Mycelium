@@ -134,6 +134,42 @@ account nobody has decided about, and **Dev tools -> Download quality** sets it 
 - Accounts appear in the panel only **after they have signed in at least once** — the user store is
   populated on login and the IdP is never enumerated.
 
+## Album upgrades (replacing a lower-quality copy)
+
+When the library holds an album below what a user is entitled to, it can be offered in Discover as
+an **Upgrade album** card. It rides along with the "Add missing album" chip — same ask ("go get this
+album"), so one filter covers both the gap and the worse copy — and the card keeps its own badge so
+it's obvious which one you're looking at. A thumbs-up queues it; a thumbs-down records "keep the copy
+we have" and is kept apart from album ratings, so declining an upgrade never shows up as disliking a
+record you own.
+
+**`PLEX_PATH_MAP` is required for upgrades to complete.** Plex reports file paths in its own
+namespace, which is not this container's. Declare the translation as `plexPrefix:localPrefix` pairs:
+
+```
+PLEX_PATH_MAP=/media/music:/music
+```
+
+Add a pair per library location you want upgradeable, comma-separated. An album whose files fall
+outside every mapped prefix is **refused, not guessed at** — the download is discarded and the
+library left untouched, with `Couldn't replace the existing copy` on the row. Without any mapping,
+upgrades download and are then refused; gap-filling is unaffected.
+
+**Nothing is deleted.** The superseded copy is moved to a `.mycelium-removed/` folder beside it,
+with a `manifest.json` recording where each file came from, so a bad swap can be undone by hand.
+Clearing that folder out is a separate, manual decision.
+
+**Two gates stand in front of every swap**, and both leave the library untouched when they refuse:
+
+- **Complete** — a short download never replaces a whole album.
+- **Strictly better** — with the fallback ladder on, an album Deezer has no lossless master for comes
+  back at 320. Swapping that in would churn files for no gain, so it is refused and the album is
+  snoozed for six months (`Deezer has nothing better`) rather than retried on every sync.
+
+Album quality itself comes from Plex, and needs one catch-up: **Dev tools → Audio quality sweep**
+reads every track once (~20–30s on a large library) to work out what format each album is in. After
+that, ordinary syncs resolve new arrivals a few at a time, whatever their source.
+
 ## Notes / troubleshooting
 
 - **Logs:** the app writes rolling logs to the `app_logs` volume (`/app/logs`) and to stdout

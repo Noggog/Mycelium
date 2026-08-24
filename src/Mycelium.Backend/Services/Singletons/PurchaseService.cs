@@ -181,7 +181,7 @@ public class PurchaseService
     {
         var all = await _purchases.GetAll();
         var queued = all.Count(p => p.Status == PurchaseStatus.Pending
-                                    && p.Kind == FeedKind.MissingAlbum && p.DeezerAlbumId is > 0);
+                                    && p.Kind.IsDownloadableAlbum() && p.DeezerAlbumId is > 0);
         // In-flight = queued-for-download + actively downloading, with the one in flight first so the
         // activity readout names what's fetching now.
         var current = all
@@ -276,26 +276,46 @@ public class PurchaseService
         }
 
         // Liked albums come back paired with the user who liked them, so a row shared by several
-        // people can be fetched once at the best of their entitlements.
+        // people can be fetched once at the best of their entitlements. Grouped *before* the
+        // ownership test, because whether the library already satisfies a want now depends on that
+        // group's target — an album held at 320 satisfies a lossy liker and not a lossless one.
         foreach (var g in (await _albumRatings.GetAllLikedByUser())
-                     .Where(l => !AlbumIsOwned(ownedAlbums, overrideKeys, MatchArtistFor(l.Rating.Artist.ArtistName, l.Rating.Album.AlbumName, null), l.Rating.Album.AlbumName))
                      .GroupBy(l => PurchaseKey.ForAlbum(l.Rating.Artist.ArtistName, l.Rating.Album.AlbumName)))
         {
             var first = g.First().Rating;
+            // Recomputed every reconcile rather than fixed at first request: a lossless user liking
+            // an album a lossy user already queued must raise its target before it downloads.
+            var target = await _quality.BestOf(g.Select(l => l.UserId));
+            var matchArtist = MatchArtistFor(first.Artist.ArtistName, first.Album.AlbumName, null);
+
+            if (AlbumIsSatisfied(ownedAlbums, overrideKeys, matchArtist, first.Album.AlbumName, target))
+            {
+                continue;
+            }
+
+            // Owned, but below what is wanted: an upgrade rather than a gap. The kind is carried onto
+            // the row because the two are acquired differently — an upgrade has an existing copy that
+            // must be moved aside rather than merged with.
+            var isUpgrade = AlbumIsOwned(ownedAlbums, overrideKeys, matchArtist, first.Album.AlbumName);
+            // What is on disk right now. The downloader checks the result against this before
+            // replacing anything, and by then the album is no longer in the missing set.
+            var ownedQuality = isUpgrade
+                ? OwnedQualityOf(ownedAlbums, matchArtist, first.Album.AlbumName)
+                : null;
+
             var ratingKey = AlbumRatingKey.For(first.Artist.ArtistName, first.Album.AlbumName);
             long? deezerAlbumId = deezerIds.TryGetValue(ratingKey, out var did) && did != 0 ? did : null;
             // Persist the album-artist on the row so it still reconciles once the album leaves the
             // missing set (it drops out as soon as the library owns it).
             var albumArtist = albumArtists.TryGetValue(ratingKey, out var aa) ? aa : null;
-            // Recomputed every reconcile rather than fixed at first request: a lossless user liking
-            // an album a lossy user already queued must raise its target before it downloads.
-            var target = await _quality.BestOf(g.Select(l => l.UserId));
             desired[g.Key] = new PurchaseItem(
-                g.Key, FeedKind.MissingAlbum, first.Artist, first.Album.AlbumName,
+                g.Key,
+                isUpgrade ? FeedKind.UpgradeAlbum : FeedKind.MissingAlbum,
+                first.Artist, first.Album.AlbumName,
                 g.Select(l => l.Rating.AlbumArt).FirstOrDefault(a => a != null),
                 0, Array.Empty<string>(),
                 PurchaseStatus.Pending, default, null, deezerAlbumId, albumArtist,
-                TargetQuality: target);
+                TargetQuality: target, OwnedQuality: ownedQuality);
         }
 
         // Insert new wants as pending / refresh display fields on existing rows.
@@ -307,8 +327,15 @@ public class PurchaseService
         // Close the loop / prune: walk existing rows against ownership + desire.
         foreach (var row in await _purchases.GetAll())
         {
-            var nowOwned = row.Kind == FeedKind.MissingAlbum
-                ? AlbumIsOwned(ownedAlbums, overrideKeys, MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist), row.Album ?? "")
+            // An album row closes out only when the library holds it *well enough* for what this row
+            // asked. Testing bare ownership would flip an upgrade to InLibrary on the very next
+            // reconcile — the lesser copy is right there — and it would never download.
+            var nowOwned = row.Kind is FeedKind.MissingAlbum or FeedKind.UpgradeAlbum
+                ? AlbumIsSatisfied(
+                    ownedAlbums, overrideKeys,
+                    MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist),
+                    row.Album ?? "",
+                    row.TargetQuality)
                 : owned.Contains(row.Artist.ArtistName);
 
             // A row that already downloaded, at a quality below what is now being asked of it, is not
@@ -391,6 +418,43 @@ public class PurchaseService
         (ownedAlbums.TryGetValue(artist, out var set)
          && set.ContainsKey(AlbumTitleMatcher.Normalize(album)))
         || overrideKeys.Contains(AlbumOverrideKey.For(artist, album));
+
+    /// <summary>
+    /// The quality of the copy the library holds, or null when it holds none <em>or</em> hasn't had
+    /// its quality determined. Both read as "no upgrade is due": for the first there is nothing to
+    /// upgrade from, and for the second we have no evidence anything is wrong.
+    /// </summary>
+    private static AudioQuality? OwnedQualityOf(
+        Dictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums, string artist, string album) =>
+        ownedAlbums.TryGetValue(artist, out var set)
+        && set.TryGetValue(AlbumTitleMatcher.Normalize(album), out var quality)
+            ? quality
+            : null;
+
+    /// <summary>
+    /// Whether the library already satisfies a want for this album at <paramref name="target"/>.
+    ///
+    /// <para>This is the tier-aware form of <see cref="AlbumIsOwned"/>, and the distinction is what
+    /// makes upgrades possible at all: owning an album is no longer the end of the question. An album
+    /// held at 320 that someone wants lossless is <em>not</em> satisfied, so it stays on the queue
+    /// rather than closing out against the copy already on disk.</para>
+    ///
+    /// <para>An undetermined quality counts as satisfied — <c>null &lt; target</c> is false — so the
+    /// library isn't re-acquired wholesale before the catch-up sweep has run.</para>
+    /// </summary>
+    private static bool AlbumIsSatisfied(
+        Dictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums,
+        HashSet<string> overrideKeys,
+        string artist,
+        string album,
+        AudioQuality? target)
+    {
+        if (!AlbumIsOwned(ownedAlbums, overrideKeys, artist, album))
+        {
+            return false;
+        }
+        return !(OwnedQualityOf(ownedAlbums, artist, album) < target);
+    }
 
     /// <summary>The merge lookup keys (see <see cref="AlbumOverrideKey"/>), one per recorded override.</summary>
     private async Task<HashSet<string>> LoadOverrideKeys() =>

@@ -17,7 +17,8 @@ public record MissingAlbumSyncResult(int ArtistsScanned, int MissingTotal);
 /// so without the label a single would read as an album. Null for an owned album Deezer doesn't list.
 /// </summary>
 public record DiscographyAlbum(
-    string Title, string? CoverUrl, long? DeezerAlbumId, bool Owned, int? Year = null, string? RecordType = null);
+    string Title, string? CoverUrl, long? DeezerAlbumId, bool Owned, int? Year = null,
+    string? RecordType = null, AudioQuality? OwnedQuality = null);
 
 /// <summary>
 /// The missing-album sync job: for each owned artist, pulls its Deezer discography and diffs it
@@ -50,6 +51,7 @@ public class MissingAlbumRefresher
     private readonly IMissingAlbumRepo _missing;
     private readonly IAlbumMatchOverrideRepo _overrides;
     private readonly IDeezerAlbumArtistRepo _albumArtists;
+    private readonly UserQualityService _qualities;
     private readonly ILogger<MissingAlbumRefresher> _logger;
 
     // How many /album/{id} lookups to have in flight at once. DeezerApi paces every call through a
@@ -65,6 +67,7 @@ public class MissingAlbumRefresher
         IMissingAlbumRepo missing,
         IAlbumMatchOverrideRepo overrides,
         IDeezerAlbumArtistRepo albumArtists,
+        UserQualityService qualities,
         ILogger<MissingAlbumRefresher> logger)
     {
         _catalog = catalog;
@@ -73,6 +76,7 @@ public class MissingAlbumRefresher
         _missing = missing;
         _overrides = overrides;
         _albumArtists = albumArtists;
+        _qualities = qualities;
         _logger = logger;
     }
 
@@ -333,11 +337,24 @@ public class MissingAlbumRefresher
             rows.Where(r => !r.Owned).Select(r => (r.Album.id, r.Key)).ToList(),
             resolution == ArtistResolution.Full ? null : CouldChangeOwnership);
 
+        // The best tier anyone using this deployment could ask for. The sync runs once for the whole
+        // library and can't ask per user, so it diffs against the ceiling and emits a superset; the
+        // per-user feed narrows it (see DiscoveryEngine). Without this an upgrade would have to be
+        // discovered per user, which means walking Deezer per user.
+        var ceiling = await _qualities.Ceiling();
+
         var all = new List<DiscographyAlbum>(rows.Count);
         var missing = new List<MissingAlbum>();
         foreach (var (album, key, ownedByScanned) in rows)
         {
             var isOwned = ownedByScanned;
+            // The tier of the copy on disk, when we have one. Null covers both "we don't own it" and
+            // "we own it but haven't determined the quality" — the two are told apart by isOwned, and
+            // the second deliberately produces no upgrade row (an undetermined copy is not evidence
+            // that a better one is needed).
+            AudioQuality? ownedQuality = scannedOwned.TryGetValue(key, out var scannedTier)
+                ? scannedTier
+                : null;
             var albumArtist = artist;
             // Not in the scanning artist's owned set. It may be a collaboration the listing surfaces
             // via one member (e.g. a duo record) but the library files under the duo name, so the act
@@ -349,17 +366,34 @@ public class MissingAlbumRefresher
                 && !string.Equals(resolved, artist.ArtistName, StringComparison.OrdinalIgnoreCase))
             {
                 albumArtist = new ArtistKey(resolved);
-                isOwned = OwnedTitlesFor(resolved).ContainsKey(key)
+                var byAlbumArtist = OwnedTitlesFor(resolved);
+                isOwned = byAlbumArtist.ContainsKey(key)
                           || overrideKeys.Contains(AlbumOverrideKey.For(resolved, album.title));
+                if (byAlbumArtist.TryGetValue(key, out var creditedTier))
+                {
+                    ownedQuality = creditedTier;
+                }
             }
 
             all.Add(new DiscographyAlbum(
-                album.title, album.BestCoverUrl, album.id, isOwned, album.Year, album.record_type));
-            if (!isOwned)
+                album.title, album.BestCoverUrl, album.id, isOwned, album.Year, album.record_type,
+                ownedQuality));
+
+            // A row is emitted for a gap (we don't own it) or for an upgrade (we do, but below what
+            // somebody here is entitled to). Both carry the Deezer id the downloader needs; what tells
+            // them apart downstream is OwnedQuality, which is null only for a genuine gap.
+            //
+            // `ownedQuality < ceiling` is false when the quality is unknown — see AudioQuality — so an
+            // album we haven't inspected is never offered for upgrade. That is what keeps the feed
+            // quiet until the catch-up sweep has actually run.
+            var upgradeable = isOwned && ownedQuality < ceiling;
+            if (!isOwned || upgradeable)
             {
                 missing.Add(new MissingAlbum(
                     artist, new AlbumKey(album.title), album.BestCoverUrl, album.id, albumArtist,
-                    album.Year, album.record_type));
+                    album.Year, album.record_type,
+                    // Only set for an upgrade; a gap has no copy to describe.
+                    upgradeable ? ownedQuality : null));
             }
         }
 

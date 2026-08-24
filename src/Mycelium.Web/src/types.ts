@@ -152,6 +152,7 @@ export interface DiscoveryPage {
 export type FeedKind =
   | 'RecommendedArtist'
   | 'MissingAlbum'
+  | 'UpgradeAlbum'
   | 'LibraryArtist'
   | 'RecommendedLibraryArtist'
   | 'SeedLibraryArtist'
@@ -175,6 +176,9 @@ export interface FeedItem {
   // The evidence behind a ReconsiderArtist / SecondThoughtsArtist card (why a thumbed verdict is
   // being questioned), snapshotted by the weekly sweep that flagged it. Null for every other kind.
   reconsider: ReconsiderSignal | null
+  // For an UpgradeAlbum card: what quality the copy already in the library is, so the card can say
+  // what it's offering to replace. Null on every other kind.
+  ownedQuality: AudioQuality | null
 }
 
 // Mirror ReconsiderSignal (Discovery.cs) — the Plex rating snapshot that got a thumbed artist flagged,
@@ -242,7 +246,8 @@ export interface LibraryAlbumOption {
 }
 
 // Mirror PurchaseStatus / PurchaseItem (IPurchaseRepo.cs) — the shared "to buy" list with a
-// persisted acquisition lifecycle. `kind` is 'RecommendedArtist' (no album) or 'MissingAlbum'.
+// persisted acquisition lifecycle. `kind` is 'RecommendedArtist' (no album), 'MissingAlbum' (a gap
+// to fill) or 'UpgradeAlbum' (a better copy of something already held).
 export type PurchaseStatus = 'Pending' | 'Queued' | 'Downloading' | 'Sent' | 'InLibrary' | 'Failed'
 
 // Mirror DownloadFailure (IDownloader.cs) — why the last download attempt failed. 'DeezerAuth' and
@@ -255,6 +260,12 @@ export type DownloadFailure =
   | 'DeezerAuth'
   | 'DeezerCredentialsMissing'
   | 'NoTracksAvailable'
+  // Upgrade-only. 'NoBetterQualityAvailable' means Deezer had nothing better than the copy already
+  // held — the album is snoozed rather than retried. 'UpgradeNotPossible' means a better copy came
+  // down but couldn't be swapped in (the existing files weren't locatable, or lie outside
+  // PLEX_PATH_MAP); the library is untouched and the fix is configuration, not a retry.
+  | 'NoBetterQualityAvailable'
+  | 'UpgradeNotPossible'
 
 // Mirror ArlUpdateResult (DeezerCredentialService.cs) — the answer to submitting a replacement ARL.
 // The token is never echoed back; what comes back is whether Deezer accepted it and who it belongs to.
@@ -316,6 +327,13 @@ export interface PurchaseItem {
   // feed wants it and the reconcile must not prune it. Marked in the list, because "remove" is the
   // only way it leaves other than arriving in the library.
   manual: boolean
+  // What quality this row will be fetched at — the best entitlement among whoever asked for it.
+  targetQuality: AudioQuality | null
+  // What the last successful download actually produced, which the fallback ladder means can be
+  // below the target. Null until it has downloaded.
+  acquiredQuality: AudioQuality | null
+  // For an UpgradeAlbum row: what the copy already in the library is. Null on a gap.
+  ownedQuality: AudioQuality | null
 }
 
 // Mirror ManualAddResult / ManualAddOutcome (IPurchaseRepo.cs) — the answer to pasting a Deezer

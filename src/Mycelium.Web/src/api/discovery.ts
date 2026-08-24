@@ -96,6 +96,9 @@ export async function rate(item: FeedItem | RatedItem, verdict: Verdict): Promis
   if (item.album) {
     params.set('album', item.album)
     if (item.imageUrl) params.set('albumArt', item.imageUrl)
+    // An upgrade's thumbs-down means "keep the copy we have", not "I dislike this album" — the user
+    // owns it. The flag routes it to its own verdict store instead of their album ratings.
+    if (item.kind === 'UpgradeAlbum') params.set('upgrade', 'true')
   }
   const res = await fetch(`/api/discovery/rate?${params}`, { method: 'POST' })
   if (!res.ok) {

@@ -728,6 +728,7 @@ function ArtistAlbums({ artist }: { artist: string }) {
     deezerAlbumId: a.deezerAlbumId,
     year: a.year,
     reconsider: null,
+        ownedQuality: null,
   })
 
   const rateAlbum = useMutation({
@@ -1397,6 +1398,7 @@ export default function Browse() {
         deezerAlbumId: null,
         year: null,
         reconsider: null,
+        ownedQuality: null,
       }
       return current === verdictStatus(verdict) ? clearRating(item) : rate(item, verdict)
     },

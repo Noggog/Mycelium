@@ -794,6 +794,13 @@ input[type='checkbox'] {
   color: var(--text-dim);
 }
 
+/* "You have MP3" on an upgrade card — tinted so it reads as a statement about the library rather
+   than another neutral fact about the release. */
+.detail-chip.upgrade-chip {
+  border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+  color: var(--cyan);
+}
+
 .related-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

@@ -28,6 +28,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldManual = "manual";
     private const string FieldTargetQuality = "targetQuality";
     private const string FieldAcquiredQuality = "acquiredQuality";
+    private const string FieldOwnedQuality = "ownedQuality";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -81,6 +82,13 @@ public class PurchaseRepo : IPurchaseRepo
         if (item.TargetQuality is not null)
         {
             update = update.Set(FieldTargetQuality, item.TargetQuality.Value.ToString());
+        }
+
+        // Re-Set like the target, not learned-once like the Deezer id: the copy on disk changes when
+        // an upgrade lands, and a stale value would make the next swap compare against the old one.
+        if (item.OwnedQuality is not null)
+        {
+            update = update.Set(FieldOwnedQuality, item.OwnedQuality.Value.ToString());
         }
 
         return Collection.UpdateOneAsync(
@@ -156,6 +164,7 @@ public class PurchaseRepo : IPurchaseRepo
             // Absent on rows written before tiers existed; the downloader then uses its configured
             // quality, which is exactly what those rows would have downloaded at anyway.
             AudioQualityTier.Parse(StrN(FieldTargetQuality)),
-            AudioQualityTier.Parse(StrN(FieldAcquiredQuality)));
+            AudioQualityTier.Parse(StrN(FieldAcquiredQuality)),
+            AudioQualityTier.Parse(StrN(FieldOwnedQuality)));
     }
 }

@@ -20,6 +20,7 @@ public class MissingAlbumRefresherTests
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
     private readonly IDeezerApi _deezer = Substitute.For<IDeezerApi>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
+    private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly IAlbumMatchOverrideRepo _overrides = Substitute.For<IAlbumMatchOverrideRepo>();
     private readonly FakeDeezerAlbumArtistRepo _albumArtists = new();
     private readonly MissingAlbumRefresher _sut;
@@ -29,8 +30,13 @@ public class MissingAlbumRefresherTests
         var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
         var resolver = new DeezerArtistResolver(_deezer, cache, _catalog);
         _overrides.GetAll().Returns(Array.Empty<AlbumMatchOverride>());
+        _users.GetAll().Returns(Array.Empty<AppUser>());
         _sut = new MissingAlbumRefresher(
             _catalog, resolver, _deezer, _missing, _overrides, _albumArtists,
+            // Default-deny, as in production — so a case can lower the ceiling by giving every user a
+            // lossy tier. (Ceiling() never drops below the default, which is deliberate: a user
+            // created tomorrow would out-rank everyone, so the diff has to have covered them.)
+            new UserQualityService(_users, AudioQuality.Lossy),
             NullLogger<MissingAlbumRefresher>.Instance);
 
         _catalog.GetAllPresent().Returns(new[] { new CatalogArtist(new ArtistKey(Artist), null, default) });
@@ -573,5 +579,92 @@ public class MissingAlbumRefresherTests
         result.ArtistsScanned.Should().Be(2);
         CapturedMissing().Should().ContainSingle().Which.Album.AlbumName
             .Should().Be("brick body kids still daydream");
+    }
+
+    // ---- Upgrades: an album we own, but not well enough ----
+
+    /// <summary>The owned map with an explicit quality for one album.</summary>
+    private static Dictionary<string, Dictionary<string, AudioQuality?>> OwnedAt(
+        string album, AudioQuality? quality) =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            [Artist] = new(StringComparer.OrdinalIgnoreCase) { [album] = quality },
+        };
+
+    /// <summary>Everyone is capped at <paramref name="ceiling"/>, so that is what the diff aims for.</summary>
+    private void CeilingIs(AudioQuality ceiling) =>
+        _users.GetAll().Returns(new[]
+        {
+            new AppUser("u", "u", null, null, default, default, ceiling),
+        });
+
+    [Fact]
+    public async Task An_album_owned_below_the_ceiling_is_reported_as_an_upgrade()
+    {
+        CeilingIs(AudioQuality.Lossless);
+        _catalog.GetOwnedAlbums().Returns(OwnedAt("Who Told You to Think", AudioQuality.Lossy));
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Who Told You to Think") });
+
+        await _sut.Refresh();
+
+        var row = CapturedMissing().Should().ContainSingle().Subject;
+        row.IsUpgrade.Should().BeTrue();
+        row.OwnedQuality.Should().Be(AudioQuality.Lossy);
+        // The row still carries the Deezer id — it is what the downloader acts on, and an upgrade
+        // that couldn't be fetched would be worse than not offering it.
+        row.DeezerAlbumId.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task An_album_already_at_the_ceiling_is_not_reported_at_all()
+    {
+        CeilingIs(AudioQuality.Lossless);
+        _catalog.GetOwnedAlbums().Returns(OwnedAt("Who Told You to Think", AudioQuality.Lossless));
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Who Told You to Think") });
+
+        await _sut.Refresh();
+
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_album_of_undetermined_quality_is_never_offered_for_upgrade()
+    {
+        // Every album is in this state until the catch-up sweep runs. Treating "we haven't looked" as
+        // "it's bad" would put the entire library into the upgrade feed the moment this shipped.
+        CeilingIs(AudioQuality.Lossless);
+        _catalog.GetOwnedAlbums().Returns(OwnedAt("Who Told You to Think", null));
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Who Told You to Think") });
+
+        await _sut.Refresh();
+
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_lossy_only_deployment_reports_no_upgrades()
+    {
+        // Nobody here can have better than 320, so a 320 copy is not short of anything.
+        CeilingIs(AudioQuality.Lossy);
+        _catalog.GetOwnedAlbums().Returns(OwnedAt("Who Told You to Think", AudioQuality.Lossy));
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Who Told You to Think") });
+
+        await _sut.Refresh();
+
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_album_we_do_not_have_is_a_gap_not_an_upgrade()
+    {
+        CeilingIs(AudioQuality.Lossless);
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("So the Flies Don't Come") });
+
+        await _sut.Refresh();
+
+        var row = CapturedMissing().Should().ContainSingle().Subject;
+        row.IsUpgrade.Should().BeFalse();
+        row.OwnedQuality.Should().BeNull();
     }
 }

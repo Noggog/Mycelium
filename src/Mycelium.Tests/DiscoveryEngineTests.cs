@@ -23,6 +23,7 @@ public class DiscoveryEngineTests
     private readonly ILibraryProvider _library = Substitute.For<ILibraryProvider>();
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
+    private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly IAlbumMatchOverrideRepo _overrides = Substitute.For<IAlbumMatchOverrideRepo>();
     private readonly FakeDeezerAlbumArtistRepo _albumArtists = new();
     private readonly IUserAlbumRatingRepo _albumRatings = Substitute.For<IUserAlbumRatingRepo>();
@@ -35,11 +36,16 @@ public class DiscoveryEngineTests
         var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
         var resolver = new DeezerArtistResolver(_deezer, cache, _catalog);
         _overrides.GetAll().Returns(Array.Empty<AlbumMatchOverride>());
+        _users.GetAll().Returns(Array.Empty<AppUser>());
         var refresher = new MissingAlbumRefresher(
             _catalog, resolver, _deezer, _missing, _overrides, _albumArtists,
+            // A lossless ceiling: these cases are about which albums are missing, and an owned album
+            // with no recorded quality is never upgradeable whatever the ceiling is.
+            new UserQualityService(_users, AudioQuality.Lossless),
             NullLogger<MissingAlbumRefresher>.Instance);
         _sut = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,
+            new UserQualityService(_users, AudioQuality.Lossless),
             NullLogger<DiscoveryEngine>.Instance);
 
         // Sensible empty defaults; individual tests override what they need.
@@ -823,5 +829,167 @@ public class DiscoveryEngineTests
 
         await _queue.DidNotReceive().TryConfirmVerdict(
             Arg.Any<string>(), Arg.Any<string>(), DiscoveryStatus.Liked);
+    }
+
+    // ---- Upgrades: same rows as the missing feed, narrowed per user ----
+
+    private Task<DiscoveryFeedPage> Upgrades() => _sut.GetFeed(User, FeedKind.UpgradeAlbum, 0, 20);
+    private Task<DiscoveryFeedPage> Missing() => _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+    /// <summary>The signed-in user's own ceiling.</summary>
+    private void UserTier(AudioQuality quality) =>
+        _users.Get(User).Returns(new AppUser(User, User, null, null, default, default, quality));
+
+    /// <summary>One row in the global missing set. A quality makes it an upgrade; null a gap.</summary>
+    private void MissingRow(string artist, string album, AudioQuality? ownedQuality)
+    {
+        _queue.GetLikedArtistNames(User).Returns(new[] { artist });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(
+                new ArtistKey(artist), new AlbumKey(album), null, 7, null, null, "album", ownedQuality),
+        });
+    }
+
+    [Fact]
+    public async Task An_upgrade_row_reaches_a_user_who_out_ranks_the_copy_on_disk()
+    {
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", AudioQuality.Lossy);
+
+        var page = (await Upgrades()).Items;
+
+        page.Should().ContainSingle();
+        page[0].Kind.Should().Be(FeedKind.UpgradeAlbum);
+        page[0].OwnedQuality.Should().Be(AudioQuality.Lossy);
+    }
+
+    [Fact]
+    public async Task The_same_row_is_hidden_from_a_user_who_does_not()
+    {
+        // The sync diffs against the best tier *anyone* here holds, so a row can exist that belongs
+        // to someone else's feed. A 320 user is not shown a 320 album they already have.
+        UserTier(AudioQuality.Lossy);
+        MissingRow("boygenius", "the record", AudioQuality.Lossy);
+
+        (await Upgrades()).Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Upgrades_do_not_appear_in_the_missing_feed()
+    {
+        // They are separately toggleable precisely so someone can fill gaps without being offered
+        // replacements for records they already own.
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", AudioQuality.Lossy);
+
+        (await Missing()).Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Gaps_do_not_appear_in_the_upgrade_feed()
+    {
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", null);
+
+        (await Upgrades()).Items.Should().BeEmpty();
+        (await Missing()).Items.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_skipped_upgrade_stops_being_offered()
+    {
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", AudioQuality.Lossy);
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock("boygenius", "the record", User, AlbumBlockScope.Upgrade),
+        });
+
+        (await Upgrades()).Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_upgrade_skip_does_not_hide_the_album_from_anything_else()
+    {
+        // The user owns and likes this record; declining to replace it must not read as "don't carry
+        // this release", which is what a Release-scoped block means.
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", null); // a gap this time
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock("boygenius", "the record", User, AlbumBlockScope.Upgrade),
+        });
+
+        (await Missing()).Items.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task An_expired_snooze_puts_the_upgrade_back_on_offer()
+    {
+        // "Deezer had no lossless" is recorded with a deadline, not forever: a catalogue can gain a
+        // lossless master later, and foreclosing on that permanently would be wrong.
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", AudioQuality.Lossy);
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock(
+                "boygenius", "the record", null, AlbumBlockScope.Upgrade,
+                DateTimeOffset.UtcNow.AddDays(-1)),
+        });
+
+        (await Upgrades()).Items.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_live_snooze_still_holds()
+    {
+        UserTier(AudioQuality.Lossless);
+        MissingRow("boygenius", "the record", AudioQuality.Lossy);
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock(
+                "boygenius", "the record", null, AlbumBlockScope.Upgrade,
+                DateTimeOffset.UtcNow.AddDays(30)),
+        });
+
+        (await Upgrades()).Items.Should().BeEmpty();
+    }
+
+    // ---- The thumbs-down on an upgrade must not become a dislike ----
+
+    [Fact]
+    public async Task Declining_an_upgrade_records_a_skip_not_an_album_dislike()
+    {
+        await _sut.RateUpgrade(User, "boygenius", "the record", null, DiscoveryStatus.Disliked);
+
+        // The user owns and likes this album. A dislike would show it as rejected on their Ratings
+        // page and drop it out of the liked set the frontier grows from.
+        await _albumRatings.DidNotReceive().Rate(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<DiscoveryStatus>());
+        await _blocks.Received().Add(Arg.Is<AlbumBlock>(b =>
+            b.Scope == AlbumBlockScope.Upgrade && b.RetryAfter == null));
+    }
+
+    [Fact]
+    public async Task Accepting_an_upgrade_rates_it_like_any_other_acquisition()
+    {
+        // The like is what puts it on the shared to-buy list, same as a missing album.
+        await _sut.RateUpgrade(User, "boygenius", "the record", "art", DiscoveryStatus.Liked);
+
+        await _albumRatings.Received().Rate(User, "boygenius", "the record", "art", DiscoveryStatus.Liked);
+        await _blocks.DidNotReceive().Add(Arg.Any<AlbumBlock>());
+    }
+
+    [Fact]
+    public async Task A_no_lossless_verdict_is_snoozed_rather_than_permanent()
+    {
+        var until = DateTimeOffset.UtcNow.AddDays(90);
+
+        await _sut.SkipUpgrade(User, "boygenius", "the record", until);
+
+        await _blocks.Received().Add(Arg.Is<AlbumBlock>(b =>
+            b.Scope == AlbumBlockScope.Upgrade && b.RetryAfter == until));
     }
 }

@@ -154,6 +154,7 @@ public class PlexApi : IPlexApi
                     // The album this track sits under. Plex hands back rating keys as strings here.
                     AlbumRatingKey = int.TryParse(item["parentRatingKey"]?.ToString(), out var key) ? key : 0,
                     AudioCodec = item["Media"]?.FirstOrDefault()?["audioCodec"]?.ToString(),
+                    File = item["Media"]?.FirstOrDefault()?["Part"]?.FirstOrDefault()?["file"]?.ToString(),
                 });
             }
 
@@ -185,6 +186,7 @@ public class PlexApi : IPlexApi
             {
                 AlbumRatingKey = albumRatingKey,
                 AudioCodec = item["Media"]?.FirstOrDefault()?["audioCodec"]?.ToString(),
+                File = item["Media"]?.FirstOrDefault()?["Part"]?.FirstOrDefault()?["file"]?.ToString(),
             })
             .ToArray() ?? Array.Empty<PlexLibraryTrack>();
     }
@@ -449,6 +451,14 @@ public record PlexLibraryTrack
 
     /// <summary>e.g. "flac", "mp3", "aac". Null when Plex reported no media for the track.</summary>
     public string? AudioCodec { get; set; }
+
+    /// <summary>
+    /// The file backing this track, <b>in Plex's own path namespace</b> — which is not necessarily
+    /// this process's. Anything that means to touch the file has to translate it first (see
+    /// LibraryPathMap); anything that only means to read a codec can ignore it. Null when Plex
+    /// reported no part.
+    /// </summary>
+    public string? File { get; set; }
 }
 
 public record PlexMusicAlbum

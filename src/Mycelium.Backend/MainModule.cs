@@ -107,6 +107,13 @@ public class MainModule : Autofac.Module
         builder.RegisterType<StreamripArlStore>().AsSelf().SingleInstance();
         builder.RegisterType<DeezerCredentialService>().AsSelf().SingleInstance();
 
+        // Replacing an album already in the library with a better copy. The path map is what makes it
+        // safe: the library server reports paths in its own namespace, so without a declared
+        // translation nothing here can be allowed to touch a file (see LibraryPathMap).
+        builder.RegisterInstance(new LibraryPathMap(Environment.GetEnvironmentVariable("PLEX_PATH_MAP")));
+        builder.RegisterType<LibraryTrash>().AsSelf().SingleInstance();
+        builder.RegisterType<UpgradeSwap>().AsSelf().SingleInstance();
+
         // Post-download Plex rescan (PlexLibraryScanner auto-registers as ILibraryScanner via the
         // assembly scan below). Off unless PLEX_RESCAN_AFTER_DOWNLOAD is set; debounce defaults to 5m.
         builder.RegisterInstance(BuildLibraryScannerConfig());

@@ -72,6 +72,14 @@ public class PlexRepo : ILibraryQuery
         return result;
     }
 
+    public async Task<string[]> QueryAlbumFiles(int albumRatingKey) =>
+        (await _plexApi.GetAlbumTracks(albumRatingKey))
+        .Select(t => t.File)
+        .Where(f => !string.IsNullOrWhiteSpace(f))
+        .Select(f => f!)
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
     public async Task<Dictionary<int, AudioQuality?>> QueryAllAlbumQuality()
     {
         var plexLibrary = await _plexApi.ResolveLibrary();

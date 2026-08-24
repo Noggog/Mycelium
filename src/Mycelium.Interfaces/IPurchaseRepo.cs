@@ -71,7 +71,11 @@ public record PurchaseItem(
     // asked for better yet" — without it, an album fetched as 320 for a lossy user looks identical to
     // one nobody has tried, and would be re-offered as an upgrade forever. Null on rows that have
     // never downloaded, and on everything written before tiers existed.
-    AudioQuality? AcquiredQuality = null);
+    AudioQuality? AcquiredQuality = null,
+    // For a FeedKind.UpgradeAlbum row: how good the copy already in the library is. Carried on the
+    // row because the downloader needs it at promotion time to check the result is actually better —
+    // and by then the album has left the missing set, which is where it was learned. Null on a gap.
+    AudioQuality? OwnedQuality = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,

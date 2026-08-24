@@ -503,7 +503,7 @@ api.MapPost("/discovery/refresh", async (DiscoveryEngine engine) =>
 
 // Rate an artist or (when album is supplied) a missing album. verdict = "up" (Liked) | "down" (Disliked).
 api.MapPost("/discovery/rate", async (
-        string artist, string? album, string? albumArt, string verdict,
+        string artist, string? album, string? albumArt, string verdict, bool? upgrade,
         HttpContext http, DiscoveryEngine engine, ArtistFollowUpService followUps) =>
     {
         var status = verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
@@ -527,6 +527,13 @@ api.MapPost("/discovery/rate", async (
                 userId, artist, status, depth,
                 addTag: tag,
                 removeTags: oppositeTag != null ? new[] { oppositeTag } : Array.Empty<string>());
+        }
+        else if (upgrade == true)
+        {
+            // A thumbs-down on an upgrade card means "keep the copy we have", not "I dislike this
+            // album" — the user owns it and presumably likes it. Routed to its own verdict store so
+            // it never lands on their Ratings page as a rejection. See DiscoveryEngine.RateUpgrade.
+            await engine.RateUpgrade(userId, artist, album, albumArt, status);
         }
         else
         {

@@ -33,7 +33,7 @@ import {
 import { getDeezerPlayInfo, isDeezerBusy } from '../api/deezer'
 import { getArtistLibraries } from '../api/library'
 import { useArtAccent } from '../art/artColors'
-import type { FeedItem, FeedKind, ReconsiderSignal } from '../types'
+import type { FeedItem, FeedKind, ReconsiderSignal, AudioQuality } from '../types'
 import { useAuth } from '../auth/AuthContext'
 import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
@@ -43,10 +43,18 @@ import { rateFeedback } from '../effects/effectsBus'
 
 const PAGE_SIZE = 20
 
+// How each tier reads on a card. The app's own vocabulary is Lossy/Lossless; these are the names a
+// listener would use for the same thing.
+const QUALITY_LABEL: Record<AudioQuality, string> = {
+  Lossy: 'MP3',
+  Lossless: 'FLAC',
+}
+
 // The badge shown on each card so it's obvious what action a card is asking for, keyed by kind.
 const BADGE: Record<FeedKind, string> = {
   RecommendedArtist: 'Recommended New Artist',
   MissingAlbum: 'Add missing album',
+  UpgradeAlbum: 'Upgrade album',
   RecommendedLibraryArtist: 'Recommended Artist',
   SeedLibraryArtist: 'Rate Unfamiliar Artist',
   LibraryArtist: 'Mark existing artist',
@@ -55,27 +63,40 @@ const BADGE: Record<FeedKind, string> = {
 }
 
 // The category filters, shown up top as toggle-able tag chips styled exactly like the per-row
-// badges — clicking a chip shows/hides that kind in the feed. Order mirrors how they read on a card.
-const FILTER_CHIPS: { kind: FeedKind; tip: string }[] = [
-  { kind: 'RecommendedArtist', tip: 'Artists not yet in the library' },
-  { kind: 'RecommendedLibraryArtist', tip: "Unrated artists already in the library" },
-  { kind: 'SeedLibraryArtist', tip: "Rate artists not yet recommended to grow the frontier" },
-  { kind: 'MissingAlbum', tip: 'Missing albums for artists you like' },
-  { kind: 'ReconsiderArtist', tip: 'Bands you thumbed down but rated highly in Plex' },
-  { kind: 'SecondThoughtsArtist', tip: 'Bands you thumbed up but rated poorly in Plex' },
+// badges — clicking a chip shows/hides those kinds in the feed. Order mirrors how they read on a card.
+//
+// A chip can cover more than one kind, because a couple of the categories are two readings of the
+// same question and nobody wants to reason about them separately: "Add missing album" covers both a
+// record you don't have and a worse copy of one you do (both are "go get this album"), and "Second
+// Thoughts" covers both directions of the ratings second-guessing a verdict — a thumbed-down band
+// your Plex ratings like, and a thumbed-up one they don't. The cards keep their distinct badges;
+// it's only the filter that groups them.
+const FILTER_CHIPS: { kinds: FeedKind[]; label: string; tip: string }[] = [
+  { kinds: ['RecommendedArtist'], label: 'Recommended New Artist', tip: 'Artists not yet in the library' },
+  { kinds: ['RecommendedLibraryArtist'], label: 'Recommended Artist', tip: "Unrated artists already in the library" },
+  { kinds: ['SeedLibraryArtist'], label: 'Rate Unfamiliar Artist', tip: "Rate artists not yet recommended to grow the frontier" },
+  {
+    kinds: ['MissingAlbum', 'UpgradeAlbum'],
+    label: 'Add missing album',
+    tip: "Albums you're missing, and ones you own in lower quality than you can get",
+  },
+  {
+    // Plum first: the chip borrows that kind's name, so it should borrow its hue too.
+    kinds: ['SecondThoughtsArtist', 'ReconsiderArtist'],
+    label: 'Second Thoughts',
+    tip: 'Verdicts your Plex ratings argue with — bands you thumbed down but rate highly, and ones you thumbed up but rate poorly',
+  },
 ]
 
 const ALL_KINDS: FeedKind[] = [
-  'RecommendedArtist', 'MissingAlbum', 'RecommendedLibraryArtist', 'SeedLibraryArtist', 'ReconsiderArtist',
-  'SecondThoughtsArtist',
+  'RecommendedArtist', 'MissingAlbum', 'UpgradeAlbum', 'RecommendedLibraryArtist', 'SeedLibraryArtist',
+  'ReconsiderArtist', 'SecondThoughtsArtist',
 ]
-// Default to everything on: the recommended sections (new + existing owned), missing albums, the
-// seed section (owned artists nothing recommends yet) — rating those grows the frontier — and the two
-// second-guessing sections (verdicts the user's own song ratings argue with, either way).
-const DEFAULT_KINDS: FeedKind[] = [
-  'RecommendedArtist', 'MissingAlbum', 'RecommendedLibraryArtist', 'SeedLibraryArtist', 'ReconsiderArtist',
-  'SecondThoughtsArtist',
-]
+// Default to everything on: the recommended sections (new + existing owned), the album section
+// (gaps and upgrades), the seed section (owned artists nothing recommends yet) — rating those grows
+// the frontier — and the second-guessing section (verdicts the user's own song ratings argue with,
+// either way).
+const DEFAULT_KINDS: FeedKind[] = [...ALL_KINDS]
 
 const newSeed = () => Math.floor(Math.random() * 1_000_000_000)
 
@@ -94,6 +115,19 @@ const KINDS_ADDED_IN: Record<number, FeedKind[]> = {
   2: ['SecondThoughtsArtist'],
 }
 
+// The chips toggle whole groups, so a group is all-on or all-off — there's no chip that could turn
+// half of one back on. A stored list from before two kinds were grouped can hold exactly that split
+// (an upgrades-off preference next to missing-albums-on, say), which would leave a lit chip serving
+// only half its feed. Reading one on means the group is on.
+function normalizeGroups(shown: Set<FeedKind>): Set<FeedKind> {
+  for (const { kinds } of FILTER_CHIPS) {
+    if (kinds.some((k) => shown.has(k))) {
+      for (const k of kinds) shown.add(k)
+    }
+  }
+  return shown
+}
+
 function readShownKinds(): Set<FeedKind> {
   try {
     const stored = localStorage.getItem(SHOWN_PREF_KEY)
@@ -109,7 +143,9 @@ function readShownKinds(): Set<FeedKind> {
             shown.add(kind)
           }
         }
-        if (storedVersion < SHOWN_VERSION) {
+        const before = shown.size
+        normalizeGroups(shown)
+        if (storedVersion < SHOWN_VERSION || shown.size !== before) {
           writeShownKinds(shown)
         }
         return shown
@@ -687,6 +723,13 @@ function DetailPanel({
                 <span className="detail-chip">Album</span>
                 <span className="detail-chip via">{name}</span>
                 {item.year && <span className="detail-chip">{item.year}</span>}
+                {/* An upgrade card is offering to replace a record the user already has, so say what
+                    they have — otherwise it reads like a gap and the thumbs are ambiguous. */}
+                {item.kind === 'UpgradeAlbum' && item.ownedQuality && (
+                  <span className="detail-chip upgrade-chip">
+                    You have {QUALITY_LABEL[item.ownedQuality]}
+                  </span>
+                )}
               </div>
               {/* Jump to this artist in the library (the Artists tab), filtered + opened to them —
                   handy on a missing-album card to see what else of theirs you already own. */}
@@ -986,10 +1029,11 @@ export default function Discover() {
     return () => document.body.classList.remove('detail-open')
   }, [selected])
 
-  const toggleCategory = (kind: FeedKind) => {
+  const toggleCategory = (kinds: FeedKind[]) => {
     setShown((prev) => {
       const next = new Set(prev)
-      next.has(kind) ? next.delete(kind) : next.add(kind)
+      const on = kinds.some((k) => next.has(k))
+      for (const k of kinds) on ? next.delete(k) : next.add(k)
       writeShownKinds(next)
       return next
     })
@@ -1159,18 +1203,20 @@ export default function Discover() {
 
       {/* The category tags double as the filter: click a chip to show/hide that kind in the feed. */}
       <div className="feed-filters">
-        {FILTER_CHIPS.map(({ kind, tip }) => {
-          const on = shown.has(kind)
+        {FILTER_CHIPS.map(({ kinds: chipKinds, label, tip }) => {
+          const on = chipKinds.some((k) => shown.has(k))
+          // A grouped chip wears the hue of its first kind — the one whose badge name it borrows.
+          const hue = chipKinds[0]
           return (
             <button
-              key={kind}
+              key={hue}
               type="button"
               title={tip}
               aria-pressed={on}
-              className={`feed-chip feed-badge feed-badge-${kind}${on ? '' : ' off'}`}
-              onClick={() => toggleCategory(kind)}
+              className={`feed-chip feed-badge feed-badge-${hue}${on ? '' : ' off'}`}
+              onClick={() => toggleCategory(chipKinds)}
             >
-              {BADGE[kind]}
+              {label}
             </button>
           )
         })}
