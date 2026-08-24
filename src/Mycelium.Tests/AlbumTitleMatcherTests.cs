@@ -121,28 +121,44 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.Normalize("Mr. Bungle").Should().Be("mr. bungle");
     }
 
-    // Reissue decoration the sources disagree on: the record is the same one either way.
+    // Edition decoration is not folded: Deezer lists each of these as its own release with its own id,
+    // and the discography shows each as its own row. Folding them would let a verdict on one row —
+    // a queue, a block — silently land on the other.
     [Theory]
     [InlineData("I Forgot Where We Were (10th Anniversary Deluxe)")]
     [InlineData("I Forgot Where We Were [10th Anniversary Deluxe]")]
-    [InlineData("I Forgot Where We Were")]
-    public void An_anniversary_edition_matches_the_plain_release(string title)
-    {
-        AlbumTitleMatcher.Normalize(title).Should().Be("i forgot where we were");
-    }
-
-    [Theory]
     [InlineData("Every Kingdom (Deluxe Edition)")]
     [InlineData("Every Kingdom (Bonus Track Version)")]
     [InlineData("Every Kingdom - Remastered")]
-    [InlineData("Every Kingdom (Deluxe Edition) [Remastered]")]
-    [InlineData("Every Kingdom")]
-    public void Edition_qualifiers_fold_away(string title)
+    [InlineData("Animal (Expanded Edition)")]
+    [InlineData("Settle (Special Edition)")]
+    public void An_edition_is_its_own_release(string title)
     {
-        AlbumTitleMatcher.Normalize(title).Should().Be("every kingdom");
+        var plain = title.Split(new[] { " (", " [", " - " }, StringSplitOptions.None)[0];
+        AlbumTitleMatcher.Normalize(title).Should().NotBe(AlbumTitleMatcher.Normalize(plain));
     }
 
-    // A qualifier word is only decoration when the whole tail is decoration — otherwise it is title.
+    // Two pressings of one record are two keys — they are two rows a user can act on separately.
+    [Fact]
+    public void Pressings_of_one_record_stay_apart()
+    {
+        AlbumTitleMatcher.Normalize("Both Sides (Deluxe Edition)")
+            .Should().NotBe(AlbumTitleMatcher.Normalize("Both Sides (2015 Remaster)"));
+        AlbumTitleMatcher.Normalize("Both Sides (Deluxe Edition)")
+            .Should().NotBe(AlbumTitleMatcher.Normalize("Both Sides"));
+    }
+
+    [Theory]
+    [InlineData("Don’t Look Now [Deluxe Edition]")]
+    [InlineData("  Don't  Look  Now  [Deluxe Edition]  ")]
+    public void Keeping_the_decoration_still_folds_typography(string title)
+    {
+        // Keeping the decoration is not the same as taking the title verbatim: a source writing the
+        // same pressing with a curly apostrophe hasn't listed a second release.
+        AlbumTitleMatcher.Normalize(title).Should().Be("don't look now [deluxe edition]");
+    }
+
+    // A bracketed tail is never decoration to strip, whether or not it carries meaning.
     [Theory]
     [InlineData("Sound Kapital (Clean Slate)", "sound kapital (clean slate)")]
     [InlineData("Celebration Rock (Live)", "celebration rock (live)")]
@@ -153,35 +169,15 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.Normalize(title).Should().Be(expected);
     }
 
-    // Stripping never eats the whole name: these albums really are called this.
+    // The format-designator strip never eats the whole name: these albums really are called this.
     [Theory]
     [InlineData("EP", "ep")]
+    [InlineData("LP", "lp")]
     [InlineData("Deluxe", "deluxe")]
     [InlineData("(Deluxe Edition)", "(deluxe edition)")]
-    public void A_title_that_is_only_a_qualifier_survives(string title, string expected)
+    public void A_title_that_is_only_a_designator_survives(string title, string expected)
     {
         AlbumTitleMatcher.Normalize(title).Should().Be(expected);
-    }
-
-    // Two pressings of one record: the same album to own, two rows in an artist's discography.
-    [Fact]
-    public void Edition_keys_tell_pressings_of_one_record_apart()
-    {
-        AlbumTitleMatcher.NormalizeEdition("Both Sides (Deluxe Edition)")
-            .Should().NotBe(AlbumTitleMatcher.NormalizeEdition("Both Sides (2015 Remaster)"));
-        // ...while the record they're both pressings of is still one album.
-        AlbumTitleMatcher.Normalize("Both Sides (Deluxe Edition)")
-            .Should().Be(AlbumTitleMatcher.Normalize("Both Sides (2015 Remaster)"));
-    }
-
-    [Theory]
-    [InlineData("Don’t Look Now [Deluxe Edition]")]
-    [InlineData("  Don't  Look  Now  [Deluxe Edition]  ")]
-    public void An_edition_key_still_folds_typography(string title)
-    {
-        // Keeping the decoration is not the same as taking the title verbatim: a source writing the
-        // same pressing with a curly apostrophe hasn't listed a second release.
-        AlbumTitleMatcher.NormalizeEdition(title).Should().Be("don't look now [deluxe edition]");
     }
 
     [Fact]
@@ -200,21 +196,12 @@ public class AlbumTitleMatcherTests
             .Should().Be(AlbumOverrideKey.For("cfcf", "Radiance and Submission"));
     }
 
-    [Theory]
-    [InlineData("Animal (Expanded Edition)", "animal")]
-    [InlineData("Settle (Special Edition)", "settle")]
-    [InlineData("I Forgot Where We Were (Tenth Anniversary Edition)", "i forgot where we were")]
-    [InlineData("I Forgot Where We Were [Twentieth Anniversary Edition]", "i forgot where we were")]
-    [InlineData("I Forgot Where We Were - Twenty-Fifth Anniversary", "i forgot where we were")]
-    public void Spelled_out_ordinals_fold_away_like_their_digit_form(string title, string expected)
-    {
-        AlbumTitleMatcher.Normalize(title).Should().Be(expected);
-    }
-
+    // A merge override is recorded against one Deezer title, and that title is a pressing. Asserting
+    // "we already have the deluxe" says nothing about the plain edition, which is a different release.
     [Fact]
-    public void Override_keys_agree_across_an_edition_suffix()
+    public void Override_keys_tell_an_edition_from_the_plain_release()
     {
         AlbumOverrideKey.For("Ben Howard", "Every Kingdom (Deluxe Edition)")
-            .Should().Be(AlbumOverrideKey.For("ben howard", "Every Kingdom"));
+            .Should().NotBe(AlbumOverrideKey.For("ben howard", "Every Kingdom"));
     }
 }

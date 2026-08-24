@@ -222,8 +222,8 @@ public class MissingAlbumRefresherTests
     [Fact]
     public async Task A_pressing_only_search_knows_about_is_listed_but_not_pushed()
     {
-        // The two features meeting: the remaster is a row of its own (it's a separate pressing), and it
-        // is the alternate one (the listing's pressing came first), so the feed still asks once.
+        // The two features meeting: the remaster is a row of its own (it's a separate pressing), and
+        // search is what found it.
         _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Both Sides (Deluxe Edition)", id: 1) });
         _deezer.SearchArtistAlbums(Arg.Any<string>())
             .Returns(new[] { SearchHit("Both Sides (2015 Remaster)", id: 2) });
@@ -232,8 +232,8 @@ public class MissingAlbumRefresherTests
 
         listed.Select(a => a.Title)
             .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
-        CapturedMissing().Select(m => (m.Album.AlbumName, m.AlternatePressing)).Should().Equal(
-            ("Both Sides (Deluxe Edition)", false), ("Both Sides (2015 Remaster)", true));
+        CapturedMissing().Select(m => m.Album.AlbumName)
+            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
     }
 
     [Fact]
@@ -272,9 +272,9 @@ public class MissingAlbumRefresherTests
         // Each with its own Deezer id, because the row is what hands the downloader an id when the
         // pressing is queued from the drill-down.
         listed.Select(a => a.DeezerAlbumId).Should().Equal(12194438L, 12308830L);
-        // Both persisted, but only the first is pushed at anyone: the feed asks once per record.
-        CapturedMissing().Select(m => (m.Album.AlbumName, m.AlternatePressing)).Should().Equal(
-            ("Both Sides (Deluxe Edition)", false), ("Both Sides (2015 Remaster)", true));
+        // Both persisted and both offered — they are two releases, each declined on its own.
+        CapturedMissing().Select(m => m.Album.AlbumName)
+            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
     }
 
     [Fact]
@@ -294,38 +294,24 @@ public class MissingAlbumRefresherTests
     }
 
     [Fact]
-    public async Task Neither_pressing_of_an_owned_record_is_missing()
+    public async Task Owning_one_pressing_leaves_the_others_missing()
     {
-        // Ownership is still per record, not per pressing: the library has "Both Sides", so both of
-        // Deezer's pressings of it are owned and neither is a gap.
+        // Ownership is per release, not per record: the library has the plain "Both Sides", so that row
+        // is owned and Deezer's two other pressings stay gaps. They're separate releases with separate
+        // ids — offering them is the point, and an unwanted one is dismissed or blocked on its own row.
         _deezer.GetAlbums(DeezerId).Returns(new[]
         {
-            Album("Both Sides (Deluxe Edition)", id: 1),
-            Album("Both Sides (2015 Remaster)", id: 2),
+            Album("Both Sides", id: 1),
+            Album("Both Sides (Deluxe Edition)", id: 2),
+            Album("Both Sides (2015 Remaster)", id: 3),
         });
 
         var listed = await _sut.Discography(
             new ArtistKey(Artist), Owned((Artist, new[] { "Both Sides" })));
 
-        listed.Should().OnlyContain(a => a.Owned);
-        CapturedMissing().Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Pressings_of_one_record_cost_one_album_artist_lookup()
-    {
-        // The /album/{id} call behind the ownership verdict is the expensive part of the diff, and it
-        // answers for the record rather than the pressing — listing pressings separately must not
-        // multiply it.
-        _deezer.GetAlbums(DeezerId).Returns(new[]
-        {
-            Album("Both Sides (Deluxe Edition)", id: 1),
-            Album("Both Sides (2015 Remaster)", id: 2),
-        });
-
-        await _sut.Discography(new ArtistKey(Artist), Owned());
-
-        await _deezer.Received(1).GetAlbum(Arg.Any<long>());
+        listed.Where(a => a.Owned).Select(a => a.Title).Should().Equal("Both Sides");
+        CapturedMissing().Select(m => m.Album.AlbumName)
+            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
     }
 
     [Fact]

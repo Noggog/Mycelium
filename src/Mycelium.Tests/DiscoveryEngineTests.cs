@@ -396,23 +396,24 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
-    public async Task Missing_album_feed_offers_one_pressing_per_record()
+    public async Task Missing_album_feed_offers_every_pressing()
     {
-        // The discography lists the deluxe edition and the remaster separately, and each needs a
-        // persisted row to be queueable from there — but they're one record to acquire, so the feed
-        // asks once rather than dealing the same album twice.
+        // Deezer lists the deluxe edition and the remaster as separate releases, each with its own id
+        // and its own row. The feed offers both: they are two records to acquire, and a user who wants
+        // neither says so once per row — a verdict on one must never stand in for the other.
         _queue.GetLikedArtistNames(User).Returns(new[] { "Phil Collins" });
         _missing.GetAll().Returns(new[]
         {
             new MissingAlbum(new ArtistKey("Phil Collins"), new AlbumKey("Both Sides (Deluxe Edition)"),
                 "art1", 12194438, RecordType: "album"),
             new MissingAlbum(new ArtistKey("Phil Collins"), new AlbumKey("Both Sides (2015 Remaster)"),
-                "art2", 12308830, RecordType: "album", AlternatePressing: true),
+                "art2", 12308830, RecordType: "album"),
         });
 
         var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
 
-        page.Items.Select(i => i.Album).Should().Equal("Both Sides (Deluxe Edition)");
+        page.Items.Select(i => i.Album).Should().BeEquivalentTo(
+            "Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
     }
 
     [Fact]
@@ -566,6 +567,62 @@ public class DiscoveryEngineTests
         var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
 
         page.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_block_on_one_pressing_leaves_the_others_offered()
+    {
+        // The bug that made pressings worth separating in the first place: blocking "A Color Map of the
+        // Sun (Deluxe Version)" darkened plain "A Color Map of the Sun" too, because the block key had
+        // the edition decoration stripped out of it. The block means the row it was placed on.
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Pretty Lights" });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(
+                new ArtistKey("Pretty Lights"), new AlbumKey("A Color Map of the Sun"), "art1", 101),
+            new MissingAlbum(
+                new ArtistKey("Pretty Lights"), new AlbumKey("A Color Map of the Sun (Deluxe Version)"),
+                "art2", 102),
+            new MissingAlbum(
+                new ArtistKey("Pretty Lights"), new AlbumKey("A Color Map of the Sun (Remixes)"),
+                "art3", 103),
+        });
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock("Pretty Lights", "A Color Map of the Sun (Deluxe Version)", User),
+        });
+
+        var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+        page.Items.Select(i => i.Album).Should().BeEquivalentTo(
+            "A Color Map of the Sun", "A Color Map of the Sun (Remixes)");
+    }
+
+    [Fact]
+    public async Task ArtistDiscography_marks_only_the_blocked_pressing()
+    {
+        // Same rule on the drill-down, where blocks are reviewed and lifted: one row goes dark, not
+        // every edition sharing its base title.
+        _deezer.SearchArtists("Pretty Lights", Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = 55, name = "Pretty Lights" } });
+        _deezer.GetAlbums(55).Returns(new[]
+        {
+            new DeezerAlbum { id = 101, title = "A Color Map of the Sun", record_type = "album" },
+            new DeezerAlbum
+            {
+                id = 102, title = "A Color Map of the Sun (Deluxe Version)", record_type = "album",
+            },
+        });
+        _albumRatings.GetRated(User).Returns(Array.Empty<AlbumRating>());
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock("Pretty Lights", "A Color Map of the Sun (Deluxe Version)", User),
+        });
+
+        var listed = await _sut.ArtistDiscography(User, "Pretty Lights");
+
+        listed.Where(a => a.Blocked).Select(a => a.Album)
+            .Should().Equal("A Color Map of the Sun (Deluxe Version)");
     }
 
     [Fact]

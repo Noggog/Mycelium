@@ -12,26 +12,20 @@ public static partial class AlbumTitleMatcher
 {
     /// <summary>
     /// Canonical form for matching album titles across sources: typography folded (see
-    /// <see cref="FoldTypography"/>), dotted initialisms collapsed ("E.P." → "ep"), and trailing
-    /// release qualifiers dropped (see <see cref="StripReleaseQualifiers"/>) — so "The Burgh Island
-    /// E.P.", "The Burgh Island EP" and "The Burgh Island" all land on the same key, as do "Every
-    /// Kingdom (Deluxe Edition)" and "Every Kingdom".
+    /// <see cref="FoldTypography"/>), dotted initialisms collapsed ("E.P." → "ep"), and a bare trailing
+    /// format designator dropped (see <see cref="StripFormatDesignator"/>) — so "The Burgh Island E.P.",
+    /// "The Burgh Island EP" and "The Burgh Island" all land on the same key.
+    ///
+    /// Edition decoration is deliberately <em>kept</em>: "Every Kingdom (Deluxe Edition)" and "Every
+    /// Kingdom" are two keys, not one. Deezer lists them as two releases with two ids, the discography
+    /// shows them as two rows, and a user who queues or blocks one of those rows means that row — so
+    /// nothing downstream may quietly treat them as the same thing. Owning the plain edition therefore
+    /// leaves the deluxe reading as missing, and that is the intended answer rather than a miss: it is
+    /// a release we don't have, offered like any other and declined with a dismiss or a block if it
+    /// isn't wanted. What this folds is one release written two ways; what it must never fold is two
+    /// releases.
     /// </summary>
     public static string Normalize(string? title)
-    {
-        var edition = NormalizeEdition(title);
-        return edition.Length == 0 ? string.Empty : StripReleaseQualifiers(edition);
-    }
-
-    /// <summary>
-    /// Canonical form that still tells pressings apart: the same typography fold and dotted-initialism
-    /// collapse as <see cref="Normalize"/>, with the release qualifiers left on. "Both Sides (Deluxe
-    /// Edition)" and "Both Sides (2015 Remaster)" keep distinct keys here — they are two rows in an
-    /// artist's discography — while a title a source lists twice in different typography still collapses
-    /// to one. Use this to ask "is this the same listing?"; use <see cref="Normalize"/> to ask "is this
-    /// the same record?", which is what ownership turns on.
-    /// </summary>
-    public static string NormalizeEdition(string? title)
     {
         var folded = FoldTypography(title);
         if (folded.Length == 0)
@@ -41,7 +35,9 @@ public static partial class AlbumTitleMatcher
 
         // "e.p." → "ep", "m.i.a." → "mia". Done after the typography fold so the input is already
         // lower-cased and space-collapsed; "mr. bungle" is untouched (a lone initial isn't a run).
-        return InitialismDots().Replace(folded, m => m.Value.Replace(".", string.Empty));
+        folded = InitialismDots().Replace(folded, m => m.Value.Replace(".", string.Empty));
+
+        return StripFormatDesignator(folded);
     }
 
     /// <summary>
@@ -110,135 +106,27 @@ public static partial class AlbumTitleMatcher
     }
 
     /// <summary>
-    /// Drops the trailing "which pressing is this" decoration sources disagree on — a bracketed or
-    /// dash-separated qualifier ("(Deluxe Edition)", "[10th Anniversary Deluxe]", "- Remastered") or
-    /// a bare format designator ("EP", "LP") — repeatedly, so "Every Kingdom (Deluxe Edition)
-    /// [Remastered]" reduces to "every kingdom". Never strips the whole title: an album actually
-    /// called "EP" or "Deluxe" keeps its name.
+    /// Drops a bare trailing format designator — "The Old Pine EP" is the same release as "The Old
+    /// Pine", just written the way one source happens to write it. This is the only decoration worth
+    /// folding: unlike "(Deluxe Edition)" or "- Remastered", no source lists both spellings as two
+    /// releases, so collapsing them can never merge two things a user could act on separately. Never
+    /// strips the whole title: an album actually called "EP" keeps its name.
     /// </summary>
-    private static string StripReleaseQualifiers(string title)
+    private static string StripFormatDesignator(string title)
     {
-        while (true)
-        {
-            var stripped = StripOnce(title);
-            if (stripped is null)
-            {
-                return title;
-            }
-            title = stripped;
-        }
-    }
-
-    /// <summary>One qualifier peeled off the end, or null when the title ends in something meaningful.</summary>
-    private static string? StripOnce(string title)
-    {
-        // "... (deluxe edition)" / "... [remastered]"
-        var close = title[^1];
-        if (close is ')' or ']')
-        {
-            var open = title.LastIndexOf(close == ')' ? '(' : '[');
-            if (open > 0 && IsQualifier(title.AsSpan(open + 1, title.Length - open - 2)))
-            {
-                return Keep(title.AsSpan(0, open));
-            }
-            return null;
-        }
-
-        // "... - remastered". The typography fold has already turned en/em dashes into hyphens, and
-        // the dash has to be free-standing so hyphenated titles ("Post-Nothing") are left alone.
-        var dash = title.LastIndexOf(" - ", StringComparison.Ordinal);
-        if (dash > 0 && IsQualifier(title.AsSpan(dash + 3)))
-        {
-            return Keep(title.AsSpan(0, dash));
-        }
-
-        // A bare trailing format designator: "The Old Pine EP" is the same record as "The Old Pine".
         var space = title.LastIndexOf(' ');
-        if (space > 0 && IsFormat(title.AsSpan(space + 1)))
+        if (space <= 0 || !IsFormat(title.AsSpan(space + 1)))
         {
-            return Keep(title.AsSpan(0, space));
+            return title;
         }
 
-        return null;
-
-        // A strip that would leave nothing behind means the "qualifier" was the title all along.
-        static string? Keep(ReadOnlySpan<char> remainder)
-        {
-            var kept = remainder.TrimEnd();
-            return kept.IsEmpty ? null : kept.ToString();
-        }
-    }
-
-    /// <summary>
-    /// Whether a trailing bracketed/dashed tail describes the pressing rather than the record: every
-    /// word is either a qualifier ("deluxe", "remastered", "anniversary") or filler that only shows up
-    /// alongside one ("10th", "the", "bonus track" and friends), and at least one is a qualifier. The
-    /// all-words test is what keeps a real title fragment — "(Clean Slate)", "(Live in Tokyo)" — from
-    /// being mistaken for decoration on the strength of a single word.
-    /// </summary>
-    private static bool IsQualifier(ReadOnlySpan<char> tail)
-    {
-        var sawQualifier = false;
-        foreach (var range in tail.Trim().Split(' '))
-        {
-            var word = tail.Trim()[range].Trim(",.-'\"");
-            if (word.IsEmpty)
-            {
-                continue;
-            }
-
-            if (Qualifiers.Contains(word.ToString()))
-            {
-                sawQualifier = true;
-                continue;
-            }
-
-            // Numbers and ordinals ("10th", "2019") carry no identity of their own here.
-            if (char.IsAsciiDigit(word[0]))
-            {
-                continue;
-            }
-
-            if (!Filler.Contains(word.ToString()))
-            {
-                return false;
-            }
-        }
-
-        return sawQualifier;
+        var kept = title.AsSpan(0, space).TrimEnd();
+        return kept.IsEmpty ? title : kept.ToString();
     }
 
     /// <summary>Whether a bare trailing word is a format designator ("EP", "LP") rather than part of the title.</summary>
     private static bool IsFormat(ReadOnlySpan<char> word) =>
         word.Equals("ep", StringComparison.Ordinal) || word.Equals("lp", StringComparison.Ordinal);
-
-    /// <summary>
-    /// Words that mark a pressing rather than a record. Deliberately excludes the ones that make a
-    /// genuinely different release — "live", "acoustic", "demo", "remix", "instrumental" — those
-    /// stay distinct albums.
-    /// </summary>
-    private static readonly HashSet<string> Qualifiers = new(StringComparer.Ordinal)
-    {
-        "deluxe", "edition", "editions", "remaster", "remastered", "remastering", "anniversary",
-        "expanded", "extended", "reissue", "bonus", "special", "limited", "collector", "collectors",
-        "collector's", "version", "explicit", "clean", "mono", "stereo", "ep", "lp", "single",
-        "digipak", "definitive", "original",
-    };
-
-    /// <summary>Words with no identity of their own — allowed in a qualifier tail, never enough to make one.</summary>
-    private static readonly HashSet<string> Filler = new(StringComparer.Ordinal)
-    {
-        "the", "a", "an", "and", "of", "with", "plus", "in", "track", "tracks", "disc", "disk",
-        "cd", "cds", "vinyl", "digital", "audio", "year", "years", "st", "nd", "rd", "th",
-        // Spelled-out ordinals ("Tenth Anniversary Edition") carry the same no-identity role as a
-        // digit ordinal ("10th Anniversary") — the digit form is caught separately by IsQualifier's
-        // leading-digit check, so only the word form needs listing here.
-        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
-        "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth",
-        "eighteenth", "nineteenth", "twentieth", "thirtieth", "fortieth", "fiftieth", "sixtieth",
-        "seventieth", "eightieth", "ninetieth", "hundredth",
-        "twenty-fifth", "thirty-fifth", "forty-fifth", "fifty-fifth", "seventy-fifth",
-    };
 
     /// <summary>A run of at least two single-letter-plus-dot pairs: the "E.P." / "M.I.A." shape.</summary>
     [GeneratedRegex(@"(?<![a-z0-9])(?:[a-z]\.){2,}")]
