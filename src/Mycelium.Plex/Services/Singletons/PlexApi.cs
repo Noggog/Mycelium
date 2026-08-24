@@ -119,12 +119,16 @@ public class PlexApi : IPlexApi
     /// artist's albums into one track list. Each track carries <c>userRating</c> (0–10, the token
     /// account's rating; absent when unrated). Returns empty when the key 404s (item removed / keys
     /// shifted on a rebuild) so the rating summary degrades to "no stats" rather than throwing.
+    ///
+    /// <para>Read as <paramref name="token"/>, not as the app: star ratings are per-Plex-account, so
+    /// asking with the server's own token would report the owner's stars to every user alike.</para>
     /// </summary>
-    public async Task<PlexTrack[]> GetArtistTracks(int ratingKey)
+    public async Task<PlexTrack[]> GetArtistTracks(int ratingKey, string token)
     {
         var url = $"{_endpointInfo.BaseUri}/library/metadata/{ratingKey}/allLeaves";
         _logger.LogDebug("Plex GetArtistTracks {RatingKey}: {Url}", ratingKey, url);
-        var response = await httpClient.GetAsync(url);
+        using var request = AsToken(HttpMethod.Get, url, token);
+        var response = await httpClient.SendAsync(request);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return Array.Empty<PlexTrack>();
@@ -138,13 +142,8 @@ public class PlexApi : IPlexApi
 
     public async Task<bool> AcceptsToken(string token)
     {
-        // Setting X-Plex-Token on the request itself suppresses the client's default header, so this
-        // asks as the pasted token rather than as the app. The root endpoint is the cheapest thing
-        // the server will refuse to answer for a bad token.
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{_endpointInfo.BaseUri}/");
-        request.Headers.Add("Accept", "application/json");
-        request.Headers.Add("X-Plex-Token", token);
-
+        // The root endpoint is the cheapest thing the server will refuse to answer for a bad token.
+        using var request = AsToken(HttpMethod.Get, $"{_endpointInfo.BaseUri}/", token);
         using var response = await httpClient.SendAsync(request);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
@@ -155,6 +154,19 @@ public class PlexApi : IPlexApi
         // keeps that from being reported to the user as "your token is wrong".
         response.EnsureSuccessStatusCode();
         return true;
+    }
+
+    /// <summary>
+    /// A request that asks as <paramref name="token"/> rather than as the app. Setting X-Plex-Token on
+    /// the message suppresses the client's default header (HttpClient only fills in defaults a request
+    /// hasn't set), which is what keeps a per-user read from being answered for the server owner.
+    /// </summary>
+    private static HttpRequestMessage AsToken(HttpMethod method, string url, string token)
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.Add("Accept", "application/json");
+        request.Headers.Add("X-Plex-Token", token);
+        return request;
     }
 
     public async Task<PlexRecentlyAddedItem[]> GetRecentlyAdded(int libraryKey, int maxResults = 5)

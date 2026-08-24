@@ -15,6 +15,11 @@ namespace Mycelium.Backend.Services.Background;
 /// surfaces on the next weekly pass. Each pass also *withdraws* flags that no longer hold (the user
 /// rated more songs down, say), so the categories can't drift out of sync with the ratings.
 ///
+/// Star ratings are per-Plex-account, so each user is swept through their <em>own</em> linked Plex
+/// token. A user who hasn't connected Plex has no ratings that could contradict anything, and is swept
+/// with empty stats rather than skipped — that withdraws any flag they still carry, including the ones
+/// raised back when this read every user's ratings off the single shared server token.
+///
 /// Per-user failures are logged and skipped so one bad user doesn't abort the pass; a failed pass
 /// simply retries at the next interval.
 /// </summary>
@@ -22,6 +27,7 @@ public class ReconsiderSweepService : BackgroundService
 {
     private readonly IUserQueueRepo _queue;
     private readonly ILibraryProvider _library;
+    private readonly IPlexLinkRepo _links;
     private readonly ArtistRatingStatsService _ratings;
     private readonly ReconsiderPolicy _policy;
     private readonly JitterPolicy _jitter;
@@ -30,6 +36,7 @@ public class ReconsiderSweepService : BackgroundService
     public ReconsiderSweepService(
         IUserQueueRepo queue,
         ILibraryProvider library,
+        IPlexLinkRepo links,
         ArtistRatingStatsService ratings,
         ReconsiderPolicy policy,
         JitterPolicy jitter,
@@ -37,6 +44,7 @@ public class ReconsiderSweepService : BackgroundService
     {
         _queue = queue;
         _library = library;
+        _links = links;
         _ratings = ratings;
         _policy = policy;
         _jitter = jitter;
@@ -72,9 +80,7 @@ public class ReconsiderSweepService : BackgroundService
             return;
         }
 
-        // Plex ratings hang off the single shared server token, not off the app user, so two users who
-        // both rejected the same band see identical numbers. Resolve each artist once per pass.
-        var statsByArtist = new Dictionary<string, ArtistRatingStats>(StringComparer.OrdinalIgnoreCase);
+        var weighed = 0;
         var flagged = 0;
         var withdrawn = 0;
 
@@ -82,6 +88,15 @@ public class ReconsiderSweepService : BackgroundService
         {
             try
             {
+                // Ratings are per-Plex-account, so the cache can only be per user — the same artist
+                // genuinely has different numbers for different people, which is the whole point.
+                var statsByArtist = new Dictionary<string, ArtistRatingStats>(StringComparer.OrdinalIgnoreCase);
+
+                // Resolved once and reused across this user's whole thumbed list. Null means no Plex
+                // account connected: every artist then weighs in as "no evidence", which contradicts
+                // nothing and so withdraws whatever they were carrying.
+                var link = await _links.Get(userId);
+
                 // Both directions off the same per-artist stats: a dislike the ratings praise, a like
                 // they pan. Confirmed verdicts (the same thumb given twice) never come back from here.
                 foreach (var verdict in new[] { DiscoveryStatus.Disliked, DiscoveryStatus.Liked })
@@ -96,7 +111,9 @@ public class ReconsiderSweepService : BackgroundService
 
                         if (!statsByArtist.TryGetValue(name, out var stats))
                         {
-                            statsByArtist[name] = stats = await _ratings.Get(rated.Artist);
+                            statsByArtist[name] = stats = link is null
+                                ? NoRatings(rated.Artist)
+                                : await _ratings.ForToken(link.ServerToken, rated.Artist);
                         }
 
                         var signal = _policy.Contradicts(stats, verdict)
@@ -121,6 +138,8 @@ public class ReconsiderSweepService : BackgroundService
                         }
                     }
                 }
+
+                weighed += statsByArtist.Count;
             }
             catch (Exception ex)
             {
@@ -130,6 +149,13 @@ public class ReconsiderSweepService : BackgroundService
 
         _logger.LogInformation(
             "Reconsider sweep weighed {Artists} artist(s) across {Users} user(s): {Flagged} flagged, {Withdrawn} withdrawn",
-            statsByArtist.Count, userIds.Length, flagged, withdrawn);
+            weighed, userIds.Length, flagged, withdrawn);
     }
+
+    /// <summary>
+    /// The "no evidence" reading, for a user with no Plex account connected. Deliberately not a skip:
+    /// running them through the same comparison withdraws stale flags instead of leaving them on screen.
+    /// </summary>
+    private static ArtistRatingStats NoRatings(ArtistKey artist) =>
+        new(artist, Present: false, null, null, null, RatedCount: 0, TrackCount: 0);
 }

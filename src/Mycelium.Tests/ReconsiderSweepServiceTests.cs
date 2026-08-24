@@ -25,9 +25,17 @@ public class ReconsiderSweepServiceTests
     private readonly ILibraryProvider _library = Substitute.For<ILibraryProvider>();
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
     private readonly IPlexApi _plex = Substitute.For<IPlexApi>();
+    private readonly IPlexLinkRepo _links = Substitute.For<IPlexLinkRepo>();
+
+    /// <summary>Each user's own Plex token — the thing that makes their ratings theirs.</summary>
+    private static string TokenFor(string userId) => $"{userId}-token";
 
     public ReconsiderSweepServiceTests()
     {
+        // Everyone has Plex connected unless a test says otherwise.
+        _links.Get(Arg.Any<string>()).Returns(ci => new PlexLink(
+            ci.Arg<string>(), "acct", "plexuser", null,
+            TokenFor(ci.Arg<string>()), DateTimeOffset.UnixEpoch));
         _queue.GetAllUserIds().Returns(new[] { User });
         _queue.GetUnconfirmedVerdicts(Arg.Any<string>(), Arg.Any<DiscoveryStatus>())
             .Returns(Array.Empty<SweptArtist>());
@@ -38,7 +46,9 @@ public class ReconsiderSweepServiceTests
     private ReconsiderSweepService Build() => new(
         _queue,
         _library,
-        new ArtistRatingStatsService(_catalog, _plex, NullLogger<ArtistRatingStatsService>.Instance),
+        _links,
+        new ArtistRatingStatsService(
+            _catalog, _plex, _links, NullLogger<ArtistRatingStatsService>.Instance),
         // The shipped thresholds; cadence is irrelevant when driving SweepAll directly.
         new ReconsiderPolicy(
             MinAverage: 3, MaxAverage: 2, MinRatedFraction: 1.0 / 3,
@@ -70,7 +80,8 @@ public class ReconsiderSweepServiceTests
         }
 
         _catalog.GetPlexRatingKeys(new ArtistKey(artist)).Returns(new[] { ratingKey });
-        _plex.GetArtistTracks(ratingKey).Returns(
+        // Stubbed against this user's own token: the ratings belong to the account that asks.
+        _plex.GetArtistTracks(ratingKey, TokenFor(userId)).Returns(
             plexRatings.Select(r => new PlexTrack { Title = "t", UserRating = r }).ToArray());
     }
 
@@ -199,7 +210,7 @@ public class ReconsiderSweepServiceTests
 
         await Build().SweepAll();
 
-        await _plex.DidNotReceive().GetArtistTracks(Arg.Any<int>());
+        await _plex.DidNotReceive().GetArtistTracks(Arg.Any<int>(), Arg.Any<string>());
         await WroteNothing();
     }
 
@@ -211,7 +222,7 @@ public class ReconsiderSweepServiceTests
 
         await Build().SweepAll();
 
-        await _plex.DidNotReceive().GetArtistTracks(Arg.Any<int>());
+        await _plex.DidNotReceive().GetArtistTracks(Arg.Any<int>(), Arg.Any<string>());
         await WroteNothing();
     }
 
@@ -269,40 +280,52 @@ public class ReconsiderSweepServiceTests
     }
 
     [Fact]
-    public async Task Resolves_each_artist_once_across_users()
+    public async Task Weighs_each_user_against_their_own_ratings()
     {
-        // Plex ratings hang off the single shared server token, not the app user, so two users who both
-        // rejected the same band see identical numbers — one Plex pull should cover both.
+        // The bug this replaced: both users' rows used to be judged by whoever owned the server token,
+        // so a band u2 rated 1 star was offered back to them because *u1* rated it 4. One pull per
+        // user now, and the two verdicts diverge exactly as their ratings do.
         _queue.GetAllUserIds().Returns(new[] { "u1", "u2" });
-        Disliked("Low", 10, new double?[] { 10, 8, 8, 6 }, users: "u1");
-        Disliked("Low", 10, new double?[] { 10, 8, 8, 6 }, users: "u2");
+        Disliked("Low", 10, new double?[] { 10, 8, 8, 6 }, users: "u1");  // 4 stars — contradicts
+        Disliked("Low", 10, new double?[] { 2, 2, 2, 2 }, users: "u2");   // 1 star  — agrees
 
         await Build().SweepAll();
 
-        await _plex.Received(1).GetArtistTracks(10);
-        await _queue.Received(1).SetReconsider(
-            "u1", "Low", DiscoveryStatus.Disliked, Arg.Any<ReconsiderSignal>(), Arg.Any<string>());
-        await _queue.Received(1).SetReconsider(
-            "u2", "Low", DiscoveryStatus.Disliked, Arg.Any<ReconsiderSignal>(), Arg.Any<string>());
-    }
-
-    [Fact]
-    public async Task Resolves_an_artist_once_across_both_directions()
-    {
-        // One user disliked the band, another liked it. Same stats, so the shared cache should still
-        // mean a single Plex pull even though the two rows are weighed by opposite rules.
-        _queue.GetAllUserIds().Returns(new[] { "u1", "u2" });
-        Disliked("Low", 10, new double?[] { 10, 8, 8, 6 }, users: "u1");
-        Liked("Low", 10, new double?[] { 10, 8, 8, 6 }, users: "u2");
-
-        await Build().SweepAll();
-
-        await _plex.Received(1).GetArtistTracks(10);
-        // 4 stars: contradicts u1's dislike, agrees with u2's like — so only u1's row is written.
+        await _plex.Received(1).GetArtistTracks(10, TokenFor("u1"));
+        await _plex.Received(1).GetArtistTracks(10, TokenFor("u2"));
         await _queue.Received(1).SetReconsider(
             "u1", "Low", DiscoveryStatus.Disliked, Arg.Any<ReconsiderSignal>(), Arg.Any<string>());
         await _queue.DidNotReceive().SetReconsider(
-            "u2", "Low", DiscoveryStatus.Liked, Arg.Any<ReconsiderSignal?>(), Arg.Any<string>());
+            "u2", "Low", DiscoveryStatus.Disliked, Arg.Any<ReconsiderSignal?>(), Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task A_user_with_no_plex_account_is_never_judged_by_someone_elses_ratings()
+    {
+        // Nothing of theirs to read, and the one token to hand is the server owner's — which is the
+        // wrong answer, not a fallback. They're weighed as "no evidence" and Plex is never asked.
+        _links.Get(User).Returns((PlexLink?)null);
+        Disliked("Low", 10, new double?[] { 10, 8, 8, 6 });
+
+        await Build().SweepAll();
+
+        await _plex.DidNotReceive().GetArtistTracks(Arg.Any<int>(), Arg.Any<string>());
+        await WroteNothing();
+    }
+
+    [Fact]
+    public async Task Unlinking_plex_withdraws_flags_raised_from_the_old_shared_token()
+    {
+        // Migration case: the flag on this row was raised back when every user was judged by the
+        // owner's ratings. With no account connected there's no evidence for it, so it comes off
+        // rather than sitting on their feed forever — which is why an unlinked user is swept, not
+        // skipped.
+        _links.Get(User).Returns((PlexLink?)null);
+        Disliked("Low", 10, new double?[] { 10, 8, 8, 6 }, alreadyFlagged: new ReconsiderSignal(4.0, 4, 4));
+
+        await Build().SweepAll();
+
+        await _queue.Received(1).SetReconsider(User, "Low", DiscoveryStatus.Disliked, null, "Low-img");
     }
 
     [Fact]

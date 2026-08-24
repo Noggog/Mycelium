@@ -21,7 +21,12 @@ public interface IPlexApi
     /// per-account <c>userRating</c> (Plex's 0–10 scale; null when unrated). Empty when the key no longer
     /// resolves. Used to summarise the user's song ratings for an artist in the discovery readout.
     /// </summary>
-    Task<PlexTrack[]> GetArtistTracks(int ratingKey);
+    /// <summary>
+    /// All tracks under an artist, read as <paramref name="token"/>. The token is required rather than
+    /// optional on purpose: <c>userRating</c> belongs to whichever account asks, so a call site that
+    /// forgot to say whose ratings it wanted would silently report the server owner's to everyone.
+    /// </summary>
+    Task<PlexTrack[]> GetArtistTracks(int ratingKey, string token);
 
     /// <summary>
     /// Whether this server accepts <paramref name="token"/> — asked with that token in place of the

@@ -227,10 +227,12 @@ api.MapGet("/artists/libraries", async (string artist, LibrarySourcesService lib
     .RequireAuthorization()
     .WithName("GetArtistLibraries");
 
-// The user's per-song Plex rating summary (highest / lowest / average, 0–5 stars) for one artist,
-// shown in the discovery readout. Present=false for artists not in Plex (nothing to show).
-api.MapGet("/artists/ratings", async (string artist, ArtistRatingStatsService ratings) =>
-        Results.Ok(await ratings.Get(new ArtistKey(artist))))
+// The *calling user's* per-song Plex rating summary (highest / lowest / average, 0–5 stars) for one
+// artist, shown in the discovery readout. Read as their own linked Plex account, so two users see
+// their own stars rather than the server owner's; Present=false for artists not in Plex, and for a
+// user who hasn't connected Plex at all (nothing to show either way).
+api.MapGet("/artists/ratings", async (HttpContext http, string artist, ArtistRatingStatsService ratings) =>
+        Results.Ok(await ratings.ForUser(http.User.GetSubject()!, new ArtistKey(artist))))
     .RequireAuthorization()
     .WithName("GetArtistRatings");
 
