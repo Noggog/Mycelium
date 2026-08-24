@@ -422,6 +422,7 @@ code {
 
 /* Sits at the right end of the bar — the centered nav's right auto-margin pushes it there. */
 .auth-box {
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -452,6 +453,108 @@ code {
 .auth-btn:hover {
   box-shadow: var(--glow-purple);
   transform: translateY(-1px);
+}
+
+.auth-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+/* The linked-Plex chip and the bare caret next to "Log into Plex" are the same control, so they
+   share a class; .is-bare just drops the padding and border down to the caret alone. */
+.auth-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--purple-light);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.55rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.auth-chip:hover {
+  box-shadow: var(--glow-purple);
+}
+.auth-chip .auth-name {
+  max-width: 140px;
+}
+.auth-chip-mark {
+  color: var(--cyan);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.auth-chip-caret {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  line-height: 1;
+}
+.auth-chip.is-bare {
+  padding: 0.35rem 0.4rem;
+  background: none;
+  border-color: transparent;
+}
+.auth-chip.is-bare:hover {
+  border-color: var(--purple-light);
+}
+
+/* Anchored to .auth-box, which is the positioned ancestor. */
+.auth-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 40;
+  min-width: 11rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-solid);
+  border: 1px solid var(--purple-light);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.auth-menu-who {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auth-menu-item {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.auth-menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+.auth-menu-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Popup-blocked / timed-out notes from the Plex link attempt, sitting under the header controls. */
+.auth-note {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  max-width: 16rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-align: right;
+}
+.auth-note.is-error {
+  color: var(--salmon-light);
 }
 
 /* ========================================================================== */

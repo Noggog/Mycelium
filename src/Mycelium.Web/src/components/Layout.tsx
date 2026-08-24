@@ -1,33 +1,123 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { usePlexLink } from '../auth/usePlexLink'
 import VolumeControl from './VolumeControl'
 import MyceliumBackdrop from './MyceliumBackdrop'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
 
+// The header's identity slot. Signing into the app itself is normally invisible — AuthProvider
+// redirects an unauthenticated visitor straight through Authentik — so the slot's real job is the
+// *Plex* account, which is the one the user has to connect by hand and the one that decides whose
+// star ratings and playlists the app acts on. The app-level "Log in" button survives only as the
+// fallback for when auto-login couldn't run (a deliberate logout, or a failed round trip).
 function AuthBox() {
-  const { user, isLoading, login, logout } = useAuth()
+  const { user, isLoading, isRedirecting, needsManualLogin, login, logout } = useAuth()
+  const plex = usePlexLink()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
 
-  if (isLoading) {
-    return <div className="auth-box"><span className="auth-name">…</span></div>
-  }
+  // Close the menu on an outside click or Escape. Bound only while it's open, so the listeners cost
+  // nothing in the state the header spends virtually all its time in.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
-  if (!user) {
+  if (isLoading || isRedirecting) {
     return (
       <div className="auth-box">
-        <button className="auth-btn" onClick={() => login()}>Log in</button>
+        <span className="auth-name">{isRedirecting ? 'Signing in…' : '…'}</span>
       </div>
     )
   }
 
+  if (!user) {
+    // Only reachable when auto-login was suppressed or failed; otherwise the redirect has already
+    // taken the page and there's nothing to render.
+    return (
+      <div className="auth-box">
+        {needsManualLogin && (
+          <button className="auth-btn" onClick={() => login()}>Log in</button>
+        )}
+      </div>
+    )
+  }
+
+  const linked = plex.status?.linked === true
+  const appName = user.displayName ?? user.username ?? user.email ?? 'Signed in'
+
   return (
-    <div className="auth-box">
-      <span className="auth-name" title={user.email ?? undefined}>
-        {user.displayName ?? user.username ?? user.email ?? 'Signed in'}
-      </span>
-      <button className="auth-btn" onClick={() => logout()}>Log out</button>
+    <div className="auth-box" ref={boxRef}>
+      {linked ? (
+        <button
+          className="auth-chip"
+          onClick={() => setMenuOpen((o) => !o)}
+          title={`Plex: ${plex.status!.username ?? 'connected'} · signed in as ${appName}`}
+          aria-expanded={menuOpen}
+        >
+          <span className="auth-chip-mark" aria-hidden="true">⬡</span>
+          <span className="auth-name">{plex.status!.username ?? 'Plex'}</span>
+          <span className="auth-chip-caret" aria-hidden="true">▾</span>
+        </button>
+      ) : (
+        <>
+          <button
+            className="auth-btn"
+            onClick={() => plex.connect()}
+            disabled={plex.starting || plex.waiting || plex.isLoading}
+          >
+            {plex.waiting ? 'Waiting for Plex…' : plex.starting ? 'Starting…' : 'Log into Plex'}
+          </button>
+          <button
+            className="auth-chip is-bare"
+            onClick={() => setMenuOpen((o) => !o)}
+            title={`Signed in as ${appName}`}
+            aria-label="Account menu"
+            aria-expanded={menuOpen}
+          >
+            <span className="auth-chip-caret" aria-hidden="true">▾</span>
+          </button>
+        </>
+      )}
+
+      {menuOpen && (
+        <div className="auth-menu">
+          <div className="auth-menu-who">{appName}</div>
+          {linked && (
+            <button
+              className="auth-menu-item"
+              onClick={() => plex.disconnect()}
+              disabled={plex.disconnecting}
+            >
+              {plex.disconnecting ? 'Disconnecting…' : 'Disconnect Plex'}
+            </button>
+          )}
+          <button className="auth-menu-item" onClick={() => logout()}>Log out</button>
+        </div>
+      )}
+
+      {/* The approval tab can be blocked, and the poll can time out; both need saying somewhere, and
+          the header is where the click happened. */}
+      {plex.fallbackUrl && (
+        <a className="auth-note" href={plex.fallbackUrl} target="_blank" rel="noreferrer">
+          Popup blocked — approve here
+        </a>
+      )}
+      {plex.problem && <span className="auth-note is-error">{plex.problem}</span>}
     </div>
   )
 }

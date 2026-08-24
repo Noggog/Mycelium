@@ -1,17 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
+import { usePlexLink } from '../auth/usePlexLink'
 import { Spinner } from '../components/icons'
 import {
-  completePlexLink,
   createStockPlaylist,
   FRESH_WINDOWS,
-  getPlexLink,
   getStockPlaylists,
-  startPlexLink,
-  unlinkPlex,
   updateStockPlaylist,
-  type PlexLinkStatus,
   type StockPlaylist,
 } from '../api/playlists'
 
@@ -54,98 +50,9 @@ export default function Playlists() {
 // ---- Connecting the user's own Plex account ---------------------------------------------------
 
 function PlexConnection() {
-  const queryClient = useQueryClient()
-  const [waiting, setWaiting] = useState(false)
-  const [problem, setProblem] = useState<string | null>(null)
-  const [starting, setStarting] = useState(false)
-  // Set only when the browser blocked the approval tab, so the user can open it by hand.
-  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)
-  // The approval happens in another tab; this holds it so we can focus it back if it's still open.
-  const authTab = useRef<Window | null>(null)
+  const plex = usePlexLink()
 
-  const link = useQuery<PlexLinkStatus>({ queryKey: ['plex-link'], queryFn: getPlexLink })
-
-  // While a link is in flight, ask the server whether plex.tv has handed over a token yet. The user
-  // is approving in another tab, so there's nothing to react to here except the clock.
-  useEffect(() => {
-    if (!waiting) return
-    let cancelled = false
-
-    const timer = setInterval(async () => {
-      try {
-        const { outcome, status } = await completePlexLink()
-        if (cancelled || outcome === 'pending') return
-
-        setWaiting(false)
-        if (outcome === 'linked') {
-          queryClient.setQueryData(['plex-link'], status)
-          queryClient.invalidateQueries({ queryKey: ['stock-playlists'] })
-          authTab.current?.close()
-        } else if (outcome === 'noserveraccess') {
-          setProblem("That Plex account can't see this server's music library.")
-        } else {
-          setProblem('Timed out — try again.')
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setWaiting(false)
-          setProblem((e as Error).message)
-        }
-      }
-    }, 2000)
-
-    // Plex codes last about half an hour, but a tab left open that long is abandoned, not pending.
-    const giveUp = setTimeout(() => {
-      if (!cancelled) {
-        setWaiting(false)
-        setProblem('Timed out — try again.')
-      }
-    }, 5 * 60 * 1000)
-
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-      clearTimeout(giveUp)
-    }
-  }, [waiting, queryClient])
-
-  // The approval tab is opened *synchronously* on the click, before the round trip that fetches the
-  // URL. A tab opened in the promise continuation is a popup as far as the browser is concerned, and
-  // gets blocked — so it's opened blank up front and navigated once the URL arrives. If it was blocked
-  // anyway, we fall back to a link the user clicks themselves.
-  const connect = async () => {
-    setProblem(null)
-    setFallbackUrl(null)
-    const tab = window.open('about:blank', '_blank')
-    setStarting(true)
-    try {
-      const authUrl = await startPlexLink(`${window.location.origin}/playlists`)
-      if (tab && !tab.closed) {
-        // Severs the opener reference before handing the tab to plex.tv.
-        tab.opener = null
-        tab.location.href = authUrl
-        authTab.current = tab
-      } else {
-        setFallbackUrl(authUrl)
-      }
-      setWaiting(true)
-    } catch (e) {
-      tab?.close()
-      setProblem((e as Error).message)
-    } finally {
-      setStarting(false)
-    }
-  }
-
-  const disconnect = useMutation({
-    mutationFn: unlinkPlex,
-    onSuccess: () => {
-      queryClient.setQueryData(['plex-link'], { linked: false, username: null, email: null, linkedAt: null })
-      queryClient.invalidateQueries({ queryKey: ['stock-playlists'] })
-    },
-  })
-
-  if (link.isLoading) {
+  if (plex.isLoading) {
     return (
       <div className="dev-tool playlist-account">
         <span className="disc-sub-busy"><Spinner /> Checking your Plex connection…</span>
@@ -153,15 +60,15 @@ function PlexConnection() {
     )
   }
 
-  if (link.isError) {
+  if (plex.error) {
     return (
       <div className="dev-tool">
-        <p className="error">{(link.error as Error).message}</p>
+        <p className="error">{plex.error.message}</p>
       </div>
     )
   }
 
-  if (!link.data?.linked) {
+  if (!plex.status?.linked) {
     return (
       <div className="dev-tool">
         <h2>Connect your Plex account</h2>
@@ -171,29 +78,32 @@ function PlexConnection() {
         </p>
 
         <div className="controls">
-          <button onClick={connect} disabled={starting || waiting}>
-            {waiting ? 'Waiting for Plex…' : starting ? 'Starting…' : 'Connect Plex'}
+          <button
+            onClick={() => plex.connect(`${window.location.origin}/playlists`)}
+            disabled={plex.starting || plex.waiting}
+          >
+            {plex.waiting ? 'Waiting for Plex…' : plex.starting ? 'Starting…' : 'Connect Plex'}
           </button>
-          {waiting && (
-            <button className="secondary" onClick={() => setWaiting(false)}>
+          {plex.waiting && (
+            <button className="secondary" onClick={plex.cancel}>
               Cancel
             </button>
           )}
         </div>
 
-        {waiting && !fallbackUrl && (
+        {plex.waiting && !plex.fallbackUrl && (
           <p className="dev-status">Approve in the tab that opened — this page will update.</p>
         )}
-        {fallbackUrl && (
+        {plex.fallbackUrl && (
           <p className="dev-status">
             Popup blocked —{' '}
-            <a href={fallbackUrl} target="_blank" rel="noreferrer">
+            <a href={plex.fallbackUrl} target="_blank" rel="noreferrer">
               open the approval page
             </a>
             .
           </p>
         )}
-        {problem && <p className="error">{problem}</p>}
+        {plex.problem && <p className="error">{plex.problem}</p>}
       </div>
     )
   }
@@ -202,17 +112,13 @@ function PlexConnection() {
     <>
       <div className="dev-tool playlist-account">
         <span className="playlist-account-name">
-          Plex: <strong>{link.data.username}</strong>
+          Plex: <strong>{plex.status.username}</strong>
         </span>
-        <button
-          className="secondary"
-          onClick={() => disconnect.mutate()}
-          disabled={disconnect.isPending}
-        >
-          {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+        <button className="secondary" onClick={plex.disconnect} disabled={plex.disconnecting}>
+          {plex.disconnecting ? 'Disconnecting…' : 'Disconnect'}
         </button>
       </div>
-      {disconnect.isError && <p className="error">{(disconnect.error as Error).message}</p>}
+      {plex.disconnectError && <p className="error">{plex.disconnectError.message}</p>}
       <StockPlaylists />
     </>
   )
