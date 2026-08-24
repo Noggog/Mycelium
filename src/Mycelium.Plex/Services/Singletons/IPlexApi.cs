@@ -23,6 +23,16 @@ public interface IPlexApi
     /// </summary>
     Task<PlexTrack[]> GetArtistTracks(int ratingKey);
 
+    /// <summary>
+    /// Whether this server accepts <paramref name="token"/> — asked with that token in place of the
+    /// app's own, so it answers for the token rather than for us. The way to validate a token a user
+    /// pasted that plex.tv doesn't recognise: a *server* access token (the kind in a Plex Web URL, and
+    /// the only kind a Plex Home managed user can hand you) authenticates here without being a plex.tv
+    /// account token at all. Note that it says only yes or no — the server reports the <em>owner's</em>
+    /// identity whatever token asks, so it can verify a token but never attribute one.
+    /// </summary>
+    Task<bool> AcceptsToken(string token);
+
     Task<PlexRecentlyAddedItem[]> GetRecentlyAdded(int libraryKey, int maxResults = 5);
     Task RefreshLibrary(int libraryKey);
     /// <summary>Adds/removes Mood tags on an artist in one edit — the app's like/dislike tagging.</summary>

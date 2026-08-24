@@ -862,7 +862,7 @@ plexLink.MapPost("/complete", async (HttpContext http, PlexLinkService links) =>
 // body carries the outcome either way so the paste box can say which of the two things went wrong.
 plexLink.MapPost("/token", async (HttpContext http, PlexTokenLinkRequest body, PlexLinkService links) =>
     {
-        var completion = await links.LinkWithToken(http.User.GetSubject()!, body.Token);
+        var completion = await links.LinkWithToken(http.User.GetSubject()!, body.Token, body.Label);
         var payload = new
         {
             outcome = completion.Outcome.ToString().ToLowerInvariant(),
@@ -962,7 +962,12 @@ internal record ArlUpdateRequest(string? Arl);
 /// Body of a Plex token paste. Same reasoning as <see cref="ArlUpdateRequest"/>: a credential in a
 /// query string would be written to the request log verbatim.
 /// </summary>
-internal record PlexTokenLinkRequest(string? Token);
+/// <param name="Label">
+/// What to call the account. Used only when plex.tv can't identify the token — a Plex server access
+/// token verifies against the server but can't be attributed to anyone, so this is a display label
+/// rather than a confirmed identity.
+/// </param>
+internal record PlexTokenLinkRequest(string? Token, string? Label);
 
 /// <summary>
 /// Body of a manual album add: whatever the user pasted. A POST body rather than a query parameter

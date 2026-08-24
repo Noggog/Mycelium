@@ -146,7 +146,7 @@ public class PlexLinkService
     /// kept — whatever was pasted is used once to ask who it belongs to, then discarded. Pasting an
     /// account-wide token therefore doesn't leave an account-wide credential in the database.</para>
     /// </summary>
-    public async Task<PlexLinkCompletion> LinkWithToken(string subject, string? token)
+    public async Task<PlexLinkCompletion> LinkWithToken(string subject, string? token, string? label = null)
     {
         var pasted = token?.Trim();
         if (string.IsNullOrEmpty(pasted))
@@ -169,8 +169,13 @@ public class PlexLinkService
             // plex.tv doesn't know this token — a partial paste or a revoked token, which is the user's
             // to correct. Anything else (a plex.tv outage, a network failure) still throws: that's not
             // the same answer and shouldn't be reported to them as a bad token.
-            _logger.LogInformation("A pasted Plex token was rejected by plex.tv ({Status}).", ex.StatusCode);
-            return new PlexLinkCompletion(PlexLinkOutcome.InvalidToken, await Status(subject));
+            // Not the end of it. A *server* access token — the kind in a Plex Web URL, and the only kind
+            // a Plex Home managed user can realistically hand you — isn't a plex.tv account token and
+            // gets refused here while working perfectly against the server. Ask the server instead.
+            _logger.LogInformation(
+                "plex.tv rejected a pasted Plex token ({Status}); trying it against the server.",
+                ex.StatusCode);
+            return await LinkWithServerToken(subject, pasted, label);
         }
 
         if (account is null)
@@ -198,6 +203,43 @@ public class PlexLinkService
         return new PlexLinkCompletion(
             PlexLinkOutcome.Linked,
             new PlexLinkStatus(true, link.Username, link.Email, link.LinkedAt));
+    }
+
+    /// <summary>
+    /// The fallback for a token plex.tv won't vouch for: ask the Plex server itself whether it accepts
+    /// it. That verifies the credential for real — an unusable token still can't be stored — but it
+    /// cannot establish <em>whose</em> it is, because the server answers <c>/myplex/account</c> and its
+    /// root endpoint with the owner's identity whatever token asks.
+    ///
+    /// <para>So the name is a label supplied by whoever did the linking, not an identity Plex confirmed.
+    /// Nothing reads it but the header's display: every call that matters uses the token.</para>
+    /// </summary>
+    private async Task<PlexLinkCompletion> LinkWithServerToken(string subject, string token, string? label)
+    {
+        if (!await _plexApi.AcceptsToken(token))
+        {
+            return new PlexLinkCompletion(PlexLinkOutcome.InvalidToken, await Status(subject));
+        }
+
+        var name = string.IsNullOrWhiteSpace(label) ? "Plex (token)" : label.Trim();
+        _pending.TryRemove(subject, out _);
+
+        // AccountId stays empty: plex.tv is the only thing that issues one, and nothing reads it.
+        var link = new PlexLink(
+            Subject: subject,
+            AccountId: "",
+            Username: name,
+            Email: null,
+            ServerToken: token,
+            LinkedAt: DateTimeOffset.UtcNow);
+
+        await _links.Upsert(link);
+        _logger.LogInformation(
+            "Linked a Plex server token to app user as {Label} (plex.tv could not identify it).", name);
+
+        return new PlexLinkCompletion(
+            PlexLinkOutcome.Linked,
+            new PlexLinkStatus(true, name, null, link.LinkedAt));
     }
 
     /// <summary>

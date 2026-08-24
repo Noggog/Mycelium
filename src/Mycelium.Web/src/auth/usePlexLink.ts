@@ -15,7 +15,8 @@ const UNLINKED: PlexLinkStatus = { linked: false, username: null, email: null, l
 
 // Why a paste was refused, in words the person who pasted it can act on.
 const TOKEN_REFUSALS: Partial<Record<PlexLinkOutcome, string>> = {
-  invalidtoken: "Plex doesn't recognise that token — check it copied whole, and that it hasn't been reset.",
+  invalidtoken:
+    "Neither plex.tv nor the server accepts that token — check it copied whole, and that it hasn't been reset.",
   noserveraccess: "That token is valid, but its account can't see this server's music library.",
 }
 
@@ -33,7 +34,7 @@ export interface PlexLinkController {
   problem: string | null
   connect: (forwardUrl?: string) => Promise<void>
   /** Links a pasted token instead. Resolves true when the link took. */
-  linkWithToken: (token: string) => Promise<boolean>
+  linkWithToken: (token: string, label?: string) => Promise<boolean>
   linkingToken: boolean
   cancel: () => void
   disconnect: () => void
@@ -141,7 +142,8 @@ export function usePlexLink(): PlexLinkController {
   // The paste path shares `problem` with the PIN flow: they're two ways to do one thing, and the
   // header has room for one line of bad news either way.
   const tokenLink = useMutation({
-    mutationFn: linkPlexWithToken,
+    mutationFn: ({ token, label }: { token: string; label?: string }) =>
+      linkPlexWithToken(token, label),
     onSuccess: (completion) => {
       if (completion.outcome !== 'linked') {
         setProblem(TOKEN_REFUSALS[completion.outcome] ?? "That token didn't work.")
@@ -176,10 +178,10 @@ export function usePlexLink(): PlexLinkController {
     fallbackUrl,
     problem,
     connect,
-    linkWithToken: async (token: string) => {
+    linkWithToken: async (token: string, label?: string) => {
       setProblem(null)
       try {
-        const completion = await tokenLink.mutateAsync(token)
+        const completion = await tokenLink.mutateAsync({ token, label })
         return completion.outcome === 'linked'
       } catch {
         // onError has already put the message on `problem`; the caller only needs the verdict.

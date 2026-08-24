@@ -51,11 +51,13 @@ export async function completePlexLink(): Promise<PlexLinkCompletion> {
 // who has no app.plex.tv browser session to approve with. POST body, never a query string: the token
 // would otherwise be written verbatim into the backend's request log. The server answers 400 when it
 // rejects the token, but the body still carries the outcome, so read it before checking res.ok.
-export async function linkPlexWithToken(token: string): Promise<PlexLinkCompletion> {
+// `label` names the account when plex.tv can't identify the token — a Plex server access token
+// verifies against the server but can't be attributed, so it's a display label, not a claim.
+export async function linkPlexWithToken(token: string, label?: string): Promise<PlexLinkCompletion> {
   const res = await fetch('/api/plex/link/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ token, label }),
   })
   const body = (await res.json().catch(() => null)) as PlexLinkCompletion | null
   if (!body) {

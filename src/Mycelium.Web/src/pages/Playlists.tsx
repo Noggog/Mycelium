@@ -52,6 +52,7 @@ export default function Playlists() {
 function PlexConnection() {
   const plex = usePlexLink()
   const [token, setToken] = useState('')
+  const [label, setLabel] = useState('')
 
   if (plex.isLoading) {
     return (
@@ -113,14 +114,19 @@ function PlexConnection() {
           <summary>Or paste a Plex token</summary>
           <p className="dev-status">
             For signing in as a Plex Home or managed user, who has no app.plex.tv session to approve
-            with. Only the server-scoped token is kept — whatever you paste is used once to ask Plex
-            who it belongs to, then discarded.
+            with. An account token is checked with plex.tv, and only the server-scoped token it hands
+            back is kept. A server access token is checked against the server instead — that proves
+            the token works, but the server reports the owner's identity whatever token asks, so it
+            can't say whose it is. Name it yourself in that case.
           </p>
           <form
             className="controls"
             onSubmit={async (e) => {
               e.preventDefault()
-              if (await plex.linkWithToken(token)) setToken('')
+              if (await plex.linkWithToken(token, label)) {
+                setToken('')
+                setLabel('')
+              }
             }}
           >
             <input
@@ -131,6 +137,14 @@ function PlexConnection() {
               autoComplete="off"
               spellCheck={false}
               aria-label="Plex token"
+            />
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Name (if Plex can't say)"
+              autoComplete="off"
+              aria-label="Account name"
             />
             <button type="submit" disabled={plex.linkingToken || token.trim() === ''}>
               {plex.linkingToken ? 'Checking…' : 'Link token'}

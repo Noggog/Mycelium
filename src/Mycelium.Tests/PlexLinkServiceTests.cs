@@ -29,6 +29,7 @@ public class PlexLinkServiceTests
     {
         _sut = new PlexLinkService(_links, _accounts, _plexApi, NullLogger<PlexLinkService>.Instance);
         _plexApi.GetMachineIdentifier().Returns(MachineId);
+        _plexApi.AcceptsToken(Arg.Any<string>()).Returns(false);
         _links.Get(Subject).Returns((PlexLink?)null);
     }
 
@@ -74,19 +75,68 @@ public class PlexLinkServiceTests
         await _links.DidNotReceive().Upsert(Arg.Any<PlexLink>());
     }
 
+    /// <summary>Makes plex.tv disown the token, which is what sends the link to the server fallback.</summary>
+    private void PlexTvRejectsIt(HttpStatusCode status = HttpStatusCode.Unauthorized) =>
+        _accounts.ResolveAccount(Token, MachineId)
+            .Returns<PlexAccount?>(_ => throw new HttpRequestException("nope", null, status));
+
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.Forbidden)]
     [InlineData(HttpStatusCode.NotFound)]
-    public async Task TokenPlexRejects_ReportsInvalidTokenAndStoresNothing(HttpStatusCode status)
+    public async Task RejectedByBothPlexTvAndTheServer_ReportsInvalidTokenAndStoresNothing(
+        HttpStatusCode status)
     {
-        _accounts.ResolveAccount(Token, MachineId)
-            .Returns<PlexAccount?>(_ => throw new HttpRequestException("nope", null, status));
+        PlexTvRejectsIt(status);
 
         var result = await _sut.LinkWithToken(Subject, Token);
 
         result.Outcome.Should().Be(PlexLinkOutcome.InvalidToken);
         await _links.DidNotReceive().Upsert(Arg.Any<PlexLink>());
+    }
+
+    [Fact]
+    public async Task ServerTokenPlexTvDisowns_IsStillLinkedIfTheServerAcceptsIt()
+    {
+        // The case the whole fallback exists for: a Plex *server* access token, which is the only kind
+        // a Home / managed user can hand you. plex.tv has never heard of it; the server takes it.
+        PlexTvRejectsIt();
+        _plexApi.AcceptsToken(Token).Returns(true);
+
+        var result = await _sut.LinkWithToken(Subject, Token, "Kelsey");
+
+        result.Outcome.Should().Be(PlexLinkOutcome.Linked);
+        result.Status.Username.Should().Be("Kelsey");
+        await _links.Received(1).Upsert(Arg.Is<PlexLink>(l => l.ServerToken == Token));
+    }
+
+    [Fact]
+    public async Task ServerTokenWithNoLabel_GetsAPlaceholderRatherThanAnInventedIdentity()
+    {
+        // The server verifies the token but reports the *owner* whatever token asks, so there is no
+        // name to be had. Better an obvious placeholder than a plausible-looking wrong one.
+        PlexTvRejectsIt();
+        _plexApi.AcceptsToken(Token).Returns(true);
+
+        var result = await _sut.LinkWithToken(Subject, Token, "   ");
+
+        result.Outcome.Should().Be(PlexLinkOutcome.Linked);
+        result.Status.Username.Should().Be("Plex (token)");
+        result.Status.Email.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AccountTokenNeverReachesTheServerFallback()
+    {
+        // plex.tv identified it, so the narrower server-scoped token it returned is what gets stored —
+        // the pasted account-wide token must not be persisted just because the server would take it.
+        _accounts.ResolveAccount(Token, MachineId)
+            .Returns(new PlexAccount("42", "kelsey", null, "server-scoped"));
+
+        await _sut.LinkWithToken(Subject, Token);
+
+        await _plexApi.DidNotReceive().AcceptsToken(Arg.Any<string>());
+        await _links.Received(1).Upsert(Arg.Is<PlexLink>(l => l.ServerToken == "server-scoped"));
     }
 
     [Fact]

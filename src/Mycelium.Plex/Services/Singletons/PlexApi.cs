@@ -136,6 +136,27 @@ public class PlexApi : IPlexApi
         return metadata?.ToObject<PlexTrack[]>() ?? Array.Empty<PlexTrack>();
     }
 
+    public async Task<bool> AcceptsToken(string token)
+    {
+        // Setting X-Plex-Token on the request itself suppresses the client's default header, so this
+        // asks as the pasted token rather than as the app. The root endpoint is the cheapest thing
+        // the server will refuse to answer for a bad token.
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{_endpointInfo.BaseUri}/");
+        request.Headers.Add("Accept", "application/json");
+        request.Headers.Add("X-Plex-Token", token);
+
+        using var response = await httpClient.SendAsync(request);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            return false;
+        }
+
+        // Anything else unexpected is the server misbehaving, not a verdict on the token — throwing
+        // keeps that from being reported to the user as "your token is wrong".
+        response.EnsureSuccessStatusCode();
+        return true;
+    }
+
     public async Task<PlexRecentlyAddedItem[]> GetRecentlyAdded(int libraryKey, int maxResults = 5)
     {
         string url = $"{_endpointInfo.BaseUri}/library/sections/{libraryKey}/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size={maxResults}";

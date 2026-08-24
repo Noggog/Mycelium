@@ -19,12 +19,14 @@ function AuthBox() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [tokenOpen, setTokenOpen] = useState(false)
   const [token, setToken] = useState('')
+  const [label, setLabel] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
 
   const closeMenu = () => {
     setMenuOpen(false)
     setTokenOpen(false)
     setToken('')
+    setLabel('')
   }
 
   // Close the menu on an outside click or Escape. Bound only while it's open, so the listeners cost
@@ -119,7 +121,7 @@ function AuthBox() {
               className="auth-token"
               onSubmit={async (e) => {
                 e.preventDefault()
-                if (await plex.linkWithToken(token)) closeMenu()
+                if (await plex.linkWithToken(token, label)) closeMenu()
               }}
             >
               <input
@@ -133,6 +135,17 @@ function AuthBox() {
                 aria-label="Plex token"
                 autoFocus
               />
+              {/* Used only when plex.tv can't identify the token — a server access token verifies
+                  against the server but can't be attributed to anyone, so someone has to name it. */}
+              <input
+                type="text"
+                className="auth-token-input"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="Name (if Plex can't say)"
+                autoComplete="off"
+                aria-label="Account name"
+              />
               <button
                 type="submit"
                 className="auth-btn"
@@ -140,6 +153,9 @@ function AuthBox() {
               >
                 {plex.linkingToken ? 'Checking…' : 'Link'}
               </button>
+              {/* Inside the menu, not in the floating note below it: the menu is the higher layer,
+                  so a note underneath would be hidden behind exactly the panel you're reading. */}
+              {plex.problem && <p className="auth-token-error">{plex.problem}</p>}
             </form>
           )}
 
@@ -163,7 +179,7 @@ function AuthBox() {
           Popup blocked — approve here
         </a>
       )}
-      {plex.problem && <span className="auth-note is-error">{plex.problem}</span>}
+      {plex.problem && !tokenOpen && <span className="auth-note is-error">{plex.problem}</span>}
     </div>
   )
 }
