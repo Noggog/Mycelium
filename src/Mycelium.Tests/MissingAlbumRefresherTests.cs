@@ -21,6 +21,7 @@ public class MissingAlbumRefresherTests
     private readonly IDeezerApi _deezer = Substitute.For<IDeezerApi>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
     private readonly IAlbumMatchOverrideRepo _overrides = Substitute.For<IAlbumMatchOverrideRepo>();
+    private readonly FakeDeezerAlbumArtistRepo _albumArtists = new();
     private readonly MissingAlbumRefresher _sut;
 
     public MissingAlbumRefresherTests()
@@ -28,7 +29,9 @@ public class MissingAlbumRefresherTests
         var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
         var resolver = new DeezerArtistResolver(_deezer, cache, _catalog);
         _overrides.GetAll().Returns(Array.Empty<AlbumMatchOverride>());
-        _sut = new MissingAlbumRefresher(_catalog, resolver, _deezer, _missing, _overrides, NullLogger<MissingAlbumRefresher>.Instance);
+        _sut = new MissingAlbumRefresher(
+            _catalog, resolver, _deezer, _missing, _overrides, _albumArtists,
+            NullLogger<MissingAlbumRefresher>.Instance);
 
         _catalog.GetAllPresent().Returns(new[] { new CatalogArtist(new ArtistKey(Artist), null, default) });
         // Resolution searches for candidates (so it can tell a miss from an unanswered call).
@@ -429,6 +432,119 @@ public class MissingAlbumRefresherTests
         await _sut.RefreshOne(new ArtistKey(Artist), Owned());
 
         CapturedMissing().Should().BeEmpty();
+    }
+
+    // ---- The album-artist backfill: one /album/{id} call each, and there can be hundreds ----
+    //
+    // Deezer's listing doesn't name the act a release is credited to, so the diff has to ask — and it
+    // asks about every release the scanning artist doesn't already own, which for a prolific act is
+    // nearly the whole discography. Paced at 40 calls per 5 seconds, that put 15+ seconds of spinner in
+    // front of the drill-down. Two things bound it: answers are remembered for good, and the
+    // interactive path only asks where the answer can still change something.
+
+    [Fact]
+    public async Task Discography_does_not_ask_who_a_release_nobody_owns_is_credited_to()
+    {
+        // The overwhelmingly common row: a gap in the library that no act, under any name, holds a
+        // record by. Learning its credited act can only confirm it's missing — which it costs a
+        // rate-limited call to be told.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Album("owned lp", id: 1),
+            Album("a gap", id: 2),
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned((Artist, new[] { "owned lp" })));
+
+        listed.Where(a => a.Owned).Select(a => a.Title).Should().Equal("owned lp");
+        await _deezer.DidNotReceiveWithAnyArgs().GetAlbum(default);
+    }
+
+    [Fact]
+    public async Task Discography_still_asks_when_another_act_owns_a_record_by_that_title()
+    {
+        // The row where the answer decides something: the library holds a record by this title, just
+        // under a different act. Skipping the lookup here would report an album we own as a gap.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("nostrum grocers", id: 99) });
+        _deezer.GetAlbum(99).Returns(new DeezerAlbum
+        {
+            id = 99, title = "nostrum grocers", artist = new DeezerArtist { name = "nostrum grocers" },
+        });
+
+        var listed = await _sut.Discography(
+            new ArtistKey(Artist), Owned(("nostrum grocers", new[] { "Nostrum Grocers" })));
+
+        listed.Should().ContainSingle().Which.Owned.Should().BeTrue();
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Discography_still_asks_when_a_recorded_merge_names_that_title()
+    {
+        // The other way an unowned-looking release turns out to be owned: the user has merged it into a
+        // near-miss library title under another act. That merge is only reachable through the credited
+        // act, so the lookup has to happen even though nobody's owned-album list mentions the title.
+        _overrides.GetAll().Returns(new[]
+        {
+            new AlbumMatchOverride("nostrum grocers", "nostrum grocers", "Nostrum Grocers (2018)"),
+        });
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("nostrum grocers", id: 99) });
+        _deezer.GetAlbum(99).Returns(new DeezerAlbum
+        {
+            id = 99, title = "nostrum grocers", artist = new DeezerArtist { name = "nostrum grocers" },
+        });
+
+        var listed = await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        listed.Should().ContainSingle().Which.Owned.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_credited_act_is_learned_once_and_remembered()
+    {
+        // A release's credited act never changes, so a second pass over the same album must cost
+        // nothing. Held in Mongo rather than in memory precisely so a restart doesn't re-buy the answer.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("nostrum grocers", id: 99) });
+        _deezer.GetAlbum(99).Returns(new DeezerAlbum
+        {
+            id = 99, title = "nostrum grocers", artist = new DeezerArtist { name = "Nostrum Grocers" },
+        });
+
+        await _sut.RefreshOne(new ArtistKey(Artist), Owned());
+        await _sut.RefreshOne(new ArtistKey(Artist), Owned());
+
+        await _deezer.Received(1).GetAlbum(99);
+        _albumArtists.Items.Should().Contain(new KeyValuePair<long, string>(99, "Nostrum Grocers"));
+    }
+
+    [Fact]
+    public async Task The_drill_down_reads_what_the_sweep_already_learned()
+    {
+        // The two halves meeting: the nightly sweep pays for the lookup and files the answer, so the
+        // drill-down applies the same collaboration reasoning without touching Deezer at all.
+        _albumArtists.Seed(99, "nostrum grocers");
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("nostrum grocers", id: 99) });
+
+        var listed = await _sut.Discography(
+            new ArtistKey(Artist), Owned(("nostrum grocers", new[] { "Nostrum Grocers" })));
+
+        listed.Should().ContainSingle().Which.Owned.Should().BeTrue();
+        await _deezer.DidNotReceiveWithAnyArgs().GetAlbum(default);
+    }
+
+    [Fact]
+    public async Task An_unresolved_release_is_still_credited_to_the_listing_artist()
+    {
+        // What the interactive path gives up: a release Deezer has added since the last sweep goes into
+        // the store under the act whose discography surfaced it rather than its own credited act. It is
+        // still offered, still carries its Deezer id, and the next sweep fills in the rest.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("nostrum grocers", id: 99) });
+
+        await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        var m = CapturedMissing().Should().ContainSingle().Subject;
+        m.DeezerAlbumId.Should().Be(99);
+        m.MatchArtist.ArtistName.Should().Be(Artist);
     }
 
     [Fact]

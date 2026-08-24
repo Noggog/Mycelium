@@ -24,6 +24,7 @@ public class DiscoveryEngineTests
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
     private readonly IAlbumMatchOverrideRepo _overrides = Substitute.For<IAlbumMatchOverrideRepo>();
+    private readonly FakeDeezerAlbumArtistRepo _albumArtists = new();
     private readonly IUserAlbumRatingRepo _albumRatings = Substitute.For<IUserAlbumRatingRepo>();
     private readonly IAlbumBlockRepo _blocks = Substitute.For<IAlbumBlockRepo>();
     private readonly IDeezerApi _deezer = Substitute.For<IDeezerApi>();
@@ -35,7 +36,8 @@ public class DiscoveryEngineTests
         var resolver = new DeezerArtistResolver(_deezer, cache, _catalog);
         _overrides.GetAll().Returns(Array.Empty<AlbumMatchOverride>());
         var refresher = new MissingAlbumRefresher(
-            _catalog, resolver, _deezer, _missing, _overrides, NullLogger<MissingAlbumRefresher>.Instance);
+            _catalog, resolver, _deezer, _missing, _overrides, _albumArtists,
+            NullLogger<MissingAlbumRefresher>.Instance);
         _sut = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,
             NullLogger<DiscoveryEngine>.Instance);

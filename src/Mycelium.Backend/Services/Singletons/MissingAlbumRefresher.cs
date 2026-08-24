@@ -25,6 +25,10 @@ public record DiscographyAlbum(
 /// This is the only path that touches Deezer for albums; the per-user "missing albums" feed reads
 /// the persisted result, so it works even when Deezer is down. Heavy (one discography call per owned
 /// artist), so it runs on its own schedule, separate from the cheap Plex catalog refresh.
+///
+/// The sweep also doubles as the warm-up for the interactive paths: it resolves every gap's credited
+/// act into <see cref="IDeezerAlbumArtistRepo"/>, which is what lets <see cref="Discography"/> answer a
+/// drill-down without spending a Deezer call per release.
 /// </summary>
 public class MissingAlbumRefresher
 {
@@ -45,13 +49,14 @@ public class MissingAlbumRefresher
     private readonly IDeezerApi _deezer;
     private readonly IMissingAlbumRepo _missing;
     private readonly IAlbumMatchOverrideRepo _overrides;
+    private readonly IDeezerAlbumArtistRepo _albumArtists;
     private readonly ILogger<MissingAlbumRefresher> _logger;
 
-    // A Deezer album id -> its album-artist name. The discography listing omits the album-artist, so
-    // learning it costs one /album/{id} call per album; we memoise for the process lifetime (warms
-    // across the daily sweep, re-warms on restart) so the extra calls stay bounded. Only answers are
-    // stored — see ResolveAlbumArtist for why a null is left uncached.
-    private readonly ConcurrentDictionary<long, string> _albumArtistCache = new();
+    // How many /album/{id} lookups to have in flight at once. DeezerApi paces every call through a
+    // rolling window (40 per 5s), so this can't outrun the ceiling — it only stops the walk from
+    // paying a full round trip's latency per album on top of the pacing, which is what made a cold
+    // discography a sequential minute-long crawl.
+    private const int ResolveConcurrency = 8;
 
     public MissingAlbumRefresher(
         IArtistCatalogRepo catalog,
@@ -59,6 +64,7 @@ public class MissingAlbumRefresher
         IDeezerApi deezer,
         IMissingAlbumRepo missing,
         IAlbumMatchOverrideRepo overrides,
+        IDeezerAlbumArtistRepo albumArtists,
         ILogger<MissingAlbumRefresher> logger)
     {
         _catalog = catalog;
@@ -66,6 +72,7 @@ public class MissingAlbumRefresher
         _deezer = deezer;
         _missing = missing;
         _overrides = overrides;
+        _albumArtists = albumArtists;
         _logger = logger;
     }
 
@@ -119,7 +126,7 @@ public class MissingAlbumRefresher
     public async Task<IReadOnlyList<MissingAlbum>> RefreshOne(
         ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
     {
-        var diff = await FetchAndDiff(artist, ownedAlbums);
+        var diff = await FetchAndDiff(artist, ownedAlbums, ArtistResolution.Full);
         var missing = diff?.Missing ?? new List<MissingAlbum>();
         // Persist the gap (or clear stale rows when the artist has no Deezer match) so the per-user
         // feed and a later like — which carries the row's DeezerAlbumId to the downloader — stay current.
@@ -138,6 +145,13 @@ public class MissingAlbumRefresher
     /// nothing in an artist's discography is hidden behind another edition of itself. Owned albums the
     /// library has that Deezer doesn't list at all are appended (without art/id/type) so the picture is
     /// complete.
+    ///
+    /// This runs in front of a click, so it resolves credited acts only where the answer can still
+    /// change an owned/missing verdict (<see cref="ArtistResolution.OwnershipOnly"/>) rather than for
+    /// every gap — the difference between a couple of Deezer calls and one per unowned release, which
+    /// for a prolific artist was a hundred-odd rate-limited calls and fifteen seconds of spinner. The
+    /// nightly <see cref="Refresh"/> resolves the rest into the shared memo, so what it has learned is
+    /// still applied here for free.
     /// </summary>
     /// <exception cref="DeezerUnavailableException">
     /// Deezer didn't answer. Nothing is persisted and nothing is returned — the caller surfaces this
@@ -147,7 +161,7 @@ public class MissingAlbumRefresher
     public async Task<IReadOnlyList<DiscographyAlbum>> Discography(
         ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
     {
-        var diff = await FetchAndDiff(artist, ownedAlbums);
+        var diff = await FetchAndDiff(artist, ownedAlbums, ArtistResolution.OwnershipOnly);
         await _missing.ReplaceForArtist(artist.ArtistName, diff?.Missing ?? new List<MissingAlbum>());
 
         var all = diff?.All.ToList() ?? new List<DiscographyAlbum>();
@@ -168,14 +182,35 @@ public class MissingAlbumRefresher
     }
 
     /// <summary>
+    /// How much of the album-artist backfill a diff is willing to pay for. Deezer's listing doesn't name
+    /// the act a release is credited to, and learning it is a rate-limited call each — cheap spread
+    /// across a nightly sweep, ruinous in front of a click.
+    /// </summary>
+    private enum ArtistResolution
+    {
+        /// <summary>Learn every unknown release's credited act. The sweep, which fills the durable memo
+        /// the interactive paths then read for free.</summary>
+        Full,
+
+        /// <summary>Learn it only where the answer can still flip a release between owned and missing.
+        /// Rows the memo already covers are unaffected either way; a release Deezer added since the last
+        /// sweep keeps the listing artist as its credited act until that sweep picks it up.</summary>
+        OwnershipOnly,
+    }
+
+    /// <summary>
     /// Resolves the artist on Deezer, gathers their catalog (the discography listing, backfilled from
-    /// album search — see <see cref="Backfill"/>), and walks it once, splitting it into the full
-    /// annotated list (every listed record type and every pressing, flagged owned/missing) and the missing
+    /// album search — see <see cref="Backfill"/>), and walks it, splitting it into the full annotated
+    /// list (every listed record type and every pressing, flagged owned/missing) and the missing
     /// subset, each row tagged with its record type so the feed can decide for itself what to push.
     /// Returns null when the artist has no Deezer match. Ownership compares on a normalized title so
     /// punctuation/casing differences between Plex and Deezer (a typographic vs. straight apostrophe)
     /// don't make an owned album look missing — but edition decoration is kept, so owning "Both Sides"
     /// says nothing about "Both Sides (Deluxe Edition)"; the original Deezer title is what we surface.
+    ///
+    /// The walk is in two passes rather than one: the first settles what it can without leaving the
+    /// process and collects the releases whose credited act is still in question, so the second can
+    /// resolve them as a single batch (see <see cref="AlbumArtists"/>) instead of a serial call per row.
     /// </summary>
     /// <exception cref="DeezerUnavailableException">
     /// Deezer never answered — so nothing learned here is evidence of anything. Distinct from a null
@@ -184,7 +219,9 @@ public class MissingAlbumRefresher
     /// blanks their album list in the UI, which is exactly what a five-second quota blip used to do.
     /// </exception>
     private async Task<(List<DiscographyAlbum> All, List<MissingAlbum> Missing)?> FetchAndDiff(
-        ArtistKey artist, IReadOnlyDictionary<string, HashSet<string>> ownedAlbums)
+        ArtistKey artist,
+        IReadOnlyDictionary<string, HashSet<string>> ownedAlbums,
+        ArtistResolution resolution)
     {
         var lookup = await _resolver.Lookup(artist.ArtistName);
         if (lookup.Unavailable)
@@ -222,21 +259,42 @@ public class MissingAlbumRefresher
 
         // User-asserted merges — a release the diff would call missing that the user has confirmed is
         // already in the library under a near-miss title. Same keys the purchase reconcile builds.
-        var overrideKeys = (await _overrides.GetAll())
+        var overrides = await _overrides.GetAll();
+        var overrideKeys = overrides
             .Select(o => AlbumOverrideKey.For(o.MatchArtist, o.DeezerTitle))
             .ToHashSet();
 
+        // Every album title the library holds, under any act, and every title a merge has been recorded
+        // against — the two ways a release not in the scanning artist's own set can still turn out to be
+        // owned. Both are whole-library sets, so they're built only if something actually asks.
+        var ownedAnywhere = new Lazy<HashSet<string>>(() => ownedAlbums.Values
+            .SelectMany(titles => titles)
+            .Select(NormalizeTitle)
+            .ToHashSet(StringComparer.Ordinal));
+        var mergedTitles = new Lazy<HashSet<string>>(() => overrides
+            .Select(o => NormalizeTitle(o.DeezerTitle))
+            .ToHashSet(StringComparer.Ordinal));
+
+        // Whether learning a release's credited act could still flip it from missing to owned. When
+        // nobody in the library owns a record by that title and no merge names it, the lookup can only
+        // confirm what we already have — and that is nearly every row of a discography, which is why
+        // paying a rate-limited Deezer call for each of them put fifteen seconds in front of the
+        // drill-down.
+        bool CouldChangeOwnership(string key) =>
+            ownedAnywhere.Value.Contains(key) || mergedTitles.Value.Contains(key);
+
+        // First pass: one row per release, and the cheap half of the ownership question — owned outright
+        // by the artist we're scanning — settled without leaving the process.
+        //
         // One key per release, and it keeps the edition decoration. Each pressing Deezer lists is its
         // own row with its own id: the deluxe edition, the remaster and the plain LP are three
         // releases here, and a user acting on one of those rows is acting on that release alone.
         // Only a title Deezer repeats verbatim is dropped as the duplicate it is.
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var all = new List<DiscographyAlbum>();
-        var missing = new List<MissingAlbum>();
+        var rows = new List<(DeezerAlbum Album, string Key, bool Owned)>();
         foreach (var album in catalog)
         {
-            var title = album.title;
-            var key = NormalizeTitle(title);
+            var key = NormalizeTitle(album.title);
             if (string.IsNullOrEmpty(key)
                 || album.record_type is null
                 || !ListedRecordTypes.Contains(album.record_type)
@@ -245,37 +303,43 @@ public class MissingAlbumRefresher
                 continue;
             }
 
-            // Owned under the scanning artist (their own catalogued album) — the cheap, common case;
-            // or a user-recorded merge into a near-miss library title under the scanning artist.
-            var isOwned = scannedOwned.Contains(key)
-                          || overrideKeys.Contains(AlbumOverrideKey.For(artist.ArtistName, title));
+            var owned = scannedOwned.Contains(key)
+                        || overrideKeys.Contains(AlbumOverrideKey.For(artist.ArtistName, album.title));
+            rows.Add((album, key, owned));
+        }
+
+        // The credited act for everything still unaccounted for, in one batch.
+        var albumArtists = await AlbumArtists(
+            rows.Where(r => !r.Owned).Select(r => (r.Album.id, r.Key)).ToList(),
+            resolution == ArtistResolution.Full ? null : CouldChangeOwnership);
+
+        var all = new List<DiscographyAlbum>(rows.Count);
+        var missing = new List<MissingAlbum>();
+        foreach (var (album, key, ownedByScanned) in rows)
+        {
+            var isOwned = ownedByScanned;
             var albumArtist = artist;
-            if (!isOwned)
+            // Not in the scanning artist's owned set. It may be a collaboration the listing surfaces
+            // via one member (e.g. a duo record) but the library files under the duo name, so the act
+            // Deezer credits it to settles both (a) whether Plex already has it under that name and
+            // (b) which act reconcile should later match it against. An id we have no answer for —
+            // never looked up, or a call that failed — falls back to the listing artist.
+            if (!isOwned
+                && albumArtists.TryGetValue(album.id, out var resolved)
+                && !string.Equals(resolved, artist.ArtistName, StringComparison.OrdinalIgnoreCase))
             {
-                // Not in the scanning artist's owned set. It may be a collaboration the listing surfaces
-                // via one member (e.g. a duo record) but the library files under the duo name. Resolve
-                // the real album-artist so we can (a) tell whether Plex already has it under that name,
-                // and (b) record it so reconcile later matches the act Plex filed it under. Bounded:
-                // only the gap is resolved, and results are cached across the sweep. An edition we
-                // don't own reaches this even when we own the plain pressing, which is the cost of
-                // treating pressings as separate releases: one lookup per unowned row, not per record.
-                var resolved = await ResolveAlbumArtist(album.id);
-                if (!string.IsNullOrWhiteSpace(resolved)
-                    && !string.Equals(resolved, artist.ArtistName, StringComparison.OrdinalIgnoreCase))
-                {
-                    albumArtist = new ArtistKey(resolved);
-                    isOwned = OwnedTitlesFor(resolved).Contains(key)
-                              || overrideKeys.Contains(AlbumOverrideKey.For(resolved, title));
-                }
+                albumArtist = new ArtistKey(resolved);
+                isOwned = OwnedTitlesFor(resolved).Contains(key)
+                          || overrideKeys.Contains(AlbumOverrideKey.For(resolved, album.title));
             }
 
             all.Add(new DiscographyAlbum(
-                title, album.BestCoverUrl, album.id, isOwned, album.Year, album.record_type));
+                album.title, album.BestCoverUrl, album.id, isOwned, album.Year, album.record_type));
             if (!isOwned)
             {
                 missing.Add(new MissingAlbum(
-                    artist, new AlbumKey(title), album.BestCoverUrl, album.id, albumArtist, album.Year,
-                    album.record_type));
+                    artist, new AlbumKey(album.title), album.BestCoverUrl, album.id, albumArtist,
+                    album.Year, album.record_type));
             }
         }
 
@@ -324,28 +388,63 @@ public class MissingAlbumRefresher
     }
 
     /// <summary>
-    /// The album-artist Deezer credits a release to (the listing discography omits it). Cached for the
-    /// process lifetime — one <c>/album/{id}</c> call per album ever seen. Returns null on a Deezer
-    /// miss, which the caller treats as "no collaboration info" and falls back to the listing artist.
+    /// The act Deezer credits each of these releases to. Answers come from the durable memo wherever we
+    /// already have them (<see cref="IDeezerAlbumArtistRepo"/> — a release's credited act never changes,
+    /// so it's learned once and kept across restarts), and the rest are fetched concurrently, still
+    /// paced by <c>DeezerApi</c>'s rolling window. Anything learned is written back for everyone after.
     ///
-    /// An id that came out of the discography listing exists by construction, so a null answer here is
-    /// a failed call, not a real miss — and it isn't cached. Memoising it would pin the whole rest of
-    /// a rate-limited discography walk to the listing artist for the life of the process, long after
-    /// Deezer started answering again.
+    /// <paramref name="worthResolving"/> bounds what is fetched at all: null learns every unknown id
+    /// (the nightly sweep, where the latency is free and the memo it fills is what makes the
+    /// interactive paths cheap), a predicate learns only the rows whose answer can still change
+    /// something. A release left unresolved keeps the listing artist as its credited act — the same
+    /// fallback as one Deezer declines to answer for.
     /// </summary>
-    private async Task<string?> ResolveAlbumArtist(long albumId)
+    private async Task<Dictionary<long, string>> AlbumArtists(
+        IReadOnlyList<(long Id, string Key)> candidates, Func<string, bool>? worthResolving)
     {
-        if (_albumArtistCache.TryGetValue(albumId, out var cached))
+        if (candidates.Count == 0)
         {
-            return cached;
+            return new Dictionary<long, string>();
         }
 
-        var name = (await _deezer.GetAlbum(albumId))?.artist?.name;
-        if (name is not null)
+        var known = await _albumArtists.Get(candidates.Select(c => c.Id).Distinct().ToList());
+        var unknown = candidates
+            .Where(c => !known.ContainsKey(c.Id))
+            .Where(c => worthResolving is null || worthResolving(c.Key))
+            .Select(c => c.Id)
+            .Distinct()
+            .ToList();
+        if (unknown.Count == 0)
         {
-            _albumArtistCache[albumId] = name;
+            return known;
         }
-        return name;
+
+        var learned = new ConcurrentDictionary<long, string>();
+        await Parallel.ForEachAsync(
+            unknown,
+            new ParallelOptions { MaxDegreeOfParallelism = ResolveConcurrency },
+            async (id, _) =>
+            {
+                // Only an answer is recorded. An id that came out of the discography listing exists by
+                // construction, so a null here is a failed call rather than a real miss — memoising it
+                // would pin the rest of a rate-limited walk to the listing artist for good.
+                var name = (await _deezer.GetAlbum(id))?.artist?.name;
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    learned[id] = name;
+                }
+            });
+
+        if (!learned.IsEmpty)
+        {
+            await _albumArtists.Put(learned);
+            foreach (var (id, name) in learned)
+            {
+                known[id] = name;
+            }
+        }
+
+        return known;
     }
 
     private static string NormalizeTitle(string? title) => AlbumTitleMatcher.Normalize(title);
