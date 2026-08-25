@@ -205,16 +205,26 @@ public class AlbumTitleMatcherTests
             .Should().NotBe(AlbumTitleMatcher.Normalize("Light Upon the Lake"));
     }
 
-    // A genuinely different reading of a record is not decoration, at either granularity.
+    // A different performance of the songs is a different record, at either granularity.
     [Theory]
-    [InlineData("Celebration Rock (Live)")]
-    [InlineData("Sound Kapital (Clean Slate)")]
-    [InlineData("A Color Map of the Sun (Remixes)")]
-    [InlineData("Post-Nothing")]
-    public void A_tail_that_carries_meaning_survives_the_record_fold(string title)
+    [InlineData("Celebration Rock (Live)", "celebration rock (live)")]
+    [InlineData("A Color Map of the Sun (Remixes)", "color map of the sun (remixes)")]
+    [InlineData("Post-Nothing", "post-nothing")]
+    public void A_different_performance_survives_the_record_fold(string title, string expected)
     {
-        AlbumTitleMatcher.NormalizeRecord(title)
-            .Should().Be(AlbumTitleMatcher.Normalize(title));
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be(expected);
+    }
+
+    // Everything else in a trailing bracket is how one source chose to annotate the same record.
+    [Theory]
+    [InlineData("Sound Kapital (Standard Version)")]
+    [InlineData("Sound Kapital (Clean Slate)")]
+    [InlineData("Sound Kapital [2011]")]
+    [InlineData("Sound Kapital (Japanese Release)")]
+    [InlineData("Sound Kapital")]
+    public void Any_other_trailing_bracket_folds_to_the_record(string title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be("sound kapital");
     }
 
     [Theory]
@@ -259,5 +269,94 @@ public class AlbumTitleMatcherTests
     {
         AlbumOverrideKey.For("Ben Howard", "Every Kingdom (Deluxe Edition)")
             .Should().Be(AlbumOverrideKey.For("ben howard", "Every Kingdom"));
+    }
+
+    // A featured-artist credit is fluff at every granularity: Deezer writes the guest into the title
+    // and Plex doesn't, and neither lists both spellings as two releases.
+    [Theory]
+    [InlineData("Titanium (feat. Sia)")]
+    [InlineData("Titanium (Feat. Sia)")]
+    [InlineData("Titanium [ft. Sia]")]
+    [InlineData("Titanium (featuring Sia)")]
+    [InlineData("Titanium (feat. Sia & Someone Else)")]
+    [InlineData("Titanium")]
+    public void A_featured_credit_is_the_same_listing(string title)
+    {
+        AlbumTitleMatcher.Normalize(title).Should().Be("titanium");
+    }
+
+    [Fact]
+    public void A_featured_credit_is_dropped_from_the_middle_of_a_title()
+    {
+        AlbumTitleMatcher.Normalize("Titanium (feat. Sia) [Radio Edit]")
+            .Should().Be("titanium [radio edit]");
+    }
+
+    [Fact]
+    public void A_credit_alongside_edition_decoration_folds_to_the_record()
+    {
+        AlbumTitleMatcher.NormalizeRecord("Titanium (feat. Sia) [Deluxe Edition]")
+            .Should().Be("titanium");
+    }
+
+    [Fact]
+    public void A_title_that_is_only_a_credit_survives()
+    {
+        AlbumTitleMatcher.Normalize("(feat. Sia)").Should().Be("(feat. sia)");
+    }
+
+    // A bracket is only how a source chose to punctuate the pressing — the words are what say it is
+    // one, so the unbracketed spelling has to reach the same record.
+    [Theory]
+    [InlineData("Glitterbug (Deluxe Edition)")]
+    [InlineData("Glitterbug Deluxe Edition")]
+    [InlineData("Glitterbug deluxe edition")]
+    [InlineData("Glitterbug Remastered")]
+    [InlineData("Glitterbug 10th Anniversary Edition")]
+    [InlineData("Glitterbug")]
+    public void An_unbracketed_edition_is_the_same_record(string title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be("glitterbug");
+    }
+
+    // The unbracketed strip is record granularity only: the discography still lists the two rows
+    // apart, exactly as it does for the bracketed spelling.
+    [Fact]
+    public void An_unbracketed_edition_is_still_its_own_listing()
+    {
+        AlbumTitleMatcher.Normalize("Glitterbug Deluxe Edition")
+            .Should().NotBe(AlbumTitleMatcher.Normalize("Glitterbug"));
+    }
+
+    // A trailing run with no qualifier in it is just the end of a title.
+    [Theory]
+    [InlineData("Songs of the Second", "songs of the second")]
+    [InlineData("Extended Play", "extended play")]
+    [InlineData("Deluxe", "deluxe")]
+    public void A_bare_tail_without_a_qualifier_is_kept(string title, string expected)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be(expected);
+    }
+
+    // Sources disagree on whether the record carries its article, and a reissue routinely drops it.
+    [Theory]
+    [InlineData("A Change Is Gonna Come")]
+    [InlineData("Change Is Gonna Come")]
+    [InlineData("The Change Is Gonna Come")]
+    public void A_leading_article_is_the_same_record(string title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be("change is gonna come");
+    }
+
+    [Fact]
+    public void A_leading_article_is_kept_at_listing_granularity()
+    {
+        AlbumTitleMatcher.Normalize("A Change Is Gonna Come").Should().Be("a change is gonna come");
+    }
+
+    [Fact]
+    public void A_title_that_is_only_an_article_survives()
+    {
+        AlbumTitleMatcher.NormalizeRecord("The").Should().Be("the");
     }
 }
