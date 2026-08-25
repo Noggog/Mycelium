@@ -1554,7 +1554,7 @@ export default function Browse() {
 
       {artists && artists.length > 0 && (
         <>
-          <div className="disc-layout">
+          <div className="disc-layout browse-layout">
             <div className="disc-main">
               <div className="disc-list">
                 {paged.map((row) => {

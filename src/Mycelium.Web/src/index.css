@@ -245,10 +245,14 @@ code {
   gap: 0.5rem 1.5rem;
   padding: 0 1.75rem;
   min-height: var(--topbar-h);
-  background: linear-gradient(90deg, rgba(33, 28, 74, 0.88), rgba(11, 9, 18, 0.88));
+  /* Deliberately NOT backdrop-filter'd. The bar is sticky, and the near-spore layer
+     (fixed, z-index 100, CSS-filtered) drifts across it every few minutes — a filtered
+     layer painting over a backdrop-filtered sticky element makes Chromium recompute the
+     backdrop root and drop frames, which read as the whole bar strobing on and off. At
+     0.94 alpha there was barely any backdrop left to blur anyway, so the glass look is
+     carried by the gradient alone. */
+  background: linear-gradient(90deg, rgba(33, 28, 74, 0.94), rgba(11, 9, 18, 0.94));
   border-bottom: 1px solid var(--border);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 /* Neon seam along the bar's bottom edge. */
 .topbar::after {
@@ -278,13 +282,6 @@ code {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   filter: drop-shadow(0 0 10px rgba(250, 115, 118, 0.5));
-  animation: flicker 6s infinite steps(1);
-}
-
-@keyframes flicker {
-  0%, 92%, 96%, 100% { opacity: 1; }
-  93% { opacity: 0.55; }
-  95% { opacity: 0.8; }
 }
 
 .nav {
@@ -1685,6 +1682,20 @@ a.disc-row-link:hover .disc-name {
   -webkit-backdrop-filter: blur(16px);
   box-shadow: 0 12px 50px rgba(0, 0, 0, 0.45);
   padding: 1.25rem;
+}
+
+/* Browse's drill-down is a page, not a panel: one window scrollbar carries both columns instead of
+   trapping a second one inside the readout. Discover keeps the sticky, self-scrolling pane — there the
+   list is the thing you work through, so the readout has to stay put beside it. Desktop only; below
+   961px the readout is already a full-screen drawer that owns its own scroll. */
+@media (min-width: 961px) {
+  .browse-layout .disc-detail {
+    /* Still positioned — the close button anchors to it. */
+    position: relative;
+    top: auto;
+    max-height: none;
+    overflow-y: visible;
+  }
 }
 
 .disc-detail-empty {
