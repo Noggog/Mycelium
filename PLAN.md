@@ -372,10 +372,16 @@ prompted this.
   candidates stay out — "Cast" is a britpop band, "Various" and "VA" are real acts.
 - **Finding.** `CollectionService` + `GET /api/collections/search` (Deezer `/search/album`,
   umbrella-credited hits first, singles dropped), `POST /api/collections/resolve` for a pasted album
-  link, and `GET /api/collections` listing what the user owns or has judged. Browse gained an
-  **Artists / Collections** switch: the search block appears under the artist results in either mode,
-  and the tab additionally lists owned-but-unrated compilations — without those there is no way to say
-  you like something already on the shelf.
+  link, and `GET /api/collections` listing what the user owns or has judged.
+
+  **No separate view.** Browse keeps the layout it had; collections just join it. The owned ones are
+  merged into the library list itself, sorted by title among the artists — a compilation on the shelf
+  is library, so it is listed as library, and that is also the only way to thumb one you already own.
+  An "Albums & collections" block sits under the existing "Not in your library" artist results and
+  carries everything else Deezer knows; owned umbrella records are filtered out of it, since the list
+  above is already showing them (the same rule `UncatalogedResults` applies to artists). A pasted
+  Deezer album link typed into the same search box is resolved instead of searched, so the escape
+  hatch for a record search won't surface costs no extra UI.
 - **Rating.** `POST /api/collections/rate` writes an additive row to `missingAlbums`
   (`IMissingAlbumRepo.Upsert` — *not* `ReplaceForArtist`, since every collection files under the same
   umbrella act and a replace would delete its neighbours' Deezer ids) and then an ordinary album

@@ -3263,39 +3263,3 @@ a.detail-chip.via:hover {
   font-size: 0.8rem;
 }
 
-/* ========================================================================== */
-/* Collections — compilations and soundtracks, which no artist page reaches   */
-/* ========================================================================== */
-
-/* Artists / Collections switch in the Browse header. Reuses the readout's tab strip, minus its
-   bottom rule (the header already has one) and pulled up to sit on the title's baseline. */
-.browse-modes {
-  margin: 0 auto 0 0.4rem;
-  border-bottom: none;
-}
-
-/* Paste-a-link row: the way in for a record Deezer's own search won't put in front of you. */
-.collection-paste {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin-bottom: 0.6rem;
-}
-.collection-paste input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.collection-paste .disc-btn {
-  width: auto;
-  padding: 0 0.85rem;
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
-
-/* The one-paragraph explanation of what a collection is. Wider measure than a note under a row, and
-   given room to breathe since it's the first thing on the tab. */
-.collections-intro {
-  max-width: 62ch;
-  margin: 0 0 1rem;
-  line-height: 1.5;
-}

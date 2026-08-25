@@ -23,6 +23,7 @@ import type {
   ArtistAlbumItem,
   ArtistListItem,
   ArtistTags,
+  CollectionItem,
   DiscoveryStatus,
   FeedItem,
   SourceCandidate,
@@ -35,7 +36,8 @@ import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
 import { IconApprove, IconBlock, IconCheck, IconClear, IconReject, IconWrench, Spinner } from '../components/icons'
 import { isDeezerBusy } from '../api/deezer'
-import { CollectionResults, CollectionsView } from '../components/Collections'
+import { getCollections } from '../api/collections'
+import { CollectionResults, CollectionRow } from '../components/Collections'
 
 // The detail pane is driven by a lightweight selection: just enough to render the readout and to key
 // the Albums / Related tab queries. A library row supplies the full ArtistListItem (looked up by name
@@ -1340,18 +1342,19 @@ function UncatalogedResults({
   )
 }
 
-// Browse has two things to look through, and they are reached differently. Artists are the library's
-// own spine — everything else in the app hangs off them. Collections are the records that spine can't
-// hold: a compilation is credited to an umbrella ("Various Artists", a soundtrack) whose discography
-// is empty, so no artist page will ever lead you to one. Two modes rather than one merged list,
-// because "which band?" and "which record?" are different questions with different answers.
-type BrowseMode = 'artists' | 'collections'
+// One row of the library list. Almost all of them are artists — the library's own spine, and what
+// everything else in the app hangs off. The rest are *collections*: compilations and soundtracks
+// credited to an umbrella ("Various Artists") rather than to an act, which no artist row can lead you
+// to. They're on the shelf just as much as a band is, so they're listed with them rather than off in a
+// view of their own; the sort key is whatever the row is called.
+type BrowseRow =
+  | { kind: 'artist'; sortName: string; artist: ArtistListItem }
+  | { kind: 'collection'; sortName: string; item: CollectionItem }
 
 export default function Browse() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [mode, setMode] = useState<BrowseMode>('artists')
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
   // The artist open in the right-hand readout (desktop) / drawer (mobile), and which of its tabs is
@@ -1375,6 +1378,15 @@ export default function Browse() {
   const { data: ratings } = useQuery({
     queryKey: ['ratings'],
     queryFn: getRatings,
+    enabled: !!user,
+  })
+
+  // Collections the user owns or has judged. Only the owned ones join the list below — the rest have
+  // nothing to do with what's on the shelf, and the Deezer results block already surfaces them.
+  // Per-user (it carries verdicts), so signed-in only.
+  const { data: collections } = useQuery({
+    queryKey: ['collections'],
+    queryFn: getCollections,
     enabled: !!user,
   })
 
@@ -1417,8 +1429,29 @@ export default function Browse() {
     onSuccess: invalidate,
   })
 
-  const filtered = (artists ?? []).filter((a) =>
-    normalize(a.artistKey.artistName).includes(normalize(query)),
+  // The library, as one list: every artist, plus the collections already on the shelf, ordered by the
+  // name each row shows. A collection matches on its own title *and* on its credit, so searching
+  // "various artists" finds them all.
+  const rows: BrowseRow[] = useMemo(() => {
+    const artistRows: BrowseRow[] = (artists ?? []).map((a) => ({
+      kind: 'artist',
+      sortName: a.artistKey.artistName,
+      artist: a,
+    }))
+    const collectionRows: BrowseRow[] = (collections ?? [])
+      .filter((c) => c.owned)
+      .map((c) => ({ kind: 'collection', sortName: c.title, item: c }))
+
+    return [...artistRows, ...collectionRows].sort((x, y) =>
+      x.sortName.localeCompare(y.sortName, undefined, { sensitivity: 'base' }),
+    )
+  }, [artists, collections])
+
+  const filtered = rows.filter((r) =>
+    r.kind === 'artist'
+      ? normalize(r.artist.artistKey.artistName).includes(normalize(query))
+      : normalize(r.item.title).includes(normalize(query))
+        || normalize(r.item.artist.artistName).includes(normalize(query)),
   )
 
   // Clamp to a valid page after the filter shrinks (e.g. a search that lands past the current page).
@@ -1458,6 +1491,8 @@ export default function Browse() {
       return
     }
 
+    // Paged over the merged list, but sized from the artists alone: collections load separately and
+    // are a handful, so the worst this costs is landing a page or two shy of the very end.
     const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
     const randPage = Math.floor(Math.random() * totalPages)
     setPage(randPage)
@@ -1470,86 +1505,69 @@ export default function Browse() {
 
   // Once randomized, keep the readout populated: if it ends up empty (e.g. the user closes it), reopen
   // the current page's first artist so the pane never falls back to the bare placeholder. Desktop only.
-  const firstItem = paged[0]
+  // The first *artist* — a collection has no artist to read out, so a page that opens with one just
+  // looks further down for something to show.
+  const firstItem = paged.find((r) => r.kind === 'artist')
   useEffect(() => {
-    if (!firstItem || selected || !randomized) return
+    if (!firstItem || firstItem.kind !== 'artist' || selected || !randomized) return
     if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 961px)').matches) return
-    setSelected({ name: firstItem.artistKey.artistName, imageUrl: firstItem.artistImageUrl })
+    setSelected({
+      name: firstItem.artist.artistKey.artistName,
+      imageUrl: firstItem.artist.artistImageUrl,
+    })
   }, [firstItem, selected, randomized])
 
   // On mobile the readout takes over the screen; lock the background list so it can't scroll
   // (or peek through the translucent top bar) behind it. CSS scopes the lock to the mobile breakpoint.
-  // The readout only exists in Artists mode, so the lock follows the mode as well as the selection —
-  // otherwise switching to Collections with an artist open would leave the list frozen behind nothing.
-  const readoutOpen = mode === 'artists' && selected != null
   useEffect(() => {
-    document.body.classList.toggle('detail-open', readoutOpen)
+    document.body.classList.toggle('detail-open', selected != null)
     return () => document.body.classList.remove('detail-open')
-  }, [readoutOpen])
+  }, [selected])
 
   return (
     <section>
       <div className="artists-header">
         <h1>Browse</h1>
-        {user && (
-          <div className="artist-detail-tabs browse-modes">
-            <button
-              className={mode === 'artists' ? 'artist-tab active' : 'artist-tab'}
-              onClick={() => setMode('artists')}
-            >
-              Artists
-            </button>
-            <button
-              className={mode === 'collections' ? 'artist-tab active' : 'artist-tab'}
-              title="Compilations and soundtracks — records no artist page can lead you to"
-              onClick={() => setMode('collections')}
-            >
-              Collections
-            </button>
-          </div>
-        )}
-        {(mode === 'collections' || (artists && artists.length > 0)) && (
+        {artists && artists.length > 0 && (
           <div className="artist-search">
             <input
               type="text"
               value={query}
-              // One box, two searches: in Artists mode it filters the library (and searches Deezer
-              // for acts below); in Collections mode it filters what's yours and searches Deezer for
-              // records.
-              placeholder={
-                mode === 'collections'
-                  ? 'Search compilations & soundtracks…'
-                  : `Search ${artists?.length ?? 0} artists…`
-              }
+              placeholder={`Search ${rows.length} artists & collections…`}
               onChange={(e) => onSearch(e.target.value)}
             />
           </div>
         )}
       </div>
 
-      {mode === 'collections' && <CollectionsView query={query} />}
+      {isPending && <p><em>Loading…</em></p>}
 
-      {mode === 'artists' && isPending && <p><em>Loading…</em></p>}
-
-      {mode === 'artists' && isError && (
+      {isError && (
         <p className="error">Failed to load artists: {(error as Error).message}</p>
       )}
 
-      {mode === 'artists' && artists && artists.length === 0 && (
+      {artists && artists.length === 0 && (
         <p><em>Catalog is empty — hit “Refresh from Plex” to populate it.</em></p>
       )}
 
-      {mode === 'artists' && artists && artists.length > 0 && (
+      {artists && artists.length > 0 && (
         <>
           <div className="disc-layout">
             <div className="disc-main">
               <div className="disc-list">
-                {paged.map((artist) => {
-                  const name = artist.artistKey.artistName
+                {paged.map((row) => {
+                  // A collection has no artist page to open, so its row is the whole affordance:
+                  // cover, credit, an "open in Plex" link and the thumbs. It reads as a library row
+                  // because it is one — the record is on the shelf.
+                  if (row.kind === 'collection') {
+                    return <CollectionRow key={`c:${row.item.artist.artistName}/${row.item.title}`} item={row.item} />
+                  }
+
+                  const name = row.artist.artistKey.artistName
                   return (
                     <ArtistListRow
                       key={name}
-                      artist={artist}
+                      artist={row.artist}
                       verdict={verdictByArtist.get(name)}
                       selected={selected?.name === name}
                       user={!!user}
@@ -1566,7 +1584,7 @@ export default function Browse() {
                   <p className="disc-sub-note"><em>No artists match “{query}”.</em></p>
                 )}
                 {filtered.length === 0 && user && query && (
-                  <p className="disc-sub-note"><em>No library artists match — see other results below.</em></p>
+                  <p className="disc-sub-note"><em>Nothing in your library matches — see other results below.</em></p>
                 )}
               </div>
 
