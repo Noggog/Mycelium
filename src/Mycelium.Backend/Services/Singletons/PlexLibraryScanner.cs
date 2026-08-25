@@ -1,4 +1,3 @@
-using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -14,9 +13,15 @@ namespace Mycelium.Backend.Services.Singletons;
 ///
 /// <para><b>Debounced via Rx.</b> Downloads drain one at a time, so a batch produces a burst of
 /// <see cref="RequestScan"/> calls. Each pushes onto a <see cref="Subject{T}"/>; <c>Throttle</c> (Rx's
-/// trailing debounce) emits one value only after <see cref="LibraryScannerConfig.Debounce"/> of
-/// silence, and <c>Concat</c> serializes the resulting scans so they never overlap. Net effect: one
-/// scan shortly after the batch goes quiet, however many albums it held.</para>
+/// trailing debounce) emits one value only after a window of silence, and <c>Concat</c> serializes the
+/// resulting scans so they never overlap. Net effect: one scan shortly after the batch goes quiet,
+/// however many albums it held.</para>
+///
+/// <para>The window is per-request rather than fixed, which is why this uses the duration-<i>selector</i>
+/// overload of <c>Throttle</c>: a fast-mode burst asks for <see cref="LibraryScannerConfig.FastDebounce"/>
+/// (seconds) instead of the normal <see cref="LibraryScannerConfig.Debounce"/> (minutes), so albums show up
+/// in Plex while the user is still watching them land. Each request restarts the window with its own
+/// duration, so the last request in a burst is the one that decides when the scan fires.</para>
 ///
 /// <para>Off unless <c>PLEX_RESCAN_AFTER_DOWNLOAD</c> is set — when disabled no pipeline is built and
 /// <see cref="RequestScan"/> is a no-op. Scan failures are logged, never thrown — a rescan is
@@ -28,7 +33,7 @@ public class PlexLibraryScanner : ILibraryScanner, IDisposable
     private readonly LibraryScannerConfig _config;
     private readonly ILogger<PlexLibraryScanner> _logger;
 
-    private readonly Subject<Unit> _requests = new();
+    private readonly Subject<bool> _requests = new();
     private readonly IDisposable? _subscription;
 
     public PlexLibraryScanner(PlexApi plexApi, LibraryScannerConfig config, ILogger<PlexLibraryScanner> logger)
@@ -47,18 +52,18 @@ public class PlexLibraryScanner : ILibraryScanner, IDisposable
         if (_config.Enabled)
         {
             _subscription = _requests
-                .Throttle(_config.Debounce, scheduler)
+                .Throttle(fast => Observable.Timer(fast ? _config.FastDebounce : _config.Debounce, scheduler))
                 .Select(_ => Observable.FromAsync(ScanSafely))
                 .Concat()
                 .Subscribe();
         }
     }
 
-    public Task RequestScan()
+    public Task RequestScan(bool fast = false)
     {
         if (_config.Enabled)
         {
-            _requests.OnNext(Unit.Default);
+            _requests.OnNext(fast);
         }
         return Task.CompletedTask;
     }

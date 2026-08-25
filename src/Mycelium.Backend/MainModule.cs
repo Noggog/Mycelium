@@ -115,7 +115,8 @@ public class MainModule : Autofac.Module
         builder.RegisterType<UpgradeSwap>().AsSelf().SingleInstance();
 
         // Post-download Plex rescan (PlexLibraryScanner auto-registers as ILibraryScanner via the
-        // assembly scan below). Off unless PLEX_RESCAN_AFTER_DOWNLOAD is set; debounce defaults to 5m.
+        // assembly scan below). Off unless PLEX_RESCAN_AFTER_DOWNLOAD is set; debounce defaults to 5m,
+        // or 30s while a fast-mode burst is running.
         builder.RegisterInstance(BuildLibraryScannerConfig());
 
         // Per-user download quality ceilings. The default is deliberately the *lower* tier so a new
@@ -210,6 +211,12 @@ public class MainModule : Autofac.Module
                       && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
         var debounceMinutes = double.TryParse(
             Environment.GetEnvironmentVariable("PLEX_RESCAN_DEBOUNCE_MINUTES"), out var m) ? m : 5;
-        return new LibraryScannerConfig(enabled, TimeSpan.FromMinutes(debounceMinutes));
+        var fastSeconds = double.TryParse(
+            Environment.GetEnvironmentVariable("PLEX_RESCAN_FAST_DEBOUNCE_SECONDS"), out var s) ? s : 30;
+        var debounce = TimeSpan.FromMinutes(debounceMinutes);
+        // Fast mode only ever shortens the window: a deployment configured to scan sooner than 30s
+        // shouldn't get *slower* the moment someone hits the fast button.
+        var fast = TimeSpan.FromSeconds(fastSeconds) < debounce ? TimeSpan.FromSeconds(fastSeconds) : debounce;
+        return new LibraryScannerConfig(enabled, debounce, fast);
     }
 }

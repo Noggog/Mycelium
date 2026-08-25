@@ -159,7 +159,10 @@ public class DownloadService : BackgroundService
                         await _purchases.Reconcile();
                         // Ask Plex to pick up the new album. Debounced, so a draining batch triggers a
                         // single rescan once it quiets — and a no-op unless PLEX_RESCAN_AFTER_DOWNLOAD is on.
-                        await _scanner.RequestScan();
+                        // A fast-mode burst asks for the short window: the point of fast mode is that the
+                        // panel keeps up with the downloads, which it can't if the library flip trails them
+                        // by the normal multi-minute settle.
+                        await _scanner.RequestScan(await FastMode());
 
                         // Publish the wait before taking it, so the monitor can show when the next
                         // album starts rather than just "Idle".

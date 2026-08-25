@@ -293,10 +293,13 @@ Worked one at a time. Full design in `~/.claude/plans/dreamy-forging-hearth.md`.
    targeted Plex library scan (`PlexApi.RefreshLibrary` → `GET /library/sections/{key}/refresh`, behind
    the new `ILibraryScanner` seam; `PlexLibraryScanner` is its only impl) so new albums are picked up
    promptly. `DownloadService` calls `RequestScan()` after each successful fetch; the scanner applies a
-   **trailing debounce via Rx** (`Subject` → `Throttle(Debounce)` → `Concat`, `PLEX_RESCAN_DEBOUNCE_MINUTES`,
+   **trailing debounce via Rx** (`Subject` → `Throttle(selector)` → `Concat`, `PLEX_RESCAN_DEBOUNCE_MINUTES`,
    default 5) so a draining batch folds into one scan once activity quiets, and is a **no-op unless
-   `PLEX_RESCAN_AFTER_DOWNLOAD`** is on (default off). The debounce clock is scheduler-injected so tests
-   drive it deterministically with a `TestScheduler` (no wall-clock waits).
+   `PLEX_RESCAN_AFTER_DOWNLOAD`** is on (default off). The window is chosen per request rather than fixed
+   (hence the duration-selector `Throttle`): a **fast-mode** burst passes `fast: true` and settles on
+   `PLEX_RESCAN_FAST_DEBOUNCE_SECONDS` (default 30, never longer than the normal window), so the panel's
+   in-library flip keeps up with a burst instead of trailing it by five minutes. The debounce clock is
+   scheduler-injected so tests drive it deterministically with a `TestScheduler` (no wall-clock waits).
    Library resolution moved from `PlexRepo` to a shared `PlexApi.ResolveLibrary()` so reads and the
    rescan target the same section. Best-effort: scan failures are logged, never thrown. (The `InLibrary`
    flip still depends on the deferred title-match correctness fix below.)
