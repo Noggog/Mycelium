@@ -145,10 +145,10 @@ public class MissingAlbumRefresher
     /// <see cref="RefreshOne"/>) so a later like carries the Deezer id to the downloader — including for
     /// singles and compilations, which are queueable from here even though the Discover feed passes over
     /// them (<see cref="AlbumRecordType.IsFeedEligible"/>). Every pressing Deezer lists gets its own row —
-    /// the deluxe edition and the remaster are two entries here, each owned or missing on its own — so
-    /// nothing in an artist's discography is hidden behind another edition of itself. Owned albums the
-    /// library has that Deezer doesn't list at all are appended (without art/id/type) so the picture is
-    /// complete.
+    /// the deluxe edition and the remaster are two entries here, even though they are one record for the
+    /// purpose of owning it — so nothing in an artist's discography is hidden behind another edition of
+    /// itself. Owned albums the library has that Deezer doesn't list at all are appended (without
+    /// art/id/type) so the picture is complete.
     ///
     /// This runs in front of a click, so it resolves credited acts only where the answer can still
     /// change an owned/missing verdict (<see cref="ArtistResolution.OwnershipOnly"/>) rather than for
@@ -173,11 +173,13 @@ public class MissingAlbumRefresher
             ? (IEnumerable<string>)ownedSet.Keys
             : Array.Empty<string>();
         // Fold in owned albums Deezer didn't surface at all (no match, or a title too far off to pair)
-        // so the library's view is the source of truth for what we have.
-        var seen = all.Select(a => NormalizeTitle(a.Title)).ToHashSet(StringComparer.Ordinal);
+        // so the library's view is the source of truth for what we have. Compared at record granularity:
+        // the library's "Watch the Throne" is the copy that answers Deezer's "Watch the Throne (Deluxe)"
+        // row, so appending it as well would show the same record twice, once owned and once not.
+        var seen = all.Select(a => RecordKey(a.Title)).ToHashSet(StringComparer.Ordinal);
         foreach (var title in ownedAlbumTitles)
         {
-            if (seen.Add(NormalizeTitle(title)))
+            if (seen.Add(RecordKey(title)))
             {
                 all.Add(new DiscographyAlbum(title, null, null, Owned: true));
             }
@@ -206,11 +208,16 @@ public class MissingAlbumRefresher
     /// Resolves the artist on Deezer, gathers their catalog (the discography listing, backfilled from
     /// album search — see <see cref="Backfill"/>), and walks it, splitting it into the full annotated
     /// list (every listed record type and every pressing, flagged owned/missing) and the missing
-    /// subset, each row tagged with its record type so the feed can decide for itself what to push.
-    /// Returns null when the artist has no Deezer match. Ownership compares on a normalized title so
-    /// punctuation/casing differences between Plex and Deezer (a typographic vs. straight apostrophe)
-    /// don't make an owned album look missing — but edition decoration is kept, so owning "Both Sides"
-    /// says nothing about "Both Sides (Deluxe Edition)"; the original Deezer title is what we surface.
+    /// subset, each row tagged with its record type — and pressings after the first tagged as such — so
+    /// the feed can decide for itself what to push. Returns null when the artist has no Deezer match.
+    ///
+    /// Two keys per release, and the gap between them is the point. The record key
+    /// (<see cref="AlbumTitleMatcher.NormalizeRecord"/>, edition decoration stripped) answers "do we have
+    /// this album?" — Plex renames what it files, so the library's "Both Sides" is what Deezer lists as
+    /// "Both Sides (Deluxe Edition)", and neither that nor a typography difference (a typographic vs.
+    /// straight apostrophe) may make an owned album read as missing. The listing key
+    /// (<see cref="AlbumTitleMatcher.Normalize"/>) keeps the decoration, so each pressing Deezer lists
+    /// stays a row of its own. The original Deezer title is what we surface either way.
     ///
     /// The walk is in two passes rather than one: the first settles what it can without leaving the
     /// process and collects the releases whose credited act is still in question, so the second can
@@ -249,8 +256,8 @@ public class MissingAlbumRefresher
 
         var catalog = await Backfill(deezerId.Value, lookup.Value!.Name ?? artist.ArtistName, listing);
 
-        // Normalized owned titles per artist name, mapped to the quality of the copy on disk, computed
-        // lazily and memoised for this pass — so the common (scanning artist) lookup and any
+        // Owned titles per artist name at record granularity, mapped to the quality of the copy on disk,
+        // computed lazily and memoised for this pass — so the common (scanning artist) lookup and any
         // album-artist lookup share the work. Presence answers "do we own it"; the value answers "is
         // what we have good enough", which is a separate question the diff asks second.
         var normalizedOwned = new Dictionary<string, Dictionary<string, AudioQuality?>>(
@@ -267,9 +274,10 @@ public class MissingAlbumRefresher
             {
                 foreach (var (title, quality) in albums)
                 {
-                    // Two library titles can normalize to the same key (a punctuation variant). Keep
-                    // the better copy: owning a record twice, once lossless, is not owning a lossy one.
-                    var key = NormalizeTitle(title);
+                    // Several library titles can normalize to one record key (a punctuation variant, or
+                    // the plain LP filed alongside a deluxe). Keep the better copy: owning a record
+                    // twice, once lossless, is not owning a lossy one.
+                    var key = RecordKey(title);
                     if (!byTitle.TryGetValue(key, out var existing) || quality > existing)
                     {
                         byTitle[key] = quality;
@@ -293,29 +301,31 @@ public class MissingAlbumRefresher
         // owned. Both are whole-library sets, so they're built only if something actually asks.
         var ownedAnywhere = new Lazy<HashSet<string>>(() => ownedAlbums.Values
             .SelectMany(albums => albums.Keys)
-            .Select(NormalizeTitle)
+            .Select(RecordKey)
             .ToHashSet(StringComparer.Ordinal));
         var mergedTitles = new Lazy<HashSet<string>>(() => overrides
-            .Select(o => NormalizeTitle(o.DeezerTitle))
+            .Select(o => RecordKey(o.DeezerTitle))
             .ToHashSet(StringComparer.Ordinal));
 
         // Whether learning a release's credited act could still flip it from missing to owned. When
         // nobody in the library owns a record by that title and no merge names it, the lookup can only
         // confirm what we already have — and that is nearly every row of a discography, which is why
         // paying a rate-limited Deezer call for each of them put fifteen seconds in front of the
-        // drill-down.
-        bool CouldChangeOwnership(string key) =>
-            ownedAnywhere.Value.Contains(key) || mergedTitles.Value.Contains(key);
+        // drill-down. Asked of the record key, since that is what the ownership it guards is asked of.
+        bool CouldChangeOwnership(string record) =>
+            ownedAnywhere.Value.Contains(record) || mergedTitles.Value.Contains(record);
 
         // First pass: one row per release, and the cheap half of the ownership question — owned outright
         // by the artist we're scanning — settled without leaving the process.
         //
-        // One key per release, and it keeps the edition decoration. Each pressing Deezer lists is its
-        // own row with its own id: the deluxe edition, the remaster and the plain LP are three
-        // releases here, and a user acting on one of those rows is acting on that release alone.
-        // Only a title Deezer repeats verbatim is dropped as the duplicate it is.
+        // The listing key keeps the edition decoration, so each pressing Deezer lists stays a row of its
+        // own and only a title Deezer repeats verbatim is dropped as the duplicate it is. The record key
+        // strips it, and that is what ownership is asked at: the copy Plex holds for "Both Sides (Deluxe
+        // Edition)" is filed as "Both Sides". Pressings after the first are flagged so the feed can pass
+        // over them — browsable and queueable in the discography, but one record asks its question once.
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var rows = new List<(DeezerAlbum Album, string Key, bool Owned)>();
+        var records = new HashSet<string>(StringComparer.Ordinal);
+        var rows = new List<(DeezerAlbum Album, string Record, bool Owned, bool AlternatePressing)>();
         foreach (var album in catalog)
         {
             var key = NormalizeTitle(album.title);
@@ -327,14 +337,18 @@ public class MissingAlbumRefresher
                 continue;
             }
 
-            var owned = scannedOwned.ContainsKey(key)
+            var record = RecordKey(album.title);
+            var alternatePressing = !records.Add(record);
+            var owned = scannedOwned.ContainsKey(record)
                         || overrideKeys.Contains(AlbumOverrideKey.For(artist.ArtistName, album.title));
-            rows.Add((album, key, owned));
+            rows.Add((album, record, owned, alternatePressing));
         }
 
-        // The credited act for everything still unaccounted for, in one batch.
+        // The credited act for everything still unaccounted for, in one batch. Asked per release, since
+        // the answer is a property of the release; the ownership question it feeds is per record, which
+        // is why the record key rides along.
         var albumArtists = await AlbumArtists(
-            rows.Where(r => !r.Owned).Select(r => (r.Album.id, r.Key)).ToList(),
+            rows.Where(r => !r.Owned).Select(r => (r.Album.id, r.Record)).ToList(),
             resolution == ArtistResolution.Full ? null : CouldChangeOwnership);
 
         // The best tier anyone using this deployment could ask for. The sync runs once for the whole
@@ -345,14 +359,14 @@ public class MissingAlbumRefresher
 
         var all = new List<DiscographyAlbum>(rows.Count);
         var missing = new List<MissingAlbum>();
-        foreach (var (album, key, ownedByScanned) in rows)
+        foreach (var (album, record, ownedByScanned, alternatePressing) in rows)
         {
             var isOwned = ownedByScanned;
             // The tier of the copy on disk, when we have one. Null covers both "we don't own it" and
             // "we own it but haven't determined the quality" — the two are told apart by isOwned, and
             // the second deliberately produces no upgrade row (an undetermined copy is not evidence
             // that a better one is needed).
-            AudioQuality? ownedQuality = scannedOwned.TryGetValue(key, out var scannedTier)
+            AudioQuality? ownedQuality = scannedOwned.TryGetValue(record, out var scannedTier)
                 ? scannedTier
                 : null;
             var albumArtist = artist;
@@ -367,9 +381,9 @@ public class MissingAlbumRefresher
             {
                 albumArtist = new ArtistKey(resolved);
                 var byAlbumArtist = OwnedTitlesFor(resolved);
-                isOwned = byAlbumArtist.ContainsKey(key)
+                isOwned = byAlbumArtist.ContainsKey(record)
                           || overrideKeys.Contains(AlbumOverrideKey.For(resolved, album.title));
-                if (byAlbumArtist.TryGetValue(key, out var creditedTier))
+                if (byAlbumArtist.TryGetValue(record, out var creditedTier))
                 {
                     ownedQuality = creditedTier;
                 }
@@ -393,7 +407,8 @@ public class MissingAlbumRefresher
                     artist, new AlbumKey(album.title), album.BestCoverUrl, album.id, albumArtist,
                     album.Year, album.record_type,
                     // Only set for an upgrade; a gap has no copy to describe.
-                    upgradeable ? ownedQuality : null));
+                    upgradeable ? ownedQuality : null,
+                    alternatePressing));
             }
         }
 
@@ -501,5 +516,10 @@ public class MissingAlbumRefresher
         return known;
     }
 
+    /// <summary>The listing key: one Deezer row, edition decoration and all. Deduping the catalog walk.</summary>
     private static string NormalizeTitle(string? title) => AlbumTitleMatcher.Normalize(title);
+
+    /// <summary>The record key: what ownership is asked at, since Plex files a pressing under its own
+    /// name for the record (see <see cref="AlbumTitleMatcher.NormalizeRecord"/>).</summary>
+    private static string RecordKey(string? title) => AlbumTitleMatcher.NormalizeRecord(title);
 }

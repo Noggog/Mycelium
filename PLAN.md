@@ -74,6 +74,32 @@ External services are *refreshable inputs*, not runtime dependencies.
 - **Purchase list is its own store.** It tracks what to grab with a status field.
   The actual downloader integration is a future pluggable sync job behind an
   interface — target (e.g. Lidarr) decided later.
+- **Album title matching has two granularities, and ownership uses the looser one**
+  (`AlbumTitleMatcher`, settled 2026-08-24 after trying it the other way for a day):
+  - `Normalize` — the **listing** key. Typography folded, a bare trailing `EP`/`LP`
+    dropped, edition decoration *kept*. `Both Sides (Deluxe Edition)` and
+    `Both Sides (2015 Remaster)` are two keys. Used to dedup a Deezer catalog walk so
+    each pressing keeps a discography row of its own with its own Deezer id.
+  - `NormalizeRecord` — the **record** key. Also strips `(Deluxe Edition)`,
+    `[10th Anniversary]`, `- Remastered`. **Everything that asks "do we have this?"
+    uses this one**: the missing-album diff, the purchase reconcile, the Plex deep
+    link, the upgrade swap, and the merge/block key (`AlbumOverrideKey`).
+
+  Ownership *must* be record-level because **Plex renames what it imports** — it
+  matches an album against its own metadata and drops the edition decoration (or
+  folds the extra tracks into the album it already had). We buy
+  `Watch The Throne (Deluxe)`; it lands on disk as `Watch the Throne`. Asked at
+  listing granularity, an album we own reads as "not available" for ever and the
+  purchase row can never see its own download arrive.
+
+  The two granularities must not be mixed within one question: the diff and the
+  reconcile share a key, or a queued row never closes out.
+
+  Pressings are still told apart where it matters — every one gets its own
+  discography row and Deezer id — but only the first is pushed at anyone
+  (`MissingAlbum.AlternatePressing`), so one record doesn't ask the same question
+  twice. Blocks are record-scoped: saying no to an album is saying no to the album,
+  not to one spelling of it.
 
 ## Sections
 

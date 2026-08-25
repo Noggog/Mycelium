@@ -362,25 +362,27 @@ public class PurchaseService
                 continue;
             }
 
-            // Post-download landing. Plex names an album from its own metadata match, and that match
-            // routinely drops the edition decoration the release was fetched under — "Light Upon the
-            // Lake (10th Anniversary Edition)" arrives as "Light Upon the Lake", or its tracks are
-            // folded straight into the album Plex already had. Matched at release granularity like
-            // everything else, the row can never see its own download arrive: it sits in Sent for ever
-            // and the diff keeps calling the release a gap.
-            //
-            // So this asks the looser question — did the *record* land (see
-            // AlbumTitleMatcher.NormalizeRecord) — and only of a row we actually sent. By then the
-            // files are on disk and nothing is being offered or declined, which is what makes the
-            // looser reading safe here and wrong everywhere else: a pending row still has to treat the
-            // deluxe edition as its own release, or owning the plain one would quietly cancel a
-            // download nobody dismissed. Recorded as a match override rather than just flipping the
-            // status, so the missing-album diff reaches the same verdict instead of re-offering the
+            // Post-download landing under another act. Ownership already forgives the renaming Plex
+            // does to a title — "Light Upon the Lake (10th Anniversary Edition)" arriving as "Light
+            // Upon the Lake" is the same record either way (AlbumTitleMatcher.NormalizeRecord). What it
+            // doesn't forgive is the album landing under an act nobody asked about: a collaboration
+            // Deezer credits one way and Plex files another. That row would sit in Sent for ever while
+            // the diff kept calling the release a gap, so this looks for the record under the listing
+            // artist too, and records what it finds as a match override rather than just flipping the
+            // status — so the missing-album diff reaches the same verdict instead of re-offering the
             // release on the next sweep.
+            //
+            // Gated on the record being genuinely unowned rather than on nowOwned, which is also false
+            // for an owned-but-too-lossy copy. An upgrade row must not be closed out by "the record is
+            // right there": the whole point of it is that the copy on disk isn't good enough.
             if (!nowOwned
                 && row.Status == PurchaseStatus.Sent
                 && row.Kind == FeedKind.MissingAlbum
                 && row.Album is { } sentAlbum
+                && !AlbumIsOwned(
+                       ownedAlbums, overrideKeys,
+                       MatchArtistFor(row.Artist.ArtistName, sentAlbum, row.AlbumArtist),
+                       sentAlbum)
                 && LandedTitleFor(
                        libraryAlbums,
                        MatchArtistFor(row.Artist.ArtistName, sentAlbum, row.AlbumArtist),
@@ -423,8 +425,8 @@ public class PurchaseService
     /// Canonicalises the owned map's titles for matching, keeping each album's quality alongside.
     /// Typography, whitespace and zero-width differences between Plex and Deezer would otherwise keep
     /// an album we already have stuck in the queue; this is the same canonical match the missing-album
-    /// diff uses, so the two agree. Where two library titles collapse to one key the better copy wins:
-    /// owning a record twice, once losslessly, is not owning a lossy one.
+    /// diff uses, so the two agree. Where several library titles collapse to one record key the better
+    /// copy wins: owning a record twice, once losslessly, is not owning a lossy one.
     /// </summary>
     private static Dictionary<string, Dictionary<string, AudioQuality?>> NormalizeOwned(
         Dictionary<string, Dictionary<string, AudioQuality?>> owned)
@@ -435,7 +437,7 @@ public class PurchaseService
             var byTitle = new Dictionary<string, AudioQuality?>(StringComparer.Ordinal);
             foreach (var (title, quality) in albums)
             {
-                var key = AlbumTitleMatcher.Normalize(title);
+                var key = AlbumTitleMatcher.NormalizeRecord(title);
                 if (!byTitle.TryGetValue(key, out var existing) || quality > existing)
                 {
                     byTitle[key] = quality;
@@ -452,7 +454,7 @@ public class PurchaseService
         string artist,
         string album) =>
         (ownedAlbums.TryGetValue(artist, out var set)
-         && set.ContainsKey(AlbumTitleMatcher.Normalize(album)))
+         && set.ContainsKey(AlbumTitleMatcher.NormalizeRecord(album)))
         || overrideKeys.Contains(AlbumOverrideKey.For(artist, album));
 
     /// <summary>
@@ -461,9 +463,8 @@ public class PurchaseService
     /// the album under first, then the listing artist — the two differ for a collaboration, and either
     /// is a real answer.
     ///
-    /// Deliberately record-level (<see cref="AlbumTitleMatcher.NormalizeRecord"/>) rather than the
-    /// release-level match ownership turns on; see the caller for why that is only safe once the
-    /// download has already happened.
+    /// Record-level (<see cref="AlbumTitleMatcher.NormalizeRecord"/>), the same granularity ownership
+    /// turns on — what this adds over the ownership check is the second act it tries.
     /// </summary>
     private static string? LandedTitleFor(
         Dictionary<string, Dictionary<string, AudioQuality?>> libraryAlbums,
@@ -505,7 +506,7 @@ public class PurchaseService
     private static AudioQuality? OwnedQualityOf(
         Dictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums, string artist, string album) =>
         ownedAlbums.TryGetValue(artist, out var set)
-        && set.TryGetValue(AlbumTitleMatcher.Normalize(album), out var quality)
+        && set.TryGetValue(AlbumTitleMatcher.NormalizeRecord(album), out var quality)
             ? quality
             : null;
 
@@ -569,9 +570,9 @@ public class PurchaseService
         }
 
         var acts = await MergeArtistsFor(artist, album);
-        var title = AlbumTitleMatcher.Normalize(album);
+        var title = AlbumTitleMatcher.NormalizeRecord(album);
         return all
-            .Select(o => (Option: o, SameTitle: AlbumTitleMatcher.Normalize(o.Album) == title))
+            .Select(o => (Option: o, SameTitle: AlbumTitleMatcher.NormalizeRecord(o.Album) == title))
             .Where(x => x.SameTitle || acts.Contains(x.Option.Artist, StringComparer.OrdinalIgnoreCase))
             .OrderBy(x => x.SameTitle ? 0 : 1)
             .ThenBy(x => x.Option.Artist, StringComparer.CurrentCultureIgnoreCase)

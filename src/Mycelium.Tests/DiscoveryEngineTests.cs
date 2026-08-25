@@ -578,11 +578,11 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
-    public async Task A_block_on_one_pressing_leaves_the_others_offered()
+    public async Task A_block_on_one_pressing_covers_the_record()
     {
-        // The bug that made pressings worth separating in the first place: blocking "A Color Map of the
-        // Sun (Deluxe Version)" darkened plain "A Color Map of the Sun" too, because the block key had
-        // the edition decoration stripped out of it. The block means the row it was placed on.
+        // Saying no to an album is saying no to the album: blocking "A Color Map of the Sun (Deluxe
+        // Version)" takes the record off the feed, decoration or not. A genuinely different reading of
+        // it — "(Remixes)" — is a different record and stays on offer.
         _queue.GetLikedArtistNames(User).Returns(new[] { "Pretty Lights" });
         _missing.GetAll().Returns(new[]
         {
@@ -602,15 +602,14 @@ public class DiscoveryEngineTests
 
         var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
 
-        page.Items.Select(i => i.Album).Should().BeEquivalentTo(
-            "A Color Map of the Sun", "A Color Map of the Sun (Remixes)");
+        page.Items.Select(i => i.Album).Should().BeEquivalentTo("A Color Map of the Sun (Remixes)");
     }
 
     [Fact]
-    public async Task ArtistDiscography_marks_only_the_blocked_pressing()
+    public async Task ArtistDiscography_marks_every_pressing_of_a_blocked_record()
     {
-        // Same rule on the drill-down, where blocks are reviewed and lifted: one row goes dark, not
-        // every edition sharing its base title.
+        // Same rule on the drill-down, where blocks are reviewed and lifted: the record is blocked, so
+        // every edition of it reads as blocked and one click there lifts the lot.
         _deezer.SearchArtists("Pretty Lights", Arg.Any<int>())
             .Returns(new[] { new DeezerArtist { id = 55, name = "Pretty Lights" } });
         _deezer.GetAlbums(55).Returns(new[]
@@ -630,7 +629,8 @@ public class DiscoveryEngineTests
         var listed = await _sut.ArtistDiscography(User, "Pretty Lights");
 
         listed.Where(a => a.Blocked).Select(a => a.Album)
-            .Should().Equal("A Color Map of the Sun (Deluxe Version)");
+            .Should().BeEquivalentTo(
+                "A Color Map of the Sun", "A Color Map of the Sun (Deluxe Version)");
     }
 
     [Fact]

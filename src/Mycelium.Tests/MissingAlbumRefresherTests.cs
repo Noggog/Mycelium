@@ -236,8 +236,9 @@ public class MissingAlbumRefresherTests
     [Fact]
     public async Task A_pressing_only_search_knows_about_is_listed_but_not_pushed()
     {
-        // The two features meeting: the remaster is a row of its own (it's a separate pressing), and
-        // search is what found it.
+        // The two features meeting: the remaster is a row of its own (it's a separate pressing), search
+        // is what found it, and it is the alternate pressing (the listing's came first), so the feed
+        // still asks once.
         _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Both Sides (Deluxe Edition)", id: 1) });
         _deezer.SearchArtistAlbums(Arg.Any<string>())
             .Returns(new[] { SearchHit("Both Sides (2015 Remaster)", id: 2) });
@@ -246,8 +247,8 @@ public class MissingAlbumRefresherTests
 
         listed.Select(a => a.Title)
             .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
-        CapturedMissing().Select(m => m.Album.AlbumName)
-            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
+        CapturedMissing().Select(m => (m.Album.AlbumName, m.AlternatePressing)).Should().Equal(
+            ("Both Sides (Deluxe Edition)", false), ("Both Sides (2015 Remaster)", true));
     }
 
     [Fact]
@@ -286,9 +287,9 @@ public class MissingAlbumRefresherTests
         // Each with its own Deezer id, because the row is what hands the downloader an id when the
         // pressing is queued from the drill-down.
         listed.Select(a => a.DeezerAlbumId).Should().Equal(12194438L, 12308830L);
-        // Both persisted and both offered — they are two releases, each declined on its own.
-        CapturedMissing().Select(m => m.Album.AlbumName)
-            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
+        // Both persisted, but only the first is pushed at anyone: the feed asks once per record.
+        CapturedMissing().Select(m => (m.Album.AlbumName, m.AlternatePressing)).Should().Equal(
+            ("Both Sides (Deluxe Edition)", false), ("Both Sides (2015 Remaster)", true));
     }
 
     [Fact]
@@ -308,11 +309,10 @@ public class MissingAlbumRefresherTests
     }
 
     [Fact]
-    public async Task Owning_one_pressing_leaves_the_others_missing()
+    public async Task Every_pressing_of_an_owned_record_is_owned()
     {
-        // Ownership is per release, not per record: the library has the plain "Both Sides", so that row
-        // is owned and Deezer's two other pressings stay gaps. They're separate releases with separate
-        // ids — offering them is the point, and an unwanted one is dismissed or blocked on its own row.
+        // Ownership is per record, not per pressing: the library holds one copy of "Both Sides", and
+        // that copy is what answers every pressing Deezer lists of it. None of them is a gap.
         _deezer.GetAlbums(DeezerId).Returns(new[]
         {
             Album("Both Sides", id: 1),
@@ -323,9 +323,23 @@ public class MissingAlbumRefresherTests
         var listed = await _sut.Discography(
             new ArtistKey(Artist), Owned((Artist, new[] { "Both Sides" })));
 
-        listed.Where(a => a.Owned).Select(a => a.Title).Should().Equal("Both Sides");
-        CapturedMissing().Select(m => m.Album.AlbumName)
-            .Should().Equal("Both Sides (Deluxe Edition)", "Both Sides (2015 Remaster)");
+        listed.Should().OnlyContain(a => a.Owned);
+        CapturedMissing().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_edition_plex_renamed_on_import_still_reads_as_owned()
+    {
+        // The case this exists for: we bought the deluxe, Plex matched it to its own metadata and filed
+        // it as the plain title, and Deezer only ever lists the deluxe. Asked at listing granularity
+        // the drill-down calls an album we own "not available", for ever.
+        _deezer.GetAlbums(DeezerId).Returns(new[] { Album("Watch The Throne (Deluxe)", id: 1) });
+
+        var listed = await _sut.Discography(
+            new ArtistKey(Artist), Owned((Artist, new[] { "Watch the Throne" })));
+
+        listed.Should().ContainSingle().Which.Owned.Should().BeTrue();
+        CapturedMissing().Should().BeEmpty();
     }
 
     [Fact]

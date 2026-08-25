@@ -317,6 +317,9 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
             // Singles and compilations are synced (so they're queueable from an artist's discography and
             // carry a Deezer id) but never pushed here — the feed would fill with radio edits.
             .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
+            // Same deal for the second pressing of a record already listed: browsable in the discography,
+            // never a card of its own, so the deluxe edition and the remaster aren't two asks.
+            .Where(m => !m.AlternatePressing)
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Where(m => !IsBlocked(blocked, m))
             // Upgrades carry their own verdicts, kept apart from album ratings: declining to replace a
@@ -374,10 +377,10 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
     /// discography, persists it into the global missing-album store (so a liked album carries its
     /// <see cref="MissingAlbum.DeezerAlbumId"/> through reconcile to the downloader — without that row
     /// the album would be un-downloadable), and returns the not-yet-decided, feed-eligible ones as
-    /// missing-album feed items to surface inline under the just-rated card. Singles and compilations
-    /// are persisted but withheld from the cards; they stay reachable in the artist's discography.
-    /// Whatever Plex already owns for the artist is diffed out, so a partly-owned artist only surfaces
-    /// its gaps — pressing by pressing, so a deluxe edition of an owned LP still counts as a gap.
+    /// missing-album feed items to surface inline under the just-rated card. Singles, compilations and
+    /// second pressings of a record already listed are persisted but withheld from the cards; they stay
+    /// reachable in the artist's discography. Whatever Plex already owns for the artist is diffed out,
+    /// so a partly-owned artist only surfaces its gaps.
     /// </summary>
     public async Task<IReadOnlyList<FeedItem>> ArtistAlbums(string userId, string artistName)
     {
@@ -386,9 +389,10 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
         var decided = await _albumRatings.GetDecidedKeys(userId);
         var blocked = await BlockedKeys();
         return rows
-            // Same feed rule as the main missing-album section: LPs and EPs only, so a newly-liked
-            // artist offers their records rather than a wall of singles.
+            // Same feed rules as the main missing-album section: LPs and EPs only, so a newly-liked
+            // artist offers their records rather than a wall of singles, and one pressing per record.
             .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
+            .Where(m => !m.AlternatePressing)
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Where(m => !IsBlocked(blocked, m))
             .Select(m => new FeedItem(
@@ -399,11 +403,12 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
 
     /// <summary>
     /// An owned artist's full Deezer discography for the Artists-page drill-down: every release Deezer
-    /// lists — LPs, EPs, singles and compilations, each badged with its type, and every pressing as its
-    /// own row — flagged with whether the library owns it, missing ones overlaid with the user's verdict
-    /// (queued/dismissed/snoozed) so the listing matches the to-buy list. Singles and compilations
-    /// appear here but never reach the feed,
-    /// so a row can be browsable and thumbable without the refresher having pushed it at anyone. One
+    /// lists — LPs, EPs, singles and compilations, each badged with its type, and every pressing of a
+    /// record rather than one row standing in for all of them — flagged with whether the library owns
+    /// it, missing ones overlaid with the user's verdict (queued/dismissed/snoozed) so the listing
+    /// matches the to-buy list. Singles, compilations and second pressings appear here but never reach
+    /// the feed, so a row can be browsable and thumbable without the refresher having pushed it at
+    /// anyone. One
     /// Deezer call per expand; owned albums sort first. Pulling the discography also refreshes the
     /// persisted missing-album rows for the artist.
     ///
@@ -610,10 +615,10 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
     /// already queued this album keeps it (and the row keeps the Deezer id the downloader needs). A
     /// block stops the album being <em>offered</em>; it doesn't retract choices already made.
     ///
-    /// Scoped to the release, not the record: blocking "Both Sides (Deluxe Edition)" leaves plain
-    /// "Both Sides" on offer. They are two rows in the discography with two Deezer ids, and the block
-    /// means the row it was placed on — the title is keyed with its edition decoration intact (see
-    /// <see cref="AlbumTitleMatcher.Normalize"/>).
+    /// Scoped to the record, not the pressing (see <see cref="AlbumOverrideKey"/>): blocking "Both
+    /// Sides (Deluxe Edition)" also takes plain "Both Sides" off the feed. Saying no to an album is
+    /// saying no to the album — being re-offered the same record next week under a different edition
+    /// name is the answer nobody wants.
     /// </summary>
     public async Task BlockAlbum(string userId, string artistName, string albumName)
     {

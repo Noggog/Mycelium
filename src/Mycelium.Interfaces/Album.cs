@@ -46,10 +46,14 @@ public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality 
 /// Null for rows written before record-type tracking — those are pre-existing LPs and EPs, so the feed
 /// treats an absent type as eligible.
 ///
-/// Each pressing Deezer lists is its own row here — the deluxe edition, the remaster and the plain LP
-/// are three <see cref="MissingAlbum"/>s with three <see cref="DeezerAlbumId"/>s, and all three are
-/// offered. Owning one pressing does not mark the others owned: they are separate releases, declined
-/// individually with a dismiss or a block.
+/// <see cref="AlternatePressing"/> marks a second pressing of a record already listed for this artist —
+/// the deluxe edition alongside the remaster, say. Deezer lists each as its own release, and so does the
+/// discography drill-down, which is why each gets a row of its own: same reason as the singles above, a
+/// pressing a user queues from that listing needs its own <see cref="DeezerAlbumId"/> to be downloadable.
+/// The feed offers only the first pressing of each record, so a single album can't ask the same question
+/// twice. Ownership, by contrast, is settled once per record (AlbumTitleMatcher.NormalizeRecord): every
+/// pressing of an album the library holds is owned together, because the library holds one copy under
+/// whatever title Plex chose for it.
 /// </summary>
 public record MissingAlbum(
     ArtistKey Artist,
@@ -59,7 +63,8 @@ public record MissingAlbum(
     ArtistKey? AlbumArtist = null,
     int? Year = null,
     string? RecordType = null,
-    AudioQuality? OwnedQuality = null)
+    AudioQuality? OwnedQuality = null,
+    bool AlternatePressing = false)
 {
     /// <summary>
     /// Whether this row is an <em>upgrade</em> — the library has the album, just not well enough —

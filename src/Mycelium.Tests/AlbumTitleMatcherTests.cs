@@ -251,12 +251,13 @@ public class AlbumTitleMatcherTests
             .Should().Be(AlbumOverrideKey.For("cfcf", "Radiance and Submission"));
     }
 
-    // A merge override is recorded against one Deezer title, and that title is a pressing. Asserting
-    // "we already have the deluxe" says nothing about the plain edition, which is a different release.
+    // A merge override says "the library already has this record". The row it was recorded from is
+    // whichever pressing was on screen, so it has to answer for the plain edition too — otherwise the
+    // record comes back as a gap the next morning under a different edition name.
     [Fact]
-    public void Override_keys_tell_an_edition_from_the_plain_release()
+    public void An_override_on_an_edition_covers_the_record()
     {
         AlbumOverrideKey.For("Ben Howard", "Every Kingdom (Deluxe Edition)")
-            .Should().NotBe(AlbumOverrideKey.For("ben howard", "Every Kingdom"));
+            .Should().Be(AlbumOverrideKey.For("ben howard", "Every Kingdom"));
     }
 }

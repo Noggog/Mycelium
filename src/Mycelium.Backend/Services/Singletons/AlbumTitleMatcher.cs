@@ -11,19 +11,19 @@ namespace Mycelium.Backend.Services.Singletons;
 public static partial class AlbumTitleMatcher
 {
     /// <summary>
-    /// Canonical form for matching album titles across sources: typography folded (see
-    /// <see cref="FoldTypography"/>), dotted initialisms collapsed ("E.P." → "ep"), and a bare trailing
-    /// format designator dropped (see <see cref="StripFormatDesignator"/>) — so "The Burgh Island E.P.",
-    /// "The Burgh Island EP" and "The Burgh Island" all land on the same key.
+    /// Canonical form for one <em>listing</em>: typography folded (see <see cref="FoldTypography"/>),
+    /// dotted initialisms collapsed ("E.P." → "ep"), and a bare trailing format designator dropped
+    /// (see <see cref="StripFormatDesignator"/>) — so "The Burgh Island E.P.", "The Burgh Island EP"
+    /// and "The Burgh Island" all land on the same key.
     ///
-    /// Edition decoration is deliberately <em>kept</em>: "Every Kingdom (Deluxe Edition)" and "Every
-    /// Kingdom" are two keys, not one. Deezer lists them as two releases with two ids, the discography
-    /// shows them as two rows, and a user who queues or blocks one of those rows means that row — so
-    /// nothing downstream may quietly treat them as the same thing. Owning the plain edition therefore
-    /// leaves the deluxe reading as missing, and that is the intended answer rather than a miss: it is
-    /// a release we don't have, offered like any other and declined with a dismiss or a block if it
-    /// isn't wanted. What this folds is one release written two ways; what it must never fold is two
-    /// releases.
+    /// Edition decoration is kept here: "Both Sides (Deluxe Edition)" and "Both Sides (2015 Remaster)"
+    /// are two keys, because they are two rows in an artist's discography with two Deezer ids, and a
+    /// row a user can queue or block has to stay addressable on its own. Use this to ask "is this the
+    /// same listing?" — deduping a catalog walk, keying a block or a merge.
+    ///
+    /// Use <see cref="NormalizeRecord"/> to ask "is this the same record?", which is what ownership
+    /// turns on: Plex renames what it files, so the deluxe edition we downloaded sits in the library
+    /// under the plain title, and asking at listing granularity would call an album we own missing.
     /// </summary>
     public static string Normalize(string? title)
     {
@@ -41,19 +41,21 @@ public static partial class AlbumTitleMatcher
     }
 
     /// <summary>
-    /// Canonical form for the <em>record</em> rather than the release: everything <see cref="Normalize"/>
+    /// Canonical form for the <em>record</em> rather than the listing: everything <see cref="Normalize"/>
     /// folds, plus the trailing "which pressing is this" decoration ("(Deluxe Edition)", "[10th
     /// Anniversary Deluxe]", "- Remastered"), so "Light Upon the Lake (10th Anniversary Edition)" and
     /// "Light Upon the Lake" land on one key.
     ///
-    /// This is deliberately <em>not</em> what ownership or any user-facing verdict turns on — those use
-    /// <see cref="Normalize"/>, because Deezer lists each pressing as its own release with its own id and
-    /// a queue or a block means the row it was placed on. Use this only where the question has already
-    /// stopped being "which release is this" and become "did the release we fetched land": Plex names an
-    /// album from its own metadata match and routinely drops the edition decoration (or folds the extra
-    /// tracks into the album it already had), so the copy that arrives can't be recognised at release
-    /// granularity. Asking at record granularity there is safe precisely because nothing is being offered
-    /// or declined — the download already happened.
+    /// This is what <em>ownership</em> is asked at, everywhere it is asked — the missing-album diff, the
+    /// purchase reconcile, the Plex deep link, the upgrade swap. Plex names an album from its own
+    /// metadata match and routinely drops the edition decoration (or folds the extra tracks into the
+    /// album it already had), so "Watch the Throne (Deluxe)" is on disk as "Watch the Throne". Asked at
+    /// listing granularity, a record we own reads as a gap, the diff re-offers it for ever, and a
+    /// purchase row can never see its own download arrive.
+    ///
+    /// Folding pressings here does not hide any of them: the discography still lists every release
+    /// separately (that dedup is <see cref="Normalize"/>'s job) and each keeps its own Deezer id. What
+    /// record granularity decides is only whether the library already answers to that record.
     /// </summary>
     public static string NormalizeRecord(string? title) => StripReleaseQualifiers(Normalize(title));
 

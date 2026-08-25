@@ -174,9 +174,11 @@ public class UpgradeSwap
             {
                 continue;
             }
-            // The stored titles are Plex's; the row's is Deezer's. Match the way everything else does.
-            var wanted = AlbumTitleMatcher.Normalize(item.Album);
-            var match = byTitle.FirstOrDefault(kv => AlbumTitleMatcher.Normalize(kv.Key) == wanted);
+            // The stored titles are Plex's; the row's is Deezer's. Match the way ownership does — at
+            // record granularity, since the copy we're replacing is filed under whatever name Plex gave
+            // it, decoration and all dropped.
+            var wanted = AlbumTitleMatcher.NormalizeRecord(item.Album);
+            var match = byTitle.FirstOrDefault(kv => AlbumTitleMatcher.NormalizeRecord(kv.Key) == wanted);
             if (match.Value != 0)
             {
                 return await _library.QueryAlbumFiles(match.Value);

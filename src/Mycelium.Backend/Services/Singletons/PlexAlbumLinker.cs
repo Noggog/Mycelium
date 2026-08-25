@@ -98,23 +98,26 @@ public class PlexAlbumLinker
         return albums
             .Select(a => a.Owned
                 && byCanonicalTitle.TryGetValue(a.Artist.ArtistName, out var titles)
-                && titles.TryGetValue(AlbumTitleMatcher.Normalize(a.Album), out var key)
+                && titles.TryGetValue(AlbumTitleMatcher.NormalizeRecord(a.Album), out var key)
                     ? a with { PlexUrl = PlexDeepLink.ToItem(machineId, key) }
                     : a)
             .ToArray();
     }
 
     /// <summary>
-    /// Album titles re-keyed by their canonical form. Two titles can canonicalize to one key ("The
-    /// Burgh Island EP" and "The Burgh Island"); either copy is a fine thing to open, so the first
-    /// wins rather than the lookup throwing.
+    /// Album titles re-keyed by their canonical record form. Several titles can canonicalize to one key
+    /// ("The Burgh Island EP" and "The Burgh Island", or a deluxe filed beside the plain LP); either
+    /// copy is a fine thing to open, so the first wins rather than the lookup throwing. Record rather
+    /// than listing granularity for the same reason ownership is: the row says "(Deluxe)" and Plex's
+    /// copy of it doesn't, and an In Library badge that links nowhere is worse than one that opens the
+    /// copy we have.
     /// </summary>
     private static Dictionary<string, int> Canonicalize(Dictionary<string, int> keysByTitle)
     {
         var canonical = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var (title, key) in keysByTitle)
         {
-            canonical.TryAdd(AlbumTitleMatcher.Normalize(title), key);
+            canonical.TryAdd(AlbumTitleMatcher.NormalizeRecord(title), key);
         }
 
         return canonical;

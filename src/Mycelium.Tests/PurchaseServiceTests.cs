@@ -187,8 +187,8 @@ public class PurchaseServiceTests
     public async Task A_sent_edition_closes_out_when_plex_files_it_under_the_plain_title()
     {
         // Plex names an album from its own metadata match, which drops the edition decoration the
-        // release was fetched under. Matched at release granularity — the way every offer decision is —
-        // the row can never see its own download arrive and sits in Sent for ever.
+        // release was fetched under. Ownership is asked at record granularity precisely so the row can
+        // see its own download arrive instead of sitting in Sent for ever.
         const string deezerTitle = "Light Upon the Lake (10th Anniversary Edition)";
         AllLiked(new[]
         {
@@ -206,19 +206,17 @@ public class PurchaseServiceTests
 
         active.Should().BeEmpty();
         _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
-        // Recorded as a merge too, so the missing-album diff reaches the same verdict rather than
-        // listing the release as a gap on the next sweep.
-        _overrides.Items.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(
-                new AlbumMatchOverride("Whitney", deezerTitle, "Light Upon the Lake"));
+        // No merge override needed: the diff asks the same question with the same key, so it already
+        // agrees the record is owned. Overrides are for titles that differ beyond the decoration.
+        _overrides.Items.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task A_pending_edition_is_not_cancelled_by_owning_the_plain_release()
+    public async Task Owning_the_plain_release_closes_out_a_want_for_the_edition()
     {
-        // The other half of the same rule: before the download, an edition is its own release with its
-        // own Deezer id, and owning the plain one is not a reason to quietly cancel a fetch nobody
-        // dismissed. Only a row we actually sent gets the looser reading.
+        // The library holds one copy of a record, under whatever title Plex gave it, and that copy is
+        // the answer to "do we have this album?" whichever pressing Deezer listed. Queuing the deluxe
+        // when the record is already on the shelf would download what we have.
         const string deezerTitle = "Light Upon the Lake (10th Anniversary Edition)";
         AllLiked(new[]
         {
@@ -231,8 +229,9 @@ public class PurchaseServiceTests
 
         var active = await _sut.GetActive();
 
-        active.Select(p => p.Album).Should().Equal(deezerTitle);
-        active.Single().Status.Should().Be(PurchaseStatus.Pending);
+        // Never queued at all: the want is satisfied by the copy already on the shelf.
+        active.Should().BeEmpty();
+        _purchases.Items.Should().BeEmpty();
         _overrides.Items.Should().BeEmpty();
     }
 
