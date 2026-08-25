@@ -35,6 +35,7 @@ import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
 import { IconApprove, IconBlock, IconCheck, IconClear, IconReject, IconWrench, Spinner } from '../components/icons'
 import { isDeezerBusy } from '../api/deezer'
+import { CollectionResults, CollectionsView } from '../components/Collections'
 
 // The detail pane is driven by a lightweight selection: just enough to render the readout and to key
 // the Albums / Related tab queries. A library row supplies the full ArtistListItem (looked up by name
@@ -1339,10 +1340,18 @@ function UncatalogedResults({
   )
 }
 
+// Browse has two things to look through, and they are reached differently. Artists are the library's
+// own spine — everything else in the app hangs off them. Collections are the records that spine can't
+// hold: a compilation is credited to an umbrella ("Various Artists", a soundtrack) whose discography
+// is empty, so no artist page will ever lead you to one. Two modes rather than one merged list,
+// because "which band?" and "which record?" are different questions with different answers.
+type BrowseMode = 'artists' | 'collections'
+
 export default function Browse() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [mode, setMode] = useState<BrowseMode>('artists')
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
   // The artist open in the right-hand readout (desktop) / drawer (mobile), and which of its tabs is
@@ -1470,38 +1479,67 @@ export default function Browse() {
 
   // On mobile the readout takes over the screen; lock the background list so it can't scroll
   // (or peek through the translucent top bar) behind it. CSS scopes the lock to the mobile breakpoint.
+  // The readout only exists in Artists mode, so the lock follows the mode as well as the selection —
+  // otherwise switching to Collections with an artist open would leave the list frozen behind nothing.
+  const readoutOpen = mode === 'artists' && selected != null
   useEffect(() => {
-    document.body.classList.toggle('detail-open', selected != null)
+    document.body.classList.toggle('detail-open', readoutOpen)
     return () => document.body.classList.remove('detail-open')
-  }, [selected])
+  }, [readoutOpen])
 
   return (
     <section>
       <div className="artists-header">
         <h1>Browse</h1>
-        {artists && artists.length > 0 && (
+        {user && (
+          <div className="artist-detail-tabs browse-modes">
+            <button
+              className={mode === 'artists' ? 'artist-tab active' : 'artist-tab'}
+              onClick={() => setMode('artists')}
+            >
+              Artists
+            </button>
+            <button
+              className={mode === 'collections' ? 'artist-tab active' : 'artist-tab'}
+              title="Compilations and soundtracks — records no artist page can lead you to"
+              onClick={() => setMode('collections')}
+            >
+              Collections
+            </button>
+          </div>
+        )}
+        {(mode === 'collections' || (artists && artists.length > 0)) && (
           <div className="artist-search">
             <input
               type="text"
               value={query}
-              placeholder={`Search ${artists.length} artists…`}
+              // One box, two searches: in Artists mode it filters the library (and searches Deezer
+              // for acts below); in Collections mode it filters what's yours and searches Deezer for
+              // records.
+              placeholder={
+                mode === 'collections'
+                  ? 'Search compilations & soundtracks…'
+                  : `Search ${artists?.length ?? 0} artists…`
+              }
               onChange={(e) => onSearch(e.target.value)}
             />
           </div>
         )}
       </div>
 
-      {isPending && <p><em>Loading…</em></p>}
+      {mode === 'collections' && <CollectionsView query={query} />}
 
-      {isError && (
+      {mode === 'artists' && isPending && <p><em>Loading…</em></p>}
+
+      {mode === 'artists' && isError && (
         <p className="error">Failed to load artists: {(error as Error).message}</p>
       )}
 
-      {artists && artists.length === 0 && (
+      {mode === 'artists' && artists && artists.length === 0 && (
         <p><em>Catalog is empty — hit “Refresh from Plex” to populate it.</em></p>
       )}
 
-      {artists && artists.length > 0 && (
+      {mode === 'artists' && artists && artists.length > 0 && (
         <>
           <div className="disc-layout">
             <div className="disc-main">
@@ -1553,6 +1591,10 @@ export default function Browse() {
                   onSelect={setSelected}
                 />
               )}
+
+              {/* ...and the records no artist above could have led you to: compilations and
+                  soundtracks, credited to an umbrella whose discography is empty. */}
+              {user && <CollectionResults query={query} />}
             </div>
 
             <DetailPane

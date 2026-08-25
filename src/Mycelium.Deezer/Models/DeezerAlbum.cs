@@ -13,6 +13,13 @@ public class DeezerAlbum
     public string? record_type { get; set; }
 
     /// <summary>
+    /// How many tracks the release has, as the listing/search endpoints report it. Shown on a
+    /// collection row so a one-track "album" is recognisable as the stray it is before it's queued.
+    /// Zero when Deezer didn't supply it (the discography listing omits it on some rows).
+    /// </summary>
+    public int nb_tracks { get; set; }
+
+    /// <summary>
     /// The album's album-artist — present on <c>GET /album/{id}</c> but NOT on the
     /// <c>GET /artist/{id}/albums</c> discography listing (there an album is implicitly the listed
     /// artist's). For a collaboration this is the credited release act (e.g. a duo name), which is

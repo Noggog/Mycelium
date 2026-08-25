@@ -43,18 +43,25 @@ public static class SmartPlaylistCatalog
     /// <summary>
     /// Every definition on offer, in display order.
     ///
-    /// <param name="likedMoodTagId">
-    /// The Plex tag id of this user's "&lt;username&gt;_liked" artist mood, or null when the tag doesn't
-    /// exist on the server yet (nobody has been thumbed up). Tag rules store ids, not names, so there is
-    /// no way to write this rule ahead of the tag existing.
+    /// <param name="likedArtistMoodTagId">
+    /// The Plex tag id of this user's "&lt;username&gt;_liked" <em>artist</em> mood, or null when the tag
+    /// doesn't exist on the server yet (nobody has been thumbed up). Tag rules store ids, not names, so
+    /// there is no way to write this rule ahead of the tag existing.
+    /// </param>
+    /// <param name="likedAlbumMoodTagId">
+    /// The same tag in the <em>album</em> vocabulary. Plex keys tags per metadata type, so the identical
+    /// name has a different id at type 9 than at type 8, and the two must be looked up separately. Null
+    /// until the user likes their first collection — a compilation or soundtrack, which carries its
+    /// verdict on the album because its umbrella credit is not an act anyone has taste about.
     /// </param>
     /// <param name="freshMonths">The play-recency window for the Fresh variants.</param>
     /// </summary>
-    public static IReadOnlyList<StockPlaylistDefinition> Build(string? likedMoodTagId, int freshMonths)
+    public static IReadOnlyList<StockPlaylistDefinition> Build(
+        string? likedArtistMoodTagId, string? likedAlbumMoodTagId, int freshMonths)
     {
         var definitions = new List<StockPlaylistDefinition>
         {
-            MyLibrary(likedMoodTagId),
+            MyLibrary(likedArtistMoodTagId, likedAlbumMoodTagId),
             Frontier(),
         };
 
@@ -68,19 +75,41 @@ public static class SmartPlaylistCatalog
     }
 
     /// <summary>
-    /// Everything by an artist the user has thumbed up — "their" music, as distinct from whatever else
-    /// happens to be on a shared server. Rides on the mood tag the thumbs already write into Plex.
+    /// Everything the user has thumbed up — "their" music, as distinct from whatever else happens to be
+    /// on a shared server. Rides on the mood tags the thumbs already write into Plex.
+    ///
+    /// <para><b>Two rules, not one.</b> A verdict normally lands on the artist, but a collection — a
+    /// various-artists compilation, a soundtrack — has no act that could hold it, so its like is
+    /// stamped on the album instead (see <c>PlexAlbumTagger</c>). Matching only "Artist Mood" would
+    /// leave exactly those records out of the playlist that is supposed to be everything you like, so
+    /// the rule is the union of the two, joined by Any.</para>
+    ///
+    /// <para>Either half may be missing: Plex tag rules store ids, and a tag has no id until something
+    /// carries it. With one tag the filter is that single condition (no redundant bracket — Plex's own
+    /// editor would flatten it and the playlist would stop matching its definition); with neither there
+    /// is nothing to build.</para>
     /// </summary>
-    private static StockPlaylistDefinition MyLibrary(string? likedMoodTagId) => new(
-        Id: MyLibraryId,
-        Title: "My Library",
-        Description: "Contains all artists you've thumbed up: your library",
-        Filter: likedMoodTagId is null
-            ? null
-            : Sorted(new PlexCondition("artist.mood", PlexOp.Is, likedMoodTagId)),
-        Unavailable: likedMoodTagId is null
-            ? "Thumb up an artist first."
-            : null);
+    private static StockPlaylistDefinition MyLibrary(string? likedArtistMoodTagId, string? likedAlbumMoodTagId)
+    {
+        var rules = new List<PlexFilter>();
+        if (likedArtistMoodTagId is not null)
+        {
+            rules.Add(new PlexCondition("artist.mood", PlexOp.Is, likedArtistMoodTagId));
+        }
+        if (likedAlbumMoodTagId is not null)
+        {
+            rules.Add(new PlexCondition("album.mood", PlexOp.Is, likedAlbumMoodTagId));
+        }
+
+        return new StockPlaylistDefinition(
+            Id: MyLibraryId,
+            Title: "My Library",
+            Description: "Contains everything you've thumbed up — artists, and collections that have no artist",
+            Filter: rules.Count == 0 ? null : Sorted(PlexGroup.Flatten(PlexGroup.Any(rules.ToArray()))),
+            Unavailable: rules.Count == 0
+                ? "Thumb up an artist first."
+                : null);
+    }
 
     /// <summary>
     /// The "find something you'd forgotten" playlist: things you either haven't heard in a long time, or

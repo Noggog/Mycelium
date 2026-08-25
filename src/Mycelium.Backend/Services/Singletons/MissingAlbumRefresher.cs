@@ -91,6 +91,15 @@ public class MissingAlbumRefresher
         var skipped = 0;
         foreach (var artist in present)
         {
+            // Umbrella acts hold the collections people added by hand (see CollectionService), and
+            // Deezer lists no discography for them anyway — "Various Artists" (id 5080) answers with
+            // nothing at all. Walking one would spend a resolve to learn that and then replace those
+            // rows with the empty result, deleting every collection's Deezer id.
+            if (UmbrellaArtist.Is(artist.ArtistKey.ArtistName))
+            {
+                continue;
+            }
+
             scanned++;
             try
             {
@@ -134,7 +143,9 @@ public class MissingAlbumRefresher
         var missing = diff?.Missing ?? new List<MissingAlbum>();
         // Persist the gap (or clear stale rows when the artist has no Deezer match) so the per-user
         // feed and a later like — which carries the row's DeezerAlbumId to the downloader — stay current.
-        await _missing.ReplaceForArtist(artist.ArtistName, missing);
+        // Never for an umbrella act: its rows aren't a discography this pass is the truth of, they're
+        // hand-added collections, and a replace would wipe them (see PersistIfDiscography).
+        await PersistIfDiscography(artist, missing);
         return missing;
     }
 
@@ -166,7 +177,7 @@ public class MissingAlbumRefresher
         ArtistKey artist, IReadOnlyDictionary<string, Dictionary<string, AudioQuality?>> ownedAlbums)
     {
         var diff = await FetchAndDiff(artist, ownedAlbums, ArtistResolution.OwnershipOnly);
-        await _missing.ReplaceForArtist(artist.ArtistName, diff?.Missing ?? new List<MissingAlbum>());
+        await PersistIfDiscography(artist, diff?.Missing ?? new List<MissingAlbum>());
 
         var all = diff?.All.ToList() ?? new List<DiscographyAlbum>();
         var ownedAlbumTitles = ownedAlbums.TryGetValue(artist.ArtistName, out var ownedSet)
@@ -185,6 +196,26 @@ public class MissingAlbumRefresher
             }
         }
         return all;
+    }
+
+    /// <summary>
+    /// Writes an artist's missing set, replacing what was there — unless the artist is an umbrella
+    /// (<see cref="UmbrellaArtist"/>), in which case nothing is written at all.
+    ///
+    /// <para>The replace is only correct where the rows <em>are</em> a discography: an album that has
+    /// since been acquired simply stops being supplied and so drops out. Umbrella rows are not that.
+    /// Every various-artists compilation anyone adds files under the same act, each on its own, and
+    /// Deezer offers no discography to re-derive them from — so a replace would delete every
+    /// collection's Deezer id and leave the buy list with nothing to fetch.</para>
+    /// </summary>
+    private async Task PersistIfDiscography(ArtistKey artist, IReadOnlyList<MissingAlbum> missing)
+    {
+        if (UmbrellaArtist.Is(artist.ArtistName))
+        {
+            return;
+        }
+
+        await _missing.ReplaceForArtist(artist.ArtistName, missing);
     }
 
     /// <summary>

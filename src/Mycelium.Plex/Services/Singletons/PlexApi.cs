@@ -2,6 +2,7 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
+using Mycelium.Plex.Services.Smart;
 
 namespace Mycelium.Plex.Services.Singletons;
 
@@ -112,6 +113,38 @@ public class PlexApi : IPlexApi
         var data = JObject.Parse(response);
         var metadata = data["MediaContainer"]?["Metadata"];
         return metadata?.ToObject<PlexMusicAlbum[]>() ?? Array.Empty<PlexMusicAlbum>();
+    }
+
+    /// <summary>
+    /// Fetches a single album by its rating key — the album twin of <see cref="GetMusicArtist"/>, and
+    /// the read half of album mood tagging. Returns <c>null</c> when the key no longer resolves (the
+    /// album was removed, or a library rebuild shifted keys), so the caller can treat the stored key as
+    /// stale rather than write against nothing.
+    ///
+    /// <para>Same <c>Guid</c> shape mismatch as the artist detail endpoint — it comes back as an array
+    /// of external ids here and as a string on the section listing — so the field is dropped before
+    /// deserializing. Nothing on this path reads it.</para>
+    /// </summary>
+    public async Task<PlexMusicAlbum?> GetMusicAlbum(int ratingKey)
+    {
+        var url = $"{_endpointInfo.BaseUri}/library/metadata/{ratingKey}";
+        _logger.LogDebug("Plex GetMusicAlbum {RatingKey}: {Url}", ratingKey, url);
+        var response = await httpClient.GetAsync(url);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        var data = JObject.Parse(await response.Content.ReadAsStringAsync());
+        if (data["MediaContainer"]?["Metadata"] is not JArray metadata
+            || metadata.FirstOrDefault() is not JObject item)
+        {
+            return null;
+        }
+
+        item.Remove("Guid");
+        return item.ToObject<PlexMusicAlbum>();
     }
 
     /// <summary>
@@ -276,7 +309,18 @@ public class PlexApi : IPlexApi
     /// </summary>
     public Task SetArtistMoods(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
-        SetArtistTags("mood", library, ratingKey, add, remove);
+        SetTagField("mood", PlexSmartFilter.ArtistType, library, ratingKey, add, remove);
+
+    /// <summary>
+    /// The album twin of <see cref="SetArtistMoods"/> — the same edit against metadata type 9. It is
+    /// where a verdict goes when the record is credited to an umbrella rather than an act
+    /// (<c>UmbrellaArtist</c>): tagging "Various Artists" as liked would claim the user likes every
+    /// compilation in the library, so the album carries the tag instead, and a smart playlist reaches
+    /// it through Plex's "Album Mood" field.
+    /// </summary>
+    public Task SetAlbumMoods(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
+        SetTagField("mood", PlexSmartFilter.AlbumType, library, ratingKey, add, remove);
 
     /// <summary>
     /// The Genre-field twin of <see cref="SetArtistMoods"/>, behind the tag editor. Genres are the
@@ -285,7 +329,7 @@ public class PlexApi : IPlexApi
     /// </summary>
     public Task SetArtistGenres(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
-        SetArtistTags("genre", library, ratingKey, add, remove);
+        SetTagField("genre", PlexSmartFilter.ArtistType, library, ratingKey, add, remove);
 
     /// <summary>
     /// The Style-field twin of <see cref="SetArtistMoods"/>, behind the tag editor. Styles are the
@@ -293,7 +337,7 @@ public class PlexApi : IPlexApi
     /// </summary>
     public Task SetArtistStyles(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
-        SetArtistTags("style", library, ratingKey, add, remove);
+        SetTagField("style", PlexSmartFilter.ArtistType, library, ratingKey, add, remove);
 
     /// <summary>
     /// The Collection-field twin of <see cref="SetArtistMoods"/>. Only the cleanup path uses it, to strip
@@ -301,19 +345,20 @@ public class PlexApi : IPlexApi
     /// </summary>
     public Task SetArtistCollections(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove) =>
-        SetArtistTags("collection", library, ratingKey, add, remove);
+        SetTagField("collection", PlexSmartFilter.ArtistType, library, ratingKey, add, remove);
 
     /// <summary>
-    /// Edits one tag field (<c>genre</c>/<c>style</c>/<c>mood</c>/<c>collection</c>) on an artist. Plex's tag edit is <b>not</b> a
+    /// Edits one tag field (<c>genre</c>/<c>style</c>/<c>mood</c>/<c>collection</c>) on one item. Plex's tag edit is <b>not</b> a
     /// whole-field replace — listing <c>{field}[i].tag.tag</c> only adds, and a tag is dropped only via the
     /// explicit <c>{field}[].tag.tag-</c> parameter — so callers pass the delta, not the desired final set.
     /// That's what keeps hand-applied tags on the same field (e.g. the "ambient"/"heavy" moods driving
     /// existing smart collections) intact. Removed tags must be spelled exactly as Plex stores them (case
-    /// included), so read them off the current item. <c>type=8</c> is the artist metadata type;
+    /// included), so read them off the current item. <paramref name="type"/> is the metadata type the
+    /// rating key belongs to — 8 artist, 9 album — and must match it or Plex edits nothing;
     /// <c>{field}.locked=1</c> pins the field so a later refresh won't drop the tags.
     /// </summary>
-    private async Task SetArtistTags(
-        string field, int library, int ratingKey,
+    private async Task SetTagField(
+        string field, int type, int library, int ratingKey,
         IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove)
     {
         if (add.Count == 0 && remove.Count == 0)
@@ -322,7 +367,7 @@ public class PlexApi : IPlexApi
         }
 
         var url = new StringBuilder(
-            $"{_endpointInfo.BaseUri}/library/sections/{library}/all?type=8&id={ratingKey}");
+            $"{_endpointInfo.BaseUri}/library/sections/{library}/all?type={type}&id={ratingKey}");
         var i = 0;
         foreach (var tag in add)
         {
@@ -338,7 +383,8 @@ public class PlexApi : IPlexApi
         url.Append($"&{field}.locked=1");
 
         _logger.LogDebug(
-            "Plex artist {RatingKey} {Field} edit: +{Add} -{Remove}", ratingKey, field, add.Count, remove.Count);
+            "Plex item {RatingKey} (type {Type}) {Field} edit: +{Add} -{Remove}",
+            ratingKey, type, field, add.Count, remove.Count);
         var response = await httpClient.PutAsync(url.ToString(), content: null);
         response.EnsureSuccessStatusCode();
     }
@@ -466,6 +512,15 @@ public record PlexMusicAlbum
     public int RatingKey { get; set; }
     public string Title { get; set; }       // album title
     public string ParentTitle { get; set; } // owning artist's name
+
+    // Mood tags, returned inline exactly as they are on an artist. For an album credited to an umbrella
+    // act this is where a user's like/dislike verdict lives, since no artist could carry it — see
+    // IAlbumTagger. Provider-supplied and hand-applied moods share the field, so writes stay delta-based.
+    public PlexTag[]? Mood { get; set; }
+
+    /// <summary>The album's current mood tags; empty when it has none.</summary>
+    public string[] Moods() =>
+        Mood?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
 }
 
 /// <summary>

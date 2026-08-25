@@ -504,7 +504,8 @@ api.MapPost("/discovery/refresh", async (DiscoveryEngine engine) =>
 // Rate an artist or (when album is supplied) a missing album. verdict = "up" (Liked) | "down" (Disliked).
 api.MapPost("/discovery/rate", async (
         string artist, string? album, string? albumArt, string verdict, bool? upgrade,
-        HttpContext http, DiscoveryEngine engine, ArtistFollowUpService followUps) =>
+        HttpContext http, DiscoveryEngine engine, ArtistFollowUpService followUps,
+        CollectionService collections) =>
     {
         var status = verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
             ? DiscoveryStatus.Liked
@@ -538,6 +539,12 @@ api.MapPost("/discovery/rate", async (
         else
         {
             await engine.RateAlbum(userId, artist, album, albumArt, status);
+            // A collection has no act that could carry the verdict — "Various Artists" liked would
+            // claim every compilation in the library — so an umbrella-credited album is stamped on the
+            // album itself, reachable from a smart playlist as "Album Mood". A no-op for every other
+            // album, whose artist already carries it. Queued, like the artist write.
+            collections.QueueTagWrite(
+                http.User.FindFirst("preferred_username")?.Value, artist, album, status);
         }
         return Results.NoContent();
     })
@@ -654,7 +661,7 @@ api.MapPost("/discovery/snooze", async (
 // Clear a rating, returning the artist/album to the feed.
 api.MapDelete("/discovery/rate", async (
         string artist, string? album, HttpContext http, DiscoveryEngine engine,
-        ArtistFollowUpService followUps) =>
+        ArtistFollowUpService followUps, CollectionService collections) =>
     {
         var userId = http.User.GetSubject()!;
         if (string.IsNullOrEmpty(album))
@@ -674,6 +681,10 @@ api.MapDelete("/discovery/rate", async (
         else
         {
             await engine.ClearAlbumRating(userId, artist, album);
+            // Undo the album mood a collection's verdict wrote. We don't know which of the two it was,
+            // so strip both — the user holds at most one. No-op for a non-umbrella album.
+            collections.QueueTagWrite(
+                http.User.FindFirst("preferred_username")?.Value, artist, album, status: null);
         }
         return Results.NoContent();
     })
@@ -685,6 +696,72 @@ api.MapGet("/discovery/ratings", async (HttpContext http, DiscoveryEngine engine
         Results.Ok(await engine.GetRatings(http.User.GetSubject()!)))
     .RequireAuthorization()
     .WithName("GetRatings");
+
+// --- Collections: records no artist's discography can reach ---
+// A various-artists compilation, a soundtrack, a cast recording. Deezer credits them to an umbrella
+// act whose discography is empty (asking for "Various Artists"' albums returns nothing at all), so the
+// artist-rooted walk behind every other feed in this app can never surface one. These endpoints are
+// the way in: name the record, or paste its link. Deliberately absent from the Discover feed — see
+// CollectionService.
+
+// Everything the user can act on: umbrella-credited albums the library already holds, plus every one
+// they have thumbed. The owned-but-unrated rows are the point — without them there'd be no way to say
+// you like a compilation you already own, and it could never reach a "My Library" playlist.
+api.MapGet("/collections", async (HttpContext http, CollectionService collections) =>
+        Results.Ok(await collections.List(http.User.GetSubject()!)))
+    .RequireAuthorization()
+    .WithName("GetCollections");
+
+// Deezer album search, umbrella-credited hits first. Non-umbrella albums are kept rather than filtered
+// out: a search that claimed "no results" for a record Deezer plainly has would read as broken.
+api.MapGet("/collections/search", async (string q, HttpContext http, CollectionService collections) =>
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Results.Ok(Array.Empty<CollectionItem>());
+        }
+
+        try
+        {
+            return Results.Ok(await collections.Search(http.User.GetSubject()!, q));
+        }
+        catch (DeezerUnavailableException)
+        {
+            return DeezerBusy();
+        }
+    })
+    .RequireAuthorization()
+    .WithName("SearchCollections");
+
+// Resolve a pasted Deezer album link (or bare id) into a rateable row — the path for a record search
+// won't surface. Body rather than query string: a pasted URL carries '/' and Deezer's share tracking
+// params. 404 when the paste holds no album id, or Deezer doesn't know it.
+api.MapPost("/collections/resolve", async (
+        ManualAddRequest body, HttpContext http, CollectionService collections) =>
+    {
+        var item = await collections.Resolve(http.User.GetSubject()!, body.Url);
+        return item is null
+            ? Results.NotFound("That doesn't look like a Deezer album link.")
+            : Results.Ok(item);
+    })
+    .RequireAuthorization()
+    .WithName("ResolveCollection");
+
+// Thumb a collection by its Deezer album id. Writes the global missing-album row (which is what
+// carries the id through the purchase reconcile to the downloader), the per-user verdict, and — for an
+// umbrella-credited record — queues the album mood tag.
+api.MapPost("/collections/rate", async (
+        long id, string verdict, HttpContext http, CollectionService collections) =>
+    {
+        var status = verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
+            ? DiscoveryStatus.Liked
+            : DiscoveryStatus.Disliked;
+        var username = http.User.FindFirst("preferred_username")?.Value;
+        var item = await collections.Rate(http.User.GetSubject()!, username, id, status);
+        return item is null ? Results.NotFound($"Deezer has no album {id}.") : Results.Ok(item);
+    })
+    .RequireAuthorization()
+    .WithName("RateCollection");
 
 // --- Dev panel: Plex tag maintenance ---
 // Wipe and/or rebuild the per-user like/dislike mood tags so we can iterate on the tagging logic

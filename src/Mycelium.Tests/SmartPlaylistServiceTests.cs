@@ -57,7 +57,7 @@ public class SmartPlaylistServiceTests
     /// <summary>Puts a playlist on the fake server with the rules the named stock definition generates.</summary>
     private void ServerHas(string title, string definitionId, int freshMonths = 3, int leafCount = 100)
     {
-        var filter = SmartPlaylistCatalog.Build(LikedTagId, freshMonths).Single(d => d.Id == definitionId).Filter!;
+        var filter = SmartPlaylistCatalog.Build(LikedTagId, null, freshMonths).Single(d => d.Id == definitionId).Filter!;
         _playlists.Add(title, Section, filter, leafCount);
     }
 
@@ -122,7 +122,7 @@ public class SmartPlaylistServiceTests
     [Fact]
     public async Task A_playlist_plex_has_reflattened_still_matches()
     {
-        var fresh = SmartPlaylistCatalog.Build(LikedTagId, 3).Single(d => d.Id == "stars-4-fresh").Filter!;
+        var fresh = SmartPlaylistCatalog.Build(LikedTagId, null, 3).Single(d => d.Id == "stars-4-fresh").Filter!;
         var redundantlyNested = fresh with
         {
             Rules = PlexGroup.All(PlexGroup.All(((PlexGroup)fresh.Rules!).Children.ToArray())),
@@ -138,7 +138,7 @@ public class SmartPlaylistServiceTests
     [Fact]
     public async Task Rule_order_does_not_affect_recognition()
     {
-        var fresh = SmartPlaylistCatalog.Build(LikedTagId, 3).Single(d => d.Id == "stars-4-fresh").Filter!;
+        var fresh = SmartPlaylistCatalog.Build(LikedTagId, null, 3).Single(d => d.Id == "stars-4-fresh").Filter!;
         var reversed = fresh with
         {
             Rules = PlexGroup.All(((PlexGroup)fresh.Rules!).Children.Reverse().ToArray()),
@@ -172,7 +172,7 @@ public class SmartPlaylistServiceTests
     [Fact]
     public async Task A_matching_playlist_over_a_different_section_is_not_a_match()
     {
-        var filter = SmartPlaylistCatalog.Build(LikedTagId, 3).Single(d => d.Id == "stars-4").Filter!;
+        var filter = SmartPlaylistCatalog.Build(LikedTagId, null, 3).Single(d => d.Id == "stars-4").Filter!;
         _playlists.Add("other library", sectionKey: 4, filter);
 
         (await Row(Survey(), "stars-4")).State.Should().Be(StockPlaylistState.NotCreated);

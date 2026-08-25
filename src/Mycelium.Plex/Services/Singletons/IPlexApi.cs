@@ -16,6 +16,10 @@ public interface IPlexApi
 
     Task<PlexMusicAlbum[]> GetMusicAlbums(int library);
 
+    /// <summary>One album by rating key, carrying its mood tags, or <c>null</c> when the key no longer
+    /// resolves. The read half of album mood tagging (see <see cref="SetAlbumMoods"/>).</summary>
+    Task<PlexMusicAlbum?> GetMusicAlbum(int ratingKey);
+
     /// <summary>
     /// Every track in the library, each carrying the album it belongs to and the codec of its media —
     /// the only place Plex exposes what format the files actually are (the album listing has no media
@@ -61,6 +65,13 @@ public interface IPlexApi
     Task RefreshLibrary(int libraryKey);
     /// <summary>Adds/removes Mood tags on an artist in one edit — the app's like/dislike tagging.</summary>
     Task SetArtistMoods(
+        int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
+
+    /// <summary>
+    /// Adds/removes Mood tags on an <em>album</em> in one edit — where a taste verdict goes when the
+    /// record is credited to an umbrella act rather than to a band, since no artist could carry it.
+    /// </summary>
+    Task SetAlbumMoods(
         int library, int ratingKey, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove);
 
     /// <summary>The Genre-field twin of <see cref="SetArtistMoods"/>, for user tag editing.</summary>

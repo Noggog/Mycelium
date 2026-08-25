@@ -97,7 +97,11 @@ There are no hardcoded defaults — every value comes from the environment.
 ### Per-user Plex accounts (playlist features)
 
 `PLEX_TOKEN` is the *server owner's* token and stays the app's identity for library metadata — the
-mood tags a thumb writes are shared state and need the owner's rights.
+mood tags a thumb writes are shared state and need the owner's rights. That covers both levels: an
+artist thumb stamps `<user>_liked` on the artist (metadata type 8), and a thumb on a *collection* — a
+compilation or soundtrack, credited to an umbrella rather than an act — stamps the same tag on the
+**album** (type 9), since "Various Artists" is nothing anyone has taste about. The stock "My Library"
+smart playlist matches either.
 
 The Playlists page is different: playlists, track ratings, play counts and last-played are all
 **per-Plex-account**. Building a "4 stars and up" playlist with the server token would file it in the

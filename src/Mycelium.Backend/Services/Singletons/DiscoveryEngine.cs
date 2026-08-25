@@ -113,16 +113,20 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
     }
 
     /// <summary>
-    /// The full (unpaged) list of feed items for one category, with compilation placeholders
-    /// ("Various Artists" and friends) dropped. Filtering here rather than per-category catches every
-    /// way one can reach a card — a stale queue row written before this rule existed, an owned Plex
-    /// "Various Artists" bucket, a soundtrack's missing albums — so no card ever asks the user to have
-    /// an opinion about a non-act.
+    /// The full (unpaged) list of feed items for one category, with umbrella credits ("Various
+    /// Artists", "Original Soundtrack", cast recordings) dropped. Filtering here rather than
+    /// per-category catches every way one can reach a card — a stale queue row written before this rule
+    /// existed, an owned Plex "Various Artists" bucket, a soundtrack's missing albums, a collection
+    /// someone added by hand — so no card ever asks the user to have an opinion about a non-act.
+    ///
+    /// <para>Collections are excluded here <em>by design</em>, not incidentally: they are found on
+    /// purpose in Browse (see <see cref="CollectionService"/>). The feed grows from a taste graph, and
+    /// a compilation has no place in one.</para>
     /// </summary>
     private async Task<List<FeedItem>> ItemsForKind(string userId, FeedKind kind)
     {
         var items = await KindItems(userId, kind);
-        items.RemoveAll(i => PlaceholderArtist.Is(i.Artist.ArtistName));
+        items.RemoveAll(i => UmbrellaArtist.Is(i.Artist.ArtistName));
         return items;
     }
 
@@ -797,7 +801,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
             {
                 var name = candidate.ArtistKey.ArtistName;
                 if (string.IsNullOrWhiteSpace(name)
-                    || PlaceholderArtist.Is(name)
+                    || UmbrellaArtist.Is(name)
                     || name.Equals(frontierArtist, StringComparison.OrdinalIgnoreCase)
                     || library.Contains(name)
                     || decided.Contains(name))

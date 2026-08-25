@@ -15,6 +15,18 @@ public interface IMissingAlbumRepo
     /// </summary>
     Task ReplaceForArtist(string artistName, IReadOnlyList<MissingAlbum> missing);
 
+    /// <summary>
+    /// Inserts or updates <em>one</em> row, leaving the artist's other rows alone — the additive
+    /// counterpart to <see cref="ReplaceForArtist"/>.
+    ///
+    /// <para>Needed because collections all file under the same handful of umbrella acts
+    /// (<see cref="UmbrellaArtist"/>): every various-artists compilation anyone adds is a row under
+    /// "Various Artists", so writing one through <see cref="ReplaceForArtist"/> would delete all the
+    /// others. There is no discography behind these rows for a replace to be the truth of, either —
+    /// each is added on its own, by someone naming that record.</para>
+    /// </summary>
+    Task Upsert(MissingAlbum missing);
+
     /// <summary>Every missing album, ordered by artist then album, for building a user's feed.</summary>
     Task<MissingAlbum[]> GetAll();
 }

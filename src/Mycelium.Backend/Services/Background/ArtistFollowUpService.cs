@@ -5,6 +5,17 @@ using Mycelium.Interfaces;
 namespace Mycelium.Backend.Services.Background;
 
 /// <summary>
+/// The seam for handing the worker an album's Plex tag write. Extracted for the same reason as
+/// <see cref="IVerdictFollowUp"/>: it lets <c>CollectionService</c> be tested for <em>what</em> it
+/// defers without standing up a background service to observe it.
+/// </summary>
+public interface IAlbumTagFollowUp
+{
+    /// <inheritdoc cref="ArtistFollowUpService.QueueAlbumTagWrite"/>
+    void QueueAlbumTagWrite(string artist, string album, string? addTag, IReadOnlyCollection<string> removeTags);
+}
+
+/// <summary>
 /// The after-the-click worker. Rating, seeding or re-pointing an artist has two halves: recording the
 /// user's decision (a couple of Mongo writes) and the graph work that decision implies — re-ingesting
 /// similarity edges from the rate-limited source APIs, re-expanding the recommendation frontier, and
@@ -23,7 +34,7 @@ namespace Mycelium.Backend.Services.Background;
 /// by design — the daily replenisher re-expands every liked artist and <see cref="ArtistTagBackfill"/>
 /// re-stamps missing Plex tags, so a dropped item is repaired on the next pass rather than lost.</para>
 /// </summary>
-public class ArtistFollowUpService : BackgroundService
+public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp
 {
     /// <summary>One deferred unit of work, with a description for the log line if it fails.</summary>
     private record WorkItem(string Description, Func<Task> Run);
@@ -31,6 +42,7 @@ public class ArtistFollowUpService : BackgroundService
     private readonly IVerdictFollowUp _engine;
     private readonly IRelatedArtistReader _related;
     private readonly IArtistTagger _tagger;
+    private readonly IAlbumTagger _albumTagger;
     private readonly ILogger<ArtistFollowUpService> _logger;
 
     // Unbounded, but only ever holds a user's in-flight clicks — one item per rate/seed/correction.
@@ -40,11 +52,13 @@ public class ArtistFollowUpService : BackgroundService
         IVerdictFollowUp engine,
         IRelatedArtistReader related,
         IArtistTagger tagger,
+        IAlbumTagger albumTagger,
         ILogger<ArtistFollowUpService> logger)
     {
         _engine = engine;
         _related = related;
         _tagger = tagger;
+        _albumTagger = albumTagger;
         _logger = logger;
     }
 
@@ -68,6 +82,28 @@ public class ArtistFollowUpService : BackgroundService
                 await _tagger.SetTags(artist, addTag, removeTags);
             }
         });
+    }
+
+    /// <summary>
+    /// Queues the Plex mood write a verdict on an <em>album</em> implies. The album twin of
+    /// <see cref="QueueVerdictFollowUp"/>, minus the graph half: a compilation seeds no frontier, so
+    /// there is nothing to expand — only the tag, which is deferred for the same reason (a catalog read
+    /// plus up to two Plex round trips the click has no reason to wait for).
+    ///
+    /// <para>Runs on the same single consumer in submission order, so a quick like → clear on the same
+    /// album can't land backwards.</para>
+    /// </summary>
+    public void QueueAlbumTagWrite(
+        string artist, string album, string? addTag, IReadOnlyCollection<string> removeTags)
+    {
+        if (addTag == null && removeTags.Count == 0)
+        {
+            return;
+        }
+
+        Enqueue($"album tag write for \"{album}\" ({artist})", () =>
+            // Best-effort by contract (PlexAlbumTagger never throws).
+            _albumTagger.SetTags(artist, album, addTag, removeTags));
     }
 
     /// <summary>

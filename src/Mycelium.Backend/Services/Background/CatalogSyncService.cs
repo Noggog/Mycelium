@@ -17,17 +17,20 @@ public class CatalogSyncService : BackgroundService
     private readonly CatalogRefresher _refresher;
     private readonly PurchaseService _purchases;
     private readonly ArtistTagBackfill _tagBackfill;
+    private readonly AlbumTagBackfill _albumTagBackfill;
     private readonly JitterPolicy _jitter;
     private readonly DailySyncSchedule _schedule;
     private readonly ILogger<CatalogSyncService> _logger;
 
     public CatalogSyncService(
         CatalogRefresher refresher, PurchaseService purchases, ArtistTagBackfill tagBackfill,
-        JitterPolicy jitter, DailySyncSchedule schedule, ILogger<CatalogSyncService> logger)
+        AlbumTagBackfill albumTagBackfill, JitterPolicy jitter, DailySyncSchedule schedule,
+        ILogger<CatalogSyncService> logger)
     {
         _refresher = refresher;
         _purchases = purchases;
         _tagBackfill = tagBackfill;
+        _albumTagBackfill = albumTagBackfill;
         _jitter = jitter;
         _schedule = schedule;
         _logger = logger;
@@ -50,6 +53,10 @@ public class CatalogSyncService : BackgroundService
             // ...and finally get the verdict mood their rating couldn't write while they were outside
             // the library. A no-op when this pass found no arrivals, which is most nights.
             await _tagBackfill.Backfill(result.NewlyPresent);
+            // The same repair one level down, for collections. It can't key off NewlyPresent — a
+            // compilation arriving usually adds a record to an umbrella act the library already had —
+            // so it re-checks the (small) set of rated collections against what is now owned.
+            await _albumTagBackfill.Backfill();
         }
         catch (Exception ex)
         {

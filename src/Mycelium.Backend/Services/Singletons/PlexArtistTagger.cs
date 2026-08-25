@@ -46,28 +46,12 @@ public class PlexArtistTagger : IArtistTagger
     }
 
     /// <summary>
-    /// Computes the mood set for one Plex item: drops every tag in <paramref name="remove"/>
-    /// (case-insensitively) and ensures <paramref name="add"/> is present, leaving all other moods
-    /// untouched. Returns <c>null</c> when the item is already in the desired state (nothing to write).
+    /// Computes the mood set for one Plex item — see <see cref="MoodTags.Reconcile"/>, which the album
+    /// tagger shares so both write the same delta.
     /// </summary>
     internal static IReadOnlyList<string>? ReconcileMoods(
-        string[] existing, string? add, IReadOnlyCollection<string> remove)
-    {
-        var removedAny = existing.Any(l => remove.Contains(l, StringComparer.OrdinalIgnoreCase));
-        var needAdd = add != null && !existing.Contains(add, StringComparer.OrdinalIgnoreCase);
-        if (!removedAny && !needAdd)
-        {
-            return null;
-        }
-
-        var next = existing.Where(l => !remove.Contains(l, StringComparer.OrdinalIgnoreCase)).ToList();
-        if (needAdd)
-        {
-            next.Add(add!);
-        }
-
-        return next;
-    }
+        string[] existing, string? add, IReadOnlyCollection<string> remove) =>
+        MoodTags.Reconcile(existing, add, remove);
 
     public async Task SetTags(string artistName, string? add, IReadOnlyCollection<string> remove)
     {

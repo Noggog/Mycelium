@@ -13,7 +13,7 @@ namespace Mycelium.Tests;
 public class SmartPlaylistCatalogTests
 {
     private static PlexSmartFilter Filter(string id, string? likedTagId = "749936", int freshMonths = 3) =>
-        SmartPlaylistCatalog.Build(likedTagId, freshMonths).Single(d => d.Id == id).Filter!;
+        SmartPlaylistCatalog.Build(likedTagId, likedAlbumMoodTagId: null, freshMonths: freshMonths).Single(d => d.Id == id).Filter!;
 
     [Theory]
     // 3 stars is a rating of 6, and Plex has no ">=", so the rule is "greater than 5".
@@ -40,7 +40,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void The_fresh_window_is_reflected_in_the_title_so_two_windows_dont_collide()
     {
-        string Title(int months) => SmartPlaylistCatalog.Build("749936", months)
+        string Title(int months) => SmartPlaylistCatalog.Build("749936", null, months)
             .Single(d => d.Id == "stars-4-fresh").Title;
 
         Title(3).Should().Be("4★+ (Fresh 3mo)");
@@ -55,13 +55,46 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
+    /// A collection — a compilation or soundtrack — carries its like on the album, because its umbrella
+    /// credit is not an act anyone has taste about. Matching only "Artist Mood" would leave exactly
+    /// those records out of the playlist that is meant to be everything you like, so the rule is the
+    /// union of the two. Plex keys tags per metadata type, hence two different ids for one tag name.
+    /// </summary>
+    [Fact]
+    public void My_library_also_matches_the_album_mood_a_collection_carries()
+    {
+        var filter = SmartPlaylistCatalog.Build("749936", "812004", 3)
+            .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId).Filter!;
+
+        // No push/pop: the root group is the query itself, so its brackets are implicit — the same
+        // shape Plex's own editor writes for a top-level "Match any".
+        PlexFilterSerializer.Serialize(filter).Should().Be(
+            "type=8&sort=titleSort&artist.mood=749936&or=1&album.mood=812004");
+    }
+
+    /// <summary>
+    /// Until a collection has been liked there is no album tag on the server and so no id to name, and
+    /// the rule must stay the bare artist condition rather than a one-child group: Plex's own editor
+    /// flattens redundant brackets on save, and a playlist whose stored rules didn't match the
+    /// definition that made them would read as "differs" the moment the user opened it.
+    /// </summary>
+    [Fact]
+    public void My_library_stays_a_single_rule_when_only_one_tag_exists()
+    {
+        PlexFilterSerializer.Serialize(
+                SmartPlaylistCatalog.Build(null, "812004", 3)
+                    .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId).Filter!)
+            .Should().Be("type=8&sort=titleSort&album.mood=812004");
+    }
+
+    /// <summary>
     /// Tag rules address tags by numeric id, so until the user has thumbed someone the tag doesn't exist
     /// and no rule can name it. That's offered as an explanation, not an error.
     /// </summary>
     [Fact]
     public void My_library_is_unavailable_until_the_liked_tag_exists()
     {
-        var definition = SmartPlaylistCatalog.Build(likedMoodTagId: null, freshMonths: 3)
+        var definition = SmartPlaylistCatalog.Build(likedArtistMoodTagId: null, likedAlbumMoodTagId: null, freshMonths: 3)
             .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId);
 
         definition.Filter.Should().BeNull();
@@ -130,7 +163,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void A_generated_playlist_read_back_still_matches_its_definition()
     {
-        foreach (var definition in SmartPlaylistCatalog.Build("749936", 3).Where(d => d.Filter is not null))
+        foreach (var definition in SmartPlaylistCatalog.Build("749936", null, 3).Where(d => d.Filter is not null))
         {
             var roundTripped = PlexFilterParser.Parse(PlexFilterSerializer.Serialize(definition.Filter!));
 

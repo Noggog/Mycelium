@@ -386,3 +386,27 @@ export interface UserQualityList {
   defaultQuality: AudioQuality
   users: UserQualityEntry[]
 }
+
+// Mirror CollectionItem (Collection.cs) — a record no artist's discography can reach: a
+// various-artists compilation, a soundtrack, a cast recording. Deezer credits these to an umbrella
+// act whose discography is empty, so the artist-rooted walk behind every other view in the app never
+// surfaces one; they're found by naming the record in Browse's Collections view, or pasting its link.
+//
+// `umbrella` is what makes a like land on the *album* in Plex rather than the artist — "Various
+// Artists" is nothing anyone has taste about. Non-umbrella rows still appear in search results (they
+// just carry their verdict on the artist, as everywhere else). `deezerAlbumId` is 0 for a collection
+// already on the shelf that never came through this app: nothing to download.
+export interface CollectionItem {
+  deezerAlbumId: number
+  title: string
+  artist: ArtistKey
+  coverUrl: string | null
+  link: string | null
+  umbrella: boolean
+  owned: boolean
+  verdict: DiscoveryStatus | null
+  year: number | null
+  trackCount: number
+  recordType: string | null
+  plexUrl: string | null
+}

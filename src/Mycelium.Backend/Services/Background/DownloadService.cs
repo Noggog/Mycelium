@@ -34,6 +34,7 @@ public class DownloadService : BackgroundService
     private readonly PurchaseService _purchases;
     private readonly CatalogRefresher _catalog;
     private readonly ArtistTagBackfill _tagBackfill;
+    private readonly AlbumTagBackfill _albumTagBackfill;
     private readonly JitterPolicy _jitter;
     private readonly DownloadSchedule _schedule;
     private readonly ILibraryScanner _scanner;
@@ -55,6 +56,7 @@ public class DownloadService : BackgroundService
         PurchaseService purchases,
         CatalogRefresher catalog,
         ArtistTagBackfill tagBackfill,
+        AlbumTagBackfill albumTagBackfill,
         JitterPolicy jitter,
         DownloadSchedule schedule,
         ILibraryScanner scanner,
@@ -69,6 +71,7 @@ public class DownloadService : BackgroundService
         _purchases = purchases;
         _catalog = catalog;
         _tagBackfill = tagBackfill;
+        _albumTagBackfill = albumTagBackfill;
         _jitter = jitter;
         _schedule = schedule;
         _scanner = scanner;
@@ -446,6 +449,10 @@ public class DownloadService : BackgroundService
             // This is the payoff moment for an artist liked before the library had it: the album just
             // landed, so stamp the verdict mood the rating couldn't write back then.
             await _tagBackfill.Backfill(result.NewlyPresent);
+            // And the collection that just landed gets the mood its like couldn't write either — the
+            // album has no arrival signal of its own, so this re-checks the rated set against the
+            // catalog rather than reading NewlyPresent.
+            await _albumTagBackfill.Backfill();
         }
         catch (Exception ex)
         {

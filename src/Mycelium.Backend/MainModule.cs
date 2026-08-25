@@ -100,7 +100,8 @@ public class MainModule : Autofac.Module
         // expansion, queue rebuild and Plex tag write. Same shape as DownloadService — a shared
         // singleton hosted service, so the endpoints that enqueue and the loop that drains are the
         // same instance — and, like it, registered by hand: Services.Background isn't assembly-scanned.
-        builder.RegisterType<ArtistFollowUpService>().AsSelf().As<IHostedService>().SingleInstance();
+        builder.RegisterType<ArtistFollowUpService>()
+            .AsSelf().As<IHostedService>().As<IAlbumTagFollowUp>().SingleInstance();
         // Replacing the ARL from the Download page. The Services.Download namespace isn't part of the
         // assembly scan below (which covers Services.Singletons), so these are registered by hand like
         // the two above.
@@ -135,6 +136,10 @@ public class MainModule : Autofac.Module
             .Except<JitterPolicy>()
             // Same story: UserQualityService is registered above with its default tier.
             .Except<UserQualityService>()
+            // Not a service at all — a per-request snapshot of "what does the library have", built by
+            // its own Load factory from two repos. The scan would try to construct it and find no
+            // public constructor.
+            .Except<OwnedAlbumLookup>()
             .AsImplementedInterfaces()
             .AsSelf()
             .SingleInstance();

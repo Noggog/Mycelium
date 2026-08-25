@@ -29,6 +29,7 @@ public class DownloadServiceTests
     private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly IAlbumBlockRepo _blocks = Substitute.For<IAlbumBlockRepo>();
     private readonly IArtistTagger _tagger = Substitute.For<IArtistTagger>();
+    private readonly IAlbumTagger _albumTagger = Substitute.For<IAlbumTagger>();
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
     // No jitter in tests: waits stay exact (and zero), so nothing sleeps.
     private readonly JitterPolicy _jitter = new(0);
@@ -72,8 +73,11 @@ public class DownloadServiceTests
         var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);
         var tagBackfill = new ArtistTagBackfill(
             _tagger, _queue, _users, NullLogger<ArtistTagBackfill>.Instance);
+        var albumTagBackfill = new AlbumTagBackfill(
+            _albumTagger, _albumRatings, _queue, _users, _catalogRepo, _overrides,
+            NullLogger<AlbumTagBackfill>.Instance);
         return new DownloadService(_repo, _downloader, config, settings, purchases, catalog, tagBackfill,
-            _jitter, _schedule, Substitute.For<ILibraryScanner>(), _blocks,
+            albumTagBackfill, _jitter, _schedule, Substitute.For<ILibraryScanner>(), _blocks,
             NullLogger<DownloadService>.Instance);
     }
 

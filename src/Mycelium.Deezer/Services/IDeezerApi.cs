@@ -62,6 +62,20 @@ public interface IDeezerApi
     Task<DeezerAlbum[]?> SearchArtistAlbums(string artistName);
 
     /// <summary>
+    /// Search Deezer for <em>albums</em> by title, in relevance order — the only way to reach a record
+    /// no artist's discography lists. Deezer credits a various-artists compilation or a soundtrack to
+    /// an umbrella act whose own discography is empty (<c>/artist/5080/albums</c>, "Various Artists",
+    /// answers with nothing at all), so the artist-rooted walk can never surface one; searching for the
+    /// record itself can.
+    ///
+    /// <para>An empty array is Deezer answering with nothing; <c>null</c> means the call never got an
+    /// answer (transport error or the rate-limit quota), told apart for the same reason as in
+    /// <see cref="SearchArtists"/> — a caller must not show "no such record" because Deezer was
+    /// busy.</para>
+    /// </summary>
+    Task<DeezerAlbum[]?> SearchAlbums(string query, int limit);
+
+    /// <summary>
     /// A single album by its id, including its album-artist (the discography listing omits that).
     /// Null if none/error. Used to learn the real credited act for a collaboration album.
     /// </summary>

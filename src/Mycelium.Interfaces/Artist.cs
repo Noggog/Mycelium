@@ -1,4 +1,6 @@
-﻿namespace Mycelium.Interfaces;
+﻿using System.Text.RegularExpressions;
+
+namespace Mycelium.Interfaces;
 
 public record Recommendation(ArtistKey ArtistKey, ArtistKey[] SourceArtists);
 
@@ -26,6 +28,75 @@ public static class PlaceholderArtist
 
     public static bool Is(string? artistName) =>
         artistName != null && Names.Contains(artistName.Trim());
+}
+
+/// <summary>
+/// Names that credit a release to an <em>umbrella</em> rather than to an act: the various-artists
+/// bucket, and the soundtrack/cast credits that work the same way. A superset of
+/// <see cref="PlaceholderArtist"/>.
+///
+/// <para><b>Why it exists separately.</b> <see cref="PlaceholderArtist"/> is deliberately a tiny exact
+/// list because it gates the recommendation feed and the similarity graph, where a false positive
+/// silently erases a real band. This set answers a different question — "is there an artist here that
+/// could carry a taste verdict?" — and drives two things: which albums are <em>collections</em> (found
+/// only by searching for the record itself, never through a discography walk), and which liked albums
+/// get the <c>&lt;user&gt;_liked</c> mood stamped on the <em>album</em> in Plex because no artist can
+/// hold it.</para>
+///
+/// <para><b>Why these names and not more.</b> Every entry is either an established placeholder or a
+/// multi-word credit phrase. Bare one-word candidates are left out on purpose: "Cast" is a Britpop
+/// band, "Various" is a real act, "VA" is a real artist name — exactly the collisions
+/// <see cref="PlaceholderArtist"/> warns about. The cast credits are matched by pattern instead of by
+/// list because Deezer appends the show ("Original Broadway Cast of Hamilton"), which no fixed set
+/// could enumerate.</para>
+/// </summary>
+public static partial class UmbrellaArtist
+{
+    private static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Soundtrack / score credits, as Deezer and Plex spell them.
+        "Original Soundtrack",
+        "Soundtrack",
+        "Original Motion Picture Soundtrack",
+        "Motion Picture Soundtrack",
+        "Original Motion Picture Score",
+        "Original Television Soundtrack",
+        "Original TV Soundtrack",
+        "Original Video Game Soundtrack",
+        "Original Game Soundtrack",
+        "Original Score",
+        // Compilation buckets in the locales Deezer answers in.
+        "Multi-interprètes",
+        "Verschiedene Interpreten",
+        "Varios Artistas",
+        "Artisti Vari",
+        "Vários Artistas",
+    };
+
+    // "Original Broadway Cast", "Original London Cast Recording", "Original Broadway Cast of Hamilton",
+    // "The Original Cast" — an "original <place/production> cast" credit however it's spelled out.
+    // Anchored at both ends so it can't fire on a band whose name merely contains the word.
+    [GeneratedRegex(
+        @"^(the\s+)?original(\s+[\p{L}\-']+)*\s+cast(\s+recording)?(\s+of\s+.+)?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CastCredit();
+
+    /// <summary>
+    /// Whether <paramref name="artistName"/> is an umbrella credit rather than an act. True for
+    /// everything <see cref="PlaceholderArtist.Is"/> covers.
+    /// </summary>
+    public static bool Is(string? artistName)
+    {
+        if (artistName is null)
+        {
+            return false;
+        }
+
+        var trimmed = artistName.Trim();
+        return PlaceholderArtist.Is(trimmed)
+               || Names.Contains(trimmed)
+               || CastCredit().IsMatch(trimmed);
+    }
 }
 
 public record ArtistMetadata(

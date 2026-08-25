@@ -176,10 +176,19 @@ public class SmartPlaylistService
         var existing = await _playlists.GetSmartAudioPlaylists(link.ServerToken);
 
         // The same tag the thumbs write, derived the same way, so the rule can't drift from the tagger.
+        // Looked up twice because Plex keys its tag vocabularies per metadata type: the identical name
+        // has one id on artists and a different one on albums, and a "My Library" playlist has to match
+        // both — the artist tag for ordinary likes, the album tag for collections, which have no act to
+        // carry one.
         var likedTag = ArtistTag.For(username, DiscoveryStatus.Liked);
-        var likedTagId = likedTag is null ? null : await FindTagId(section, "mood", likedTag);
+        var likedArtistTagId = likedTag is null
+            ? null
+            : await FindTagId(section, "mood", likedTag, PlexSmartFilter.ArtistType);
+        var likedAlbumTagId = likedTag is null
+            ? null
+            : await FindTagId(section, "mood", likedTag, PlexSmartFilter.AlbumType);
 
-        var definitions = SmartPlaylistCatalog.Build(likedTagId, freshMonths);
+        var definitions = SmartPlaylistCatalog.Build(likedArtistTagId, likedAlbumTagId, freshMonths);
 
         // Only the tag vocabularies actually referenced get fetched — one request each, and typically
         // just "mood".
@@ -197,9 +206,9 @@ public class SmartPlaylistService
         return new SurveyContext(link.ServerToken, link.Username, section, definitions, existing, maps);
     }
 
-    private async Task<string?> FindTagId(int section, string field, string tagName)
+    private async Task<string?> FindTagId(int section, string field, string tagName, int type)
     {
-        var tags = await _playlists.GetSectionTags(section, field, PlexSmartFilter.ArtistType);
+        var tags = await _playlists.GetSectionTags(section, field, type);
         return tags.FirstOrDefault(t => string.Equals(t.Title, tagName, StringComparison.OrdinalIgnoreCase))?.Key;
     }
 

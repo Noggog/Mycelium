@@ -20,9 +20,10 @@ public class ArtistFollowUpServiceTests
     private readonly IVerdictFollowUp _engine = Substitute.For<IVerdictFollowUp>();
     private readonly IRelatedArtistReader _related = Substitute.For<IRelatedArtistReader>();
     private readonly IArtistTagger _tagger = Substitute.For<IArtistTagger>();
+    private readonly IAlbumTagger _albumTagger = Substitute.For<IAlbumTagger>();
 
     private ArtistFollowUpService Sut() =>
-        new(_engine, _related, _tagger, NullLogger<ArtistFollowUpService>.Instance);
+        new(_engine, _related, _tagger, _albumTagger, NullLogger<ArtistFollowUpService>.Instance);
 
     /// <summary>
     /// Runs the worker until <paramref name="done"/> holds (or the wait times out, failing the test

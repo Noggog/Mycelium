@@ -354,6 +354,62 @@ Worked one at a time. Full design in `~/.claude/plans/dreamy-forging-hearth.md`.
 _Deferred:_ title-normalize / `(Deluxe)`-tolerant correctness fix in `PurchaseService.AlbumIsOwned`
 — revisit if lingering rows become a problem.
 
+## Collections — records no artist can reach (built 2026-08-25)
+
+Everything else in this app is found **through an artist**: the catalog lists owned acts, the
+similarity graph grows from the ones a user likes, and the missing-album diff walks each owned
+artist's Deezer discography. A various-artists compilation is credited to an *umbrella* rather than
+to an act, and those discographies are empty — Deezer's own "Various Artists" (id 5080) answers
+`/artist/5080/albums` with nothing at all. So no walk that starts from an artist will ever produce
+one. `https://www.deezer.com/album/246803` ("The Breakfast Club", Various Artists) was the case that
+prompted this.
+
+- **What counts.** `UmbrellaArtist` (Interfaces/Artist.cs) — a **superset** of `PlaceholderArtist`,
+  kept separate on purpose. The strict three-name list gates the recommendation feed and the
+  similarity graph, where a false positive erases a real band; this wider set answers "is there an
+  artist here that could carry a verdict?" and adds the soundtrack/score credits plus a pattern for
+  cast recordings (Deezer appends the show: "Original Broadway Cast of Hamilton"). Bare one-word
+  candidates stay out — "Cast" is a britpop band, "Various" and "VA" are real acts.
+- **Finding.** `CollectionService` + `GET /api/collections/search` (Deezer `/search/album`,
+  umbrella-credited hits first, singles dropped), `POST /api/collections/resolve` for a pasted album
+  link, and `GET /api/collections` listing what the user owns or has judged. Browse gained an
+  **Artists / Collections** switch: the search block appears under the artist results in either mode,
+  and the tab additionally lists owned-but-unrated compilations — without those there is no way to say
+  you like something already on the shelf.
+- **Rating.** `POST /api/collections/rate` writes an additive row to `missingAlbums`
+  (`IMissingAlbumRepo.Upsert` — *not* `ReplaceForArtist`, since every collection files under the same
+  umbrella act and a replace would delete its neighbours' Deezer ids) and then an ordinary album
+  rating. Acquisition needs no new pipeline: `PurchaseService.Reconcile` already folds liked albums
+  into the buy list and reads the Deezer id out of that store.
+- **Tagging goes on the album.** A verdict normally lands on the artist, but tagging "Various Artists"
+  as liked would claim the user likes every compilation in the library. So an umbrella-credited
+  record carries `<user>_liked` on the **album** — `IAlbumTagger`/`PlexAlbumTagger`, Plex metadata
+  type 9, `SetAlbumMoods`. Only umbrella credits: an ordinary album's verdict is already carried by
+  its artist, and stamping the record too would put single albums by disliked acts into "My Library".
+  `AlbumTagBackfill` re-stamps once a download lands (there is no arrival signal at album granularity
+  — a compilation arriving rarely makes its umbrella act *newly* present — so it re-checks the small
+  rated set against the catalog, on the same hooks as `ArtistTagBackfill`).
+- **Smart playlists.** "My Library" is now the union of the two moods —
+  `artist.mood is <id@type8> OR album.mood is <id@type9>` — so a liked collection reaches the playlist
+  that is supposed to be everything you like. Plex keys tag vocabularies per metadata type, so the
+  same tag *name* has two different ids and both are looked up. With only one tag present the filter
+  stays a single condition (Plex's editor flattens redundant brackets on save, and a playlist whose
+  stored rules didn't match its definition would read as "differs" the moment the user opened it).
+- **Never in the feed.** `DiscoveryEngine.ItemsForKind` drops umbrella credits (switched from
+  `PlaceholderArtist` to `UmbrellaArtist`), as does the similarity expansion. Collections are
+  something you go looking for, not something the frontier pushes at you.
+- **Ownership is asked once.** `OwnedAlbumLookup` folds the catalog's owned albums, record-level title
+  normalization and recorded merges into one "does the library have this, and under what name?" —
+  shared by the collections view, the album tagger and the backfill, so a merged collection can't
+  close out on the buy list yet never get tagged.
+- **Umbrella acts are excluded from the discography sweep** (`MissingAlbumRefresher`): Deezer lists
+  nothing for them, and the sweep's `ReplaceForArtist` would wipe every hand-added collection's row.
+
+_Not done:_ Deezer **playlists** (`/playlist/{id}`). streamrip can fetch one, but it writes each
+track with its own album-artist, so Plex shatters the result into one album per contributor — making
+it land as a single taggable album needs a post-download retag pass. Out of scope here: the request
+was albums.
+
 ## Open questions
 
 - **Graph refresh policy:** _resolved_ — `RelatedStalenessPolicy` (`RELATED_STALENESS_DAYS`,

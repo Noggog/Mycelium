@@ -165,6 +165,22 @@ public class DeezerApi : IDeezerApi
         return albums.ToArray();
     }
 
+    public async Task<DeezerAlbum[]?> SearchAlbums(string query, int limit)
+    {
+        var trimmed = query?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return Array.Empty<DeezerAlbum>();
+        }
+
+        // Unscoped, unlike SearchArtistAlbums' artist:"..." form: here the user is naming the record,
+        // not the act, so the title is the term to match on.
+        var url = $"{_endpointInfo.BaseUri}/search/album"
+                  + $"?limit={Math.Clamp(limit, 1, AlbumSearchPageSize)}&q={Uri.EscapeDataString(trimmed)}";
+        var result = await Get<DeezerAlbumList>(url);
+        return result?.data.ToArray();
+    }
+
     public async Task<DeezerAlbum?> GetAlbum(long albumId)
     {
         var url = $"{_endpointInfo.BaseUri}/album/{albumId}";
