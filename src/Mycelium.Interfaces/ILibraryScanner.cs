@@ -4,7 +4,9 @@ namespace Mycelium.Interfaces;
 /// The seam for asking the library backend (Plex) to rescan so freshly-downloaded albums are picked
 /// up promptly — without which the <see cref="PurchaseStatus.InLibrary"/> flip waits on the next daily
 /// catalog refresh. <see cref="RequestScan"/> is fire-and-forget and <b>debounced</b>: a burst of
-/// finished downloads coalesces into a single scan once the activity quiets, so we never hammer Plex.
+/// requests coalesces into a single scan once they quiet, so we never hammer Plex. The debounce is the
+/// second line of defence, not the first — the download engine only asks once its queue has drained,
+/// because the gap between two albums routinely outlasts any sane debounce window.
 /// Gated off by default (a server-wide opt-in) and a no-op when disabled.
 /// </summary>
 public interface ILibraryScanner

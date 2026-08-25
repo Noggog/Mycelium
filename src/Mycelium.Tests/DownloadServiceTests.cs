@@ -28,6 +28,7 @@ public class DownloadServiceTests
     // settle test can assert the verdict mood lands once the artist finally shows up in Plex.
     private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly IAlbumBlockRepo _blocks = Substitute.For<IAlbumBlockRepo>();
+    private readonly ILibraryScanner _scanner = Substitute.For<ILibraryScanner>();
     private readonly IArtistTagger _tagger = Substitute.For<IArtistTagger>();
     private readonly IAlbumTagger _albumTagger = Substitute.For<IAlbumTagger>();
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
@@ -77,7 +78,7 @@ public class DownloadServiceTests
             _albumTagger, _albumRatings, _queue, _users, _catalogRepo, _overrides,
             NullLogger<AlbumTagBackfill>.Instance);
         return new DownloadService(_repo, _downloader, config, settings, purchases, catalog, tagBackfill,
-            albumTagBackfill, _jitter, _schedule, Substitute.For<ILibraryScanner>(), _blocks,
+            albumTagBackfill, _jitter, _schedule, _scanner, _blocks,
             NullLogger<DownloadService>.Instance);
     }
 
@@ -111,6 +112,89 @@ public class DownloadServiceTests
     private static PurchaseItem Artist(string artist, PurchaseStatus status = PurchaseStatus.Pending) =>
         new(PurchaseKey.ForArtist(artist), FeedKind.RecommendedArtist, new ArtistKey(artist), null,
             null, 0, Array.Empty<string>(), status, DateTimeOffset.UtcNow, null, null);
+
+    // ---- The post-download Plex rescan ----
+
+    /// <summary>
+    /// The bug this guards: the scanner's debounce measures silence between requests, and the gap
+    /// between two albums outlasts it — so asking after every item fired a rescan while the rest of
+    /// the batch was still downloading. The request now waits for the queue to drain.
+    /// </summary>
+    [Fact]
+    public async Task No_rescan_is_requested_while_the_queue_still_holds_albums()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var first = Album("Big Thief", "Capacity", 12345);
+        var second = Album("Big Thief", "Masterpiece", 12346);
+        _repo.Seed(first);
+        _repo.Seed(second);
+        var sut = Sut();
+        await sut.RequestDownload(first.Id);
+        await sut.RequestDownload(second.Id);
+
+        await sut.ConsumeNext(CancellationToken.None);
+
+        await _scanner.DidNotReceive().RequestScan(Arg.Any<bool>());
+    }
+
+    [Fact]
+    public async Task The_batch_gets_one_rescan_once_the_queue_drains()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var first = Album("Big Thief", "Capacity", 12345);
+        var second = Album("Big Thief", "Masterpiece", 12346);
+        _repo.Seed(first);
+        _repo.Seed(second);
+        var sut = Sut();
+        await sut.RequestDownload(first.Id);
+        await sut.RequestDownload(second.Id);
+
+        await sut.ConsumeNext(CancellationToken.None);
+        await sut.ConsumeNext(CancellationToken.None);
+
+        await _scanner.Received(1).RequestScan(Arg.Any<bool>());
+    }
+
+    /// <summary>
+    /// The last id in a batch is often one ProcessOne skips (already sent, deduped). The scan the
+    /// earlier downloads earned still has to go out, so the drain check runs after every item rather
+    /// than only after a successful download.
+    /// </summary>
+    [Fact]
+    public async Task A_skipped_last_item_still_releases_the_batch_rescan()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var first = Album("Big Thief", "Capacity", 12345);
+        var second = Album("Big Thief", "Masterpiece", 12346);
+        _repo.Seed(first);
+        _repo.Seed(second);
+        var sut = Sut();
+        await sut.RequestDownload(first.Id);
+        await sut.RequestDownload(second.Id);
+        await sut.ConsumeNext(CancellationToken.None);
+        // Someone resolved the second album as "already in library" while the first was downloading.
+        await _repo.SetStatus(second.Id, PurchaseStatus.InLibrary);
+
+        await sut.ConsumeNext(CancellationToken.None);
+
+        await _scanner.Received(1).RequestScan(Arg.Any<bool>());
+    }
+
+    /// <summary>A queue that drained without downloading anything has nothing for Plex to find.</summary>
+    [Fact]
+    public async Task A_queue_that_downloaded_nothing_asks_for_no_rescan()
+    {
+        var item = Album("Big Thief", "Capacity", 12345);
+        _repo.Seed(item);
+        var sut = Sut();
+        await sut.RequestDownload(item.Id);
+        // Resolved as "already in library" before its turn came up, so ProcessOne skips it.
+        await _repo.SetStatus(item.Id, PurchaseStatus.InLibrary);
+
+        await sut.ConsumeNext(CancellationToken.None);
+
+        await _scanner.DidNotReceive().RequestScan(Arg.Any<bool>());
+    }
 
     // ---- ProcessOne (the consumer's per-item work) ----
 

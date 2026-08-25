@@ -11,8 +11,9 @@ namespace Mycelium.Backend.Services.Singletons;
 /// the catalog (and the <see cref="PurchaseStatus.InLibrary"/> flip) updates promptly instead of
 /// waiting for the daily refresh.
 ///
-/// <para><b>Debounced via Rx.</b> Downloads drain one at a time, so a batch produces a burst of
-/// <see cref="RequestScan"/> calls. Each pushes onto a <see cref="Subject{T}"/>; <c>Throttle</c> (Rx's
+/// <para><b>Debounced via Rx.</b> Callers can produce a burst of <see cref="RequestScan"/> calls — the
+/// download engine asks once its queue drains, and several batches can drain in quick succession.
+/// Each pushes onto a <see cref="Subject{T}"/>; <c>Throttle</c> (Rx's
 /// trailing debounce) emits one value only after a window of silence, and <c>Concat</c> serializes the
 /// resulting scans so they never overlap. Net effect: one scan shortly after the batch goes quiet,
 /// however many albums it held.</para>

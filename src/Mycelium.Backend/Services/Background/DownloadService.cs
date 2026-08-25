@@ -23,8 +23,9 @@ namespace Mycelium.Backend.Services.Background;
 /// empties the backlog into the queue, it doesn't make the fetching itself any less polite.
 /// Each item goes Pending → Queued → Downloading → Sent/Failed; a downloaded album then closes the loop
 /// (file lands in Plex → reconcile → in-library, drops off the list) — via the settle pass here if it lands
-/// soon after the download, else at the next daily catalog sync. Registered as a shared
-/// singleton hosted service so the endpoint and the loop are the same instance.
+/// soon after the download, else at the next daily catalog sync. The Plex rescan that starts that is asked
+/// for once the queue has drained, not after each album (see <see cref="RequestScanIfDrained"/>).
+/// Registered as a shared singleton hosted service so the endpoint and the loop are the same instance.
 /// </summary>
 public class DownloadService : BackgroundService
 {
@@ -163,42 +164,88 @@ public class DownloadService : BackgroundService
     {
         try
         {
-            await foreach (var id in _queue.Reader.ReadAllAsync(ct))
+            while (await _queue.Reader.WaitToReadAsync(ct))
             {
-                try
-                {
-                    var downloaded = await ProcessOne(id);
-                    if (downloaded)
-                    {
-                        // Drop anything that became owned/unwanted, and space out fetches.
-                        await _purchases.Reconcile();
-                        // Ask Plex to pick up the new album. Debounced, so a draining batch triggers a
-                        // single rescan once it quiets — and a no-op unless PLEX_RESCAN_AFTER_DOWNLOAD is on.
-                        // A fast-mode burst asks for the short window: the point of fast mode is that the
-                        // panel keeps up with the downloads, which it can't if the library flip trails them
-                        // by the normal multi-minute settle.
-                        await _scanner.RequestScan(await FastMode());
-
-                        // Publish the wait before taking it, so the monitor can show when the next
-                        // album starts rather than just "Idle".
-                        var wait = _jitter.Apply(_config.ItemDelay);
-                        _schedule.ItemWait(wait);
-                        await Delay(wait, ct);
-                        _schedule.ClearItemWait();
-                    }
-                }
-                catch (Exception ex) when (!ct.IsCancellationRequested)
-                {
-                    // One bad item (a Mongo blip mid-status-write, a Plex rescan refused) must not end
-                    // the consumer — that would silently stop every later download until a restart.
-                    _logger.LogWarning(ex, "Download pass for {Id} failed; continuing with the queue", id);
-                }
+                await ConsumeNext(ct);
             }
         }
         catch (OperationCanceledException)
         {
             // shutting down
         }
+    }
+
+    /// <summary>
+    /// One turn of the consumer: take the next queued id, download it, reconcile, take the
+    /// between-albums wait, and — once the queue has actually run dry — ask Plex to pick up what
+    /// landed. Returns false when there was nothing to take. Internal so a test can step the consumer
+    /// an item at a time rather than running the loop.
+    /// </summary>
+    internal async Task<bool> ConsumeNext(CancellationToken ct)
+    {
+        if (!_queue.Reader.TryRead(out var id))
+        {
+            return false;
+        }
+
+        try
+        {
+            var downloaded = await ProcessOne(id);
+            if (downloaded)
+            {
+                // Drop anything that became owned/unwanted, and space out fetches.
+                await _purchases.Reconcile();
+                _scanPending = true;
+
+                // Publish the wait before taking it, so the monitor can show when the next
+                // album starts rather than just "Idle".
+                var wait = _jitter.Apply(_config.ItemDelay);
+                _schedule.ItemWait(wait);
+                await Delay(wait, ct);
+                _schedule.ClearItemWait();
+            }
+
+            await RequestScanIfDrained();
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // One bad item (a Mongo blip mid-status-write, a Plex rescan refused) must not end the
+            // consumer — that would silently stop every later download until a restart.
+            _logger.LogWarning(ex, "Download pass for {Id} failed; continuing with the queue", id);
+        }
+
+        return true;
+    }
+
+    /// <summary>Set once a download has landed that Plex hasn't been told about yet.</summary>
+    private bool _scanPending;
+
+    /// <summary>
+    /// Asks Plex to pick up the albums that landed — but only once the queue is empty, so a rescan
+    /// never runs against a library that's still being written to. The scanner debounces as well, but
+    /// a debounce alone isn't enough: it measures silence between <em>requests</em>, and the gap
+    /// between two albums (<c>ItemDelay</c>, plus the download itself) routinely outlasts the window,
+    /// so a draining batch would fire a scan after nearly every item. Draining is the honest signal
+    /// that the batch is done.
+    ///
+    /// <para>Checked after every item rather than only after a successful one: the last id in a batch
+    /// is often one <see cref="ProcessOne"/> skips (already sent, deduped), and gating on "downloaded"
+    /// alone would leave the batch's scan unrequested. A no-op unless
+    /// <c>PLEX_RESCAN_AFTER_DOWNLOAD</c> is on. A fast-mode burst asks for the short debounce window:
+    /// the point of fast mode is that the panel keeps up with the downloads, which it can't if the
+    /// library flip trails them by the normal multi-minute settle.</para>
+    /// </summary>
+    private async Task RequestScanIfDrained()
+    {
+        if (!_scanPending || _queue.Reader.Count > 0)
+        {
+            return;
+        }
+
+        await _scanner.RequestScan(await FastMode());
+        // Cleared after the request, not before: a scanner that threw leaves the flag up so the next
+        // item through the loop asks again.
+        _scanPending = false;
     }
 
     /// <summary>
