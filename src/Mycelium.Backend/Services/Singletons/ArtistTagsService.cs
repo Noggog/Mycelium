@@ -10,10 +10,13 @@ namespace Mycelium.Backend.Services.Singletons;
 /// collections filter on), so reads go live to the artist's Plex item(s) rather than to the catalog;
 /// only genres are mirrored back into the catalog, since the artist list renders those.
 ///
-/// <para><b>The app's own moods are invisible here.</b> Like/dislike verdicts live on the Mood field as
-/// "&lt;user&gt;_liked"/"_disliked" (see <see cref="PlexArtistTagger"/>). They're rating state owned by the
-/// thumbs, not descriptors, so <see cref="Get"/> filters them out and <see cref="Update"/> refuses to add
-/// or remove one — otherwise the tab would offer a second, desynced way to change a rating.</para>
+/// <para><b>The app's own moods are invisible here.</b> Two kinds share the Mood field with the
+/// descriptors: like/dislike verdicts ("&lt;user&gt;_liked"/"_disliked", see <see cref="PlexArtistTagger"/>)
+/// and the permanent "&lt;user&gt;_added" credits stamped on a record when an acquisition lands. Neither is
+/// a descriptor — one is rating state owned by the thumbs, the other is history — so <see cref="Get"/>
+/// filters both out (<see cref="ArtistTag.IsManaged"/>) and <see cref="Update"/> refuses to add or remove
+/// one. Otherwise the tab would offer a second, desynced way to change a rating, and a way to hand
+/// yourself credit for a record you didn't bring in.</para>
 ///
 /// <para><b>Delta writes.</b> Edits go through the same add/remove Plex tag edit the tagger uses, so a
 /// change to one tag never disturbs the rest of the field (including the managed verdict moods the tab
@@ -61,7 +64,7 @@ public class ArtistTagsService
             Present: true,
             Genres: Union(items.Select(i => i.Genres())),
             Styles: Union(items.Select(i => i.Styles())),
-            // The app's own verdict moods are rating state, not descriptors — never surface them.
+            // The app's own moods — verdicts and "_added" credits — aren't descriptors; never surface them.
             Moods: Union(items.Select(i => i.Moods().Where(m => !ArtistTag.IsManaged(m)))));
     }
 
@@ -71,8 +74,9 @@ public class ArtistTagsService
     /// the user's intent, not a final set: Plex tag edits are deltas, which is what keeps the field's
     /// other tags (including the invisible verdict moods) intact.
     ///
-    /// <para>Throws <see cref="ArgumentException"/> for an unknown field or a managed verdict tag —
-    /// both are caller bugs the endpoint turns into a 400, not conditions to paper over.</para>
+    /// <para>Throws <see cref="ArgumentException"/> for an unknown field or one of the app's own moods
+    /// (a verdict or an "_added" credit) — both are caller bugs the endpoint turns into a 400, not
+    /// conditions to paper over.</para>
     /// </summary>
     public async Task<ArtistTags> Update(
         ArtistKey artist, string field, IReadOnlyCollection<string> add, IReadOnlyCollection<string> remove)
@@ -86,7 +90,8 @@ public class ArtistTagsService
         var toRemove = Clean(remove);
         if (toAdd.Concat(toRemove).Any(ArtistTag.IsManaged))
         {
-            throw new ArgumentException("Like/dislike verdict tags aren't editable here", nameof(add));
+            throw new ArgumentException(
+                "The app's own moods (verdict and \"_added\" tags) aren't editable here", nameof(add));
         }
 
         var items = await GetPlexItems(artist);

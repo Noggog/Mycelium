@@ -67,7 +67,7 @@ public class DownloadServiceTests
         var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
         var purchases = new PurchaseService(
             _repo, _queue, _albumRatings, _library, _catalogRepo, _missing, _overrides, _downloader,
-            Substitute.For<IDeezerApi>(), config, settings,
+            Substitute.For<IDeezerApi>(), _albumTagger, config, settings,
             new UserQualityService(_users, AudioQuality.Lossless), _jitter, _schedule,
             NullLogger<PurchaseService>.Instance);
         var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);
@@ -188,6 +188,43 @@ public class DownloadServiceTests
 
         (await Sut().RequestDownload(PurchaseKey.ForArtist("Phoebe Bridgers"))).Should().BeFalse();
         (await Sut().RequestDownload("nope")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Pressing_download_claims_the_added_credit()
+    {
+        var id = PurchaseKey.ForAlbum("Big Thief", "Capacity");
+        _repo.Seed(Album("Big Thief", "Capacity", 12345, PurchaseStatus.Pending));
+
+        await Sut().RequestDownload(id, "noggog");
+
+        _repo.Items.Single().AddedBy.Should().Be("noggog");
+    }
+
+    [Fact]
+    public async Task A_second_presser_does_not_take_the_credit_off_the_first()
+    {
+        // Someone else retrying a stalled download is doing a favour, not adding the record.
+        var id = PurchaseKey.ForAlbum("Big Thief", "Capacity");
+        _repo.Seed(Album("Big Thief", "Capacity", 12345, PurchaseStatus.Failed));
+
+        await Sut().RequestDownload(id, "noggog");
+        await Sut().RequestDownload(id, "kelsey");
+
+        _repo.Items.Single().AddedBy.Should().Be("noggog");
+    }
+
+    [Fact]
+    public async Task Pressing_download_on_something_already_in_flight_still_claims_the_credit()
+    {
+        // The already-queued short-circuit returns before touching the status, but the person who
+        // pressed still asked for this record — an auto-enqueued row credits whoever presses it first.
+        var id = PurchaseKey.ForAlbum("Big Thief", "Capacity");
+        _repo.Seed(Album("Big Thief", "Capacity", 12345, PurchaseStatus.Queued));
+
+        (await Sut().RequestDownload(id, "noggog")).Should().BeTrue();
+
+        _repo.Items.Single().AddedBy.Should().Be("noggog");
     }
 
     // ---- The automatic/manual switch (env default, overridden by the stored value) ----

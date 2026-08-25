@@ -9,9 +9,9 @@ using Xunit;
 namespace Mycelium.Tests;
 
 /// <summary>
-/// Covers the tag editor's two invariants: the app's own like/dislike verdict moods are neither shown
-/// nor editable, and every write is a delta (so the rest of the field — the invisible verdict tags
-/// included — survives an edit).
+/// Covers the tag editor's two invariants: the app's own moods — like/dislike verdicts and the
+/// permanent "&lt;user&gt;_added" credits — are neither shown nor editable, and every write is a delta
+/// (so the rest of the field, those invisible tags included, survives an edit).
 /// </summary>
 public class ArtistTagsServiceTests
 {
@@ -60,11 +60,11 @@ public class ArtistTagsServiceTests
     }
 
     [Fact]
-    public async Task Get_HidesTheAppsOwnVerdictMoods()
+    public async Task Get_HidesTheAppsOwnMoods()
     {
         StoredKeys(10);
         Item(10, genres: new[] { "Rock" }, styles: new[] { "Shoegaze" },
-            moods: new[] { "Melancholy", "noggog_liked", "other_disliked" });
+            moods: new[] { "Melancholy", "noggog_liked", "other_disliked", "noggog_added" });
 
         var tags = await _sut.Get(new ArtistKey(Artist));
 
@@ -136,12 +136,14 @@ public class ArtistTagsServiceTests
     [Theory]
     [InlineData("noggog_liked")]
     [InlineData("someone_disliked")]
-    public async Task VerdictMoodsAreRejected(string tag)
+    [InlineData("noggog_added")]
+    public async Task TheAppsOwnMoodsAreRejected(string tag)
     {
         StoredKeys(10);
         Item(10, moods: new[] { tag });
 
-        // Both directions: the tab must not be able to grant or revoke a rating behind the thumbs' back.
+        // Both directions: the tab must not be able to grant or revoke a rating behind the thumbs' back,
+        // nor hand anyone credit for a record they didn't bring into the library.
         await Assert.ThrowsAsync<ArgumentException>(() =>
             _sut.Update(new ArtistKey(Artist), "mood", new[] { tag }, Array.Empty<string>()));
         await Assert.ThrowsAsync<ArgumentException>(() =>

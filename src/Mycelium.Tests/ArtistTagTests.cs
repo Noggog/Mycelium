@@ -68,4 +68,51 @@ public class ArtistTagTests
         ArtistTag.IsManaged(ArtistTag.For("noggog", DiscoveryStatus.Liked)).Should().BeTrue();
         ArtistTag.IsManaged(ArtistTag.For("noggog", DiscoveryStatus.Disliked)).Should().BeTrue();
     }
+
+    [Fact]
+    public void Added_credit_gets_its_own_suffix_and_the_same_username_cleanup()
+    {
+        ArtistTag.Added("noggog").Should().Be("noggog_added");
+        ArtistTag.Added("Justin C. Swanson@gmail.com").Should().Be("justincswanson_added");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("@example.com")]
+    public void No_usable_username_yields_no_added_credit(string? username)
+    {
+        ArtistTag.Added(username).Should().BeNull();
+    }
+
+    [Fact]
+    public void An_added_credit_is_ours_but_is_not_a_verdict()
+    {
+        // The distinction the dev wipe turns on: it strips what it can rebuild from the stored ratings,
+        // and nothing can rebuild who added a record. The tag editor hides both.
+        var added = ArtistTag.Added("noggog")!;
+        ArtistTag.IsAdded(added).Should().BeTrue();
+        ArtistTag.IsManaged(added).Should().BeTrue();
+        ArtistTag.IsVerdict(added).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("noggog_liked")]
+    [InlineData("NOGGOG_DISLIKED")]
+    public void A_verdict_is_ours_but_is_not_an_added_credit(string label)
+    {
+        ArtistTag.IsVerdict(label).Should().BeTrue();
+        ArtistTag.IsManaged(label).Should().BeTrue();
+        ArtistTag.IsAdded(label).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Pop/Rock")]
+    [InlineData("ambient")]
+    public void A_descriptor_mood_is_neither(string? label)
+    {
+        ArtistTag.IsVerdict(label).Should().BeFalse();
+        ArtistTag.IsAdded(label).Should().BeFalse();
+    }
 }

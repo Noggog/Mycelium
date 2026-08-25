@@ -22,6 +22,7 @@ public class PurchaseServiceTests
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
     private readonly IDownloader _downloader = Substitute.For<IDownloader>();
     private readonly IDeezerApi _deezer = Substitute.For<IDeezerApi>();
+    private readonly IAlbumTagger _albumTagger = Substitute.For<IAlbumTagger>();
     private readonly DownloadSchedule _schedule = new();
     private readonly PurchaseService _sut;
 
@@ -37,7 +38,8 @@ public class PurchaseServiceTests
             new FakeAppSettingsRepo(), NullLogger<DownloadSettings>.Instance);
         _sut = new PurchaseService(
             _purchases, _queue, _albumRatings, _library, _catalog, _missing, _overrides, _downloader,
-            _deezer, Config, settings, new UserQualityService(_users, AudioQuality.Lossless),
+            _deezer, _albumTagger, Config, settings,
+            new UserQualityService(_users, AudioQuality.Lossless),
             new JitterPolicy(0.3), _schedule,
             NullLogger<PurchaseService>.Instance);
 
@@ -552,6 +554,94 @@ public class PurchaseServiceTests
         (await _sut.GetActive()).Should().BeEmpty();
         _purchases.Items.Should().ContainSingle()
             .Which.Status.Should().Be(PurchaseStatus.InLibrary);
+    }
+
+    [Fact]
+    public async Task Added_credit_rides_the_row_and_is_stamped_on_the_album_when_it_lands()
+    {
+        // The whole point of carrying AddedBy: at the moment of the paste there is no Plex album to
+        // write to. The credit waits on the row for however long the download takes, and is written
+        // exactly once — when the record finally shows up in the library.
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+
+        _purchases.Items.Should().ContainSingle().Which.AddedBy.Should().Be("noggog");
+        await _albumTagger.DidNotReceiveWithAnyArgs().SetTags(default!, default!, default, default!);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
+        });
+        await _sut.GetActive();
+
+        await _albumTagger.Received(1).SetTags(
+            "Various Artists", "Cluster Flies", "noggog_added",
+            Arg.Is<IReadOnlyCollection<string>>(r => r.Count == 0));
+    }
+
+    [Fact]
+    public async Task Added_credit_is_written_once_not_on_every_later_reconcile()
+    {
+        // GetActive reconciles on every read of the page, and an InLibrary row stays in the store for
+        // ever. Re-stamping would be a Plex round trip per owned row per page load.
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
+        });
+
+        await _sut.GetActive();
+        await _sut.GetActive();
+        await _sut.GetActive();
+
+        await _albumTagger.Received(1).SetTags(
+            "Various Artists", "Cluster Flies", "noggog_added", Arg.Any<IReadOnlyCollection<string>>());
+    }
+
+    [Fact]
+    public async Task An_album_that_arrived_with_nobody_asking_for_it_is_credited_to_nobody()
+    {
+        // Downloaded automatically off a like: nobody pressed anything, so there is no one to credit
+        // and no tag to write. A "_added" mood must mean a person, or it means nothing.
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.GetActive();
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Big Thief"] = new(StringComparer.OrdinalIgnoreCase) { ["Capacity"] = null },
+        });
+
+        await _sut.GetActive();
+
+        _purchases.Items.Should().ContainSingle().Which.Status.Should().Be(PurchaseStatus.InLibrary);
+        await _albumTagger.DidNotReceiveWithAnyArgs().SetTags(default!, default!, default, default!);
+    }
+
+    [Fact]
+    public async Task Added_credit_survives_the_reconciles_that_happen_before_the_album_lands()
+    {
+        // The reconcile re-upserts every row it still wants, refreshing display fields. That upsert
+        // carries no AddedBy — a manual row is in nobody's liked set — and must not wipe the credit.
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+
+        await _sut.GetActive();
+        await _sut.GetActive();
+
+        _purchases.Items.Should().ContainSingle().Which.AddedBy.Should().Be("noggog");
+    }
+
+    [Fact]
+    public async Task Manual_add_without_a_signed_in_username_simply_has_no_credit()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002");
+
+        _purchases.Items.Should().ContainSingle().Which.AddedBy.Should().BeNull();
     }
 
     [Fact]

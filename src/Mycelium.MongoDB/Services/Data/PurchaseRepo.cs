@@ -29,6 +29,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldTargetQuality = "targetQuality";
     private const string FieldAcquiredQuality = "acquiredQuality";
     private const string FieldOwnedQuality = "ownedQuality";
+    private const string FieldAddedBy = "addedBy";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -91,10 +92,34 @@ public class PurchaseRepo : IPurchaseRepo
             update = update.Set(FieldOwnedQuality, item.OwnedQuality.Value.ToString());
         }
 
+        // Insert-only, like the status: who asked for a record is a fact about the moment it was
+        // requested, and a reconcile refreshing display fields has nothing to say about it. The
+        // download button claims it on an existing row through SetAddedBy instead.
+        if (item.AddedBy != null)
+        {
+            update = update.SetOnInsert(FieldAddedBy, item.AddedBy);
+        }
+
         return Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", item.Id),
             update,
             new UpdateOptions { IsUpsert = true });
+    }
+
+    /// <summary>
+    /// Claims the "added by" credit for <paramref name="username"/> only if it's unclaimed. The
+    /// unclaimed test is part of the filter rather than a read-then-write, so two people pressing
+    /// Download at once can't both win. A Mongo equality against null matches a missing field too,
+    /// which is what covers every row written before this field existed.
+    /// </summary>
+    public async Task<bool> SetAddedBy(string id, string username)
+    {
+        var result = await Collection.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.And(
+                Builders<BsonDocument>.Filter.Eq("_id", id),
+                Builders<BsonDocument>.Filter.Eq(FieldAddedBy, BsonNull.Value)),
+            Builders<BsonDocument>.Update.Set(FieldAddedBy, username));
+        return result.ModifiedCount > 0;
     }
 
     public async Task<bool> SetStatus(
@@ -165,6 +190,9 @@ public class PurchaseRepo : IPurchaseRepo
             // quality, which is exactly what those rows would have downloaded at anyway.
             AudioQualityTier.Parse(StrN(FieldTargetQuality)),
             AudioQualityTier.Parse(StrN(FieldAcquiredQuality)),
-            AudioQualityTier.Parse(StrN(FieldOwnedQuality)));
+            AudioQualityTier.Parse(StrN(FieldOwnedQuality)),
+            // Absent on every row written before the "added by" credit existed, and on anything that
+            // downloaded without a person pressing for it.
+            StrN(FieldAddedBy));
     }
 }

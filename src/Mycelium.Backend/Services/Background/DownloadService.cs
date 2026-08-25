@@ -13,7 +13,9 @@ namespace Mycelium.Backend.Services.Background;
 ///     pending albums every <c>DOWNLOAD_BATCH_INTERVAL_MINUTES</c>. The switch is stored in Mongo and
 ///     re-read on every tick, so flipping it on the Download page takes effect without a restart.
 ///   • <b>Manual</b>: <see cref="RequestDownload"/> (the "Download now" button) enqueues one id and
-///     returns immediately, so the HTTP request never blocks on the multi-minute fetch.
+///     returns immediately, so the HTTP request never blocks on the multi-minute fetch. It also records
+///     who pressed it, which is what the reconcile turns into the album's "&lt;user&gt;_added" credit
+///     once the download lands.
 /// "Fast mode" (see <see cref="DownloadSettings.FastUntil"/>) is a time-boxed variant of the automatic
 /// pass: for an hour it lifts the batch cap so every pending album is queued at once, and re-runs the
 /// pass every few seconds so an album marked mid-burst is queued straight away rather than at the next
@@ -84,13 +86,23 @@ public class DownloadService : BackgroundService
     /// returns false if it's unknown or not a downloadable Deezer album. Non-blocking — the consumer
     /// loop does the actual fetch.
     /// </summary>
-    public async Task<bool> RequestDownload(string id)
+    public async Task<bool> RequestDownload(string id, string? username = null)
     {
         var item = (await _repo.GetAll()).FirstOrDefault(p => p.Id == id);
         if (item is null || !item.Kind.IsDownloadableAlbum() || item.DeezerAlbumId is null or 0)
         {
             return false;
         }
+
+        // Pressing Download is the act of putting a record in the library, so it claims the permanent
+        // "added by" credit the reconcile stamps once the album lands. Claimed before the already-queued
+        // check below, not after: a row someone else queued but that this user pressed first is still
+        // theirs. The repo refuses a second claim, so a retry never takes the credit off whoever asked.
+        if (username != null)
+        {
+            await _repo.SetAddedBy(id, username);
+        }
+
         if (item.Status is PurchaseStatus.Queued or PurchaseStatus.Downloading)
         {
             return true; // already queued / in flight

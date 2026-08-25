@@ -26,9 +26,21 @@ public interface IArtistTagger
 }
 
 /// <summary>
-/// Builds the per-user tag for a taste verdict — "&lt;username&gt;_liked" / "&lt;username&gt;_disliked".
-/// The username is trimmed of any email domain and reduced to [a-z0-9_] so the tag is clean and
-/// collision-resistant; returns null when there's no usable username (so the caller skips tagging).
+/// Builds the per-user tags this app writes into the library's Mood field. Two kinds, and the
+/// difference between them is what the tag <em>means</em>:
+///
+/// <list type="bullet">
+/// <item><b>Verdict</b> — "&lt;username&gt;_liked" / "&lt;username&gt;_disliked" (<see cref="For"/>).
+/// Current rating state: it flips when the user flips their thumb and disappears when they clear it.</item>
+/// <item><b>Credit</b> — "&lt;username&gt;_added" (<see cref="Added"/>). A record of history, not of
+/// taste: this is the person who asked for the record and put it in the library. It is written once,
+/// when the download finally lands, and is never rewritten or removed — someone who later sours on a
+/// record still added it.</item>
+/// </list>
+///
+/// <para>The username is trimmed of any email domain and reduced to [a-z0-9_] so the tag is clean and
+/// collision-resistant; both builders return null when there's no usable username (so the caller skips
+/// tagging).</para>
 /// </summary>
 public static class ArtistTag
 {
@@ -45,15 +57,39 @@ public static class ArtistTag
     }
 
     /// <summary>
-    /// Whether a tag is one this app manages — the "_liked"/"_disliked" suffix namespace. Used by the
-    /// dev wipe to strip only our tags and leave provider moods and hand-applied tags alone. Coarse on
+    /// The permanent "this is who brought the record in" credit — "&lt;username&gt;_added". Stamped on
+    /// the <em>album</em> once an acquisition lands in the library (see the purchase reconcile), so a
+    /// smart playlist can ask for "everything noggog added" through Plex's "Album Mood" field.
+    /// </summary>
+    public static string? Added(string? username)
+    {
+        var prefix = Sanitize(username);
+        return prefix.Length == 0 ? null : $"{prefix}_added";
+    }
+
+    /// <summary>
+    /// Whether a tag is a taste verdict of ours — the "_liked"/"_disliked" suffix namespace. This is
+    /// the set the dev wipe strips, because it's the set that can be rebuilt afterwards from the stored
+    /// ratings; provider moods, hand-applied tags and the "_added" credits are left alone. Coarse on
     /// purpose: any name with that suffix is treated as ours (we can't enumerate every username that
     /// ever rated), which is the right call for a "clean slate" reset.
     /// </summary>
-    public static bool IsManaged(string? label) =>
+    public static bool IsVerdict(string? label) =>
         label != null
         && (label.EndsWith("_liked", StringComparison.OrdinalIgnoreCase)
             || label.EndsWith("_disliked", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Whether a tag is an "added" credit — the "_added" suffix namespace.</summary>
+    public static bool IsAdded(string? label) =>
+        label != null && label.EndsWith("_added", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a tag is one this app owns, verdict or credit. This is the set the tag editor hides and
+    /// refuses to write: all of it is state the app maintains, and offering a second, desynced way to
+    /// change it would be a bug either way. Not the same set as <see cref="IsVerdict"/> — a wipe that
+    /// took the "_added" credits with it could never put them back.
+    /// </summary>
+    public static bool IsManaged(string? label) => IsVerdict(label) || IsAdded(label);
 
     private static string Sanitize(string? username)
     {

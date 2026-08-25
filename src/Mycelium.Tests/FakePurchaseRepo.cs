@@ -33,9 +33,22 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 // has to be carried across explicitly.) TargetQuality is deliberately NOT carried:
                 // it is recomputed from who currently wants the album, and must be free to rise.
                 AcquiredQuality = existing.AcquiredQuality,
+                // Insert-only in Mongo (SetOnInsert), so an upsert can neither claim the credit nor
+                // take it away from whoever already holds it.
+                AddedBy = existing.AddedBy,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;
+    }
+
+    public Task<bool> SetAddedBy(string id, string username)
+    {
+        if (!_items.TryGetValue(id, out var item) || item.AddedBy != null)
+        {
+            return Task.FromResult(false); // unknown row, or the credit is already claimed
+        }
+        _items[id] = item with { AddedBy = username };
+        return Task.FromResult(true);
     }
 
     public Task<bool> SetStatus(

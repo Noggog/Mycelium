@@ -86,8 +86,9 @@ export interface ArtistLibraries {
 
 // Mirror ArtistTags (Artist.cs) — the editable Plex descriptor tags for one library artist, behind
 // the Browse readout's "Tags" tab. `present` is false for artists that aren't in the library (nothing
-// to tag). `moods` never includes the app's own "<user>_liked"/"_disliked" verdict tags: the backend
-// strips them, and they're owned by the thumbs, not by this editor.
+// to tag). `moods` never includes the app's own mood tags — the "<user>_liked"/"_disliked" verdicts or
+// the permanent "<user>_added" credits: the backend strips both, and they're owned by the thumbs and by
+// the acquisition list, not by this editor.
 export interface ArtistTags {
   artist: ArtistKey
   present: boolean
@@ -334,6 +335,10 @@ export interface PurchaseItem {
   acquiredQuality: AudioQuality | null
   // For an UpgradeAlbum row: what the copy already in the library is. Null on a gap.
   ownedQuality: AudioQuality | null
+  // Who asked for this record — pasted its link, or pressed Download on it. Rides the row until the
+  // album lands in the library, at which point it becomes the album's permanent "<user>_added" mood in
+  // Plex. Null when nothing was pressed (an album downloaded automatically off a like).
+  addedBy: string | null
 }
 
 // Mirror ManualAddResult / ManualAddOutcome (IPurchaseRepo.cs) — the answer to pasting a Deezer

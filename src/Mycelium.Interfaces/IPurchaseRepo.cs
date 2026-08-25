@@ -75,7 +75,18 @@ public record PurchaseItem(
     // For a FeedKind.UpgradeAlbum row: how good the copy already in the library is. Carried on the
     // row because the downloader needs it at promotion time to check the result is actually better —
     // and by then the album has left the missing set, which is where it was learned. Null on a gap.
-    AudioQuality? OwnedQuality = null);
+    AudioQuality? OwnedQuality = null,
+    // The username of whoever asked for this record — pasted its link, or pressed Download on it.
+    // Carried here rather than written straight to the library because at the moment of the click
+    // there is nothing to write to: the album doesn't exist in Plex until the download lands, hours
+    // later. The row is what survives that gap, and the reconcile that closes it out stamps the
+    // permanent "<user>_added" credit (see ArtistTag.Added).
+    //
+    // First claim wins and is never overwritten: someone else retrying a stalled download, or the
+    // reconcile refreshing the row's display fields, must not take the credit off the person who
+    // actually asked for the record. Null on rows nobody pressed anything for — an album queued and
+    // downloaded automatically off a like — and on every row written before this existed.
+    string? AddedBy = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -179,6 +190,13 @@ public interface IPurchaseRepo
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
         AudioQuality? acquired = null);
+
+    /// <summary>
+    /// Records <paramref name="username"/> as the person who asked for this record, unless someone
+    /// already holds that credit. First claim wins: a retry pressed by a second user, or a re-press of
+    /// Download, leaves the original in place. Returns true when this call is what set it.
+    /// </summary>
+    Task<bool> SetAddedBy(string id, string username);
 
     /// <summary>Removes a row entirely (no longer wanted).</summary>
     Task Remove(string id);

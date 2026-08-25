@@ -38,8 +38,9 @@ export interface RebuildResult {
   applied: number
 }
 
-// Strip every managed ("_liked"/"_disliked") tag from every artist — moods, plus the legacy
-// same-named collections — for a clean slate.
+// Strip every verdict ("_liked"/"_disliked") tag from every artist — moods, plus the legacy
+// same-named collections — for a clean slate. The permanent "<user>_added" credits are left alone:
+// they're stamped on albums when an acquisition lands, and nothing could put them back.
 export async function clearPlexTags(): Promise<ClearResult> {
   const res = await fetch('/api/dev/plex-tags/clear', { method: 'POST' })
   if (!res.ok) {

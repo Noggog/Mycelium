@@ -496,15 +496,16 @@ function PlexTagTools() {
       <h2>Plex tags</h2>
       <p>
         Per-user <code>&lt;username&gt;_liked</code> / <code>_disliked</code> mood tags mirrored onto
-        artists in Plex. Clear nukes every managed tag — moods, plus the same-named collections an
+        artists in Plex. Clear nukes every verdict tag — moods, plus the same-named collections an
         earlier version wrote; reapply re-derives the moods from stored ratings; rebuild does both (the
-        true reset).
+        true reset). The permanent <code>&lt;username&gt;_added</code> credits on albums are untouched by
+        all three — nothing could rebuild them.
       </p>
 
       <div className="controls">
         <button
           onClick={() => {
-            if (window.confirm('Remove every "_liked"/"_disliked" tag from all Plex artists?')) {
+            if (window.confirm('Remove every "_liked"/"_disliked" tag from all Plex artists? ("_added" credits are kept.)')) {
               setStatus(null)
               clear.mutate()
             }

@@ -9,9 +9,11 @@ namespace Mycelium.Backend.Services.Singletons;
 /// Lets us wipe the managed tags back to a clean slate and rebuild them from the stored ratings, so
 /// iterating on the tagging logic doesn't leave orphaned tags scattered across the Plex library.
 ///
-/// <para>"Managed" tags are exactly those with the "_liked"/"_disliked" suffix (see
-/// <see cref="ArtistTag.IsManaged"/>); every other mood — provider-supplied descriptors, hand-applied tags
-/// like the "ambient"/"heavy" moods driving existing smart collections — is left alone. The clear also
+/// <para>The wipe takes exactly the verdict tags — the "_liked"/"_disliked" suffix namespace (see
+/// <see cref="ArtistTag.IsVerdict"/>) — because they're the ones <see cref="ReapplyFromRatings"/> can put
+/// back. Every other mood is left alone: provider-supplied descriptors, hand-applied tags like the
+/// "ambient"/"heavy" moods driving existing smart collections, and the "&lt;user&gt;_added" credits, which
+/// are permanent and reconstructible from nothing — clearing one would destroy it for good. The clear also
 /// strips managed <em>collections</em>, since an earlier version of the tagger wrote the verdicts as
 /// collection memberships; that's how those get swept out of the library (a collection Plex empties this
 /// way is deleted). Current tags are read from the section listing (Plex returns moods inline, and
@@ -46,8 +48,9 @@ public class PlexTagMaintenance
     }
 
     /// <summary>
-    /// Strips every managed ("_liked"/"_disliked") tag from every artist in the library — moods, plus the
-    /// collections the pre-mood tagger left behind — preserving all other moods and collections. A
+    /// Strips every verdict ("_liked"/"_disliked") tag from every artist in the library — moods, plus the
+    /// collections the pre-mood tagger left behind — preserving all other moods and collections, the
+    /// permanent "&lt;user&gt;_added" credits among them. A
     /// collection emptied this way is deleted by Plex, which is what clears them out of the library's
     /// Collections tab. Returns the number of artists changed.
     /// </summary>
@@ -57,11 +60,11 @@ public class PlexTagMaintenance
         var changed = 0;
         foreach (var artist in await _plexApi.GetMusicArtists(library.Key))
         {
-            var moods = artist.Moods().Where(ArtistTag.IsManaged).ToArray();
-            var collections = artist.Collections().Where(ArtistTag.IsManaged).ToArray();
+            var moods = artist.Moods().Where(ArtistTag.IsVerdict).ToArray();
+            var collections = artist.Collections().Where(ArtistTag.IsVerdict).ToArray();
             if (moods.Length == 0 && collections.Length == 0)
             {
-                continue; // nothing managed on this artist
+                continue; // no verdict tags on this artist
             }
 
             // Plex only drops tags via an explicit removal, so strip the managed ones by name (their
@@ -78,7 +81,7 @@ public class PlexTagMaintenance
             changed++;
         }
 
-        _logger.LogInformation("Cleared managed Plex tags from {Count} artist(s)", changed);
+        _logger.LogInformation("Cleared verdict Plex tags from {Count} artist(s)", changed);
         return changed;
     }
 

@@ -2,7 +2,8 @@ import type { ArtistTags, TagField } from '../types'
 
 // The Browse readout's "Tags" tab: read/edit the descriptor tags a library artist carries in Plex
 // (genres, styles, moods). Auth-gated server-side — these writes land in the shared Plex library.
-// The app's own like/dislike verdict moods never appear here and can't be edited through it.
+// The app's own moods — the like/dislike verdicts and the "<user>_added" credits — never appear here
+// and can't be edited through it.
 
 export async function getArtistTags(artist: string): Promise<ArtistTags> {
   const params = new URLSearchParams({ artist })
@@ -14,7 +15,8 @@ export async function getArtistTags(artist: string): Promise<ArtistTags> {
 }
 
 // Add and/or remove one tag on one field, returning the artist's tags as they now stand. The write is
-// a delta in Plex, so the field's other tags (including the hidden verdict moods) are left alone.
+// a delta in Plex, so the field's other tags (including the hidden verdict and "_added" moods) are
+// left alone.
 export async function editArtistTag(
   artist: string,
   field: TagField,

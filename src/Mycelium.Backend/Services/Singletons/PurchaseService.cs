@@ -27,6 +27,7 @@ public class PurchaseService
     private readonly IAlbumMatchOverrideRepo _overrides;
     private readonly IDownloader _downloader;
     private readonly IDeezerApi _deezer;
+    private readonly IAlbumTagger _albumTagger;
     private readonly DownloaderConfig _config;
     private readonly DownloadSettings _settings;
     private readonly UserQualityService _quality;
@@ -44,6 +45,7 @@ public class PurchaseService
         IAlbumMatchOverrideRepo overrides,
         IDownloader downloader,
         IDeezerApi deezer,
+        IAlbumTagger albumTagger,
         DownloaderConfig config,
         DownloadSettings settings,
         UserQualityService quality,
@@ -64,6 +66,7 @@ public class PurchaseService
         _overrides = overrides;
         _downloader = downloader;
         _deezer = deezer;
+        _albumTagger = albumTagger;
         _config = config;
         _logger = logger;
     }
@@ -116,8 +119,12 @@ public class PurchaseService
     /// album-artist, so the next reconcile flips it to <see cref="PurchaseStatus.InLibrary"/> once it
     /// lands. What it does *not* do is touch anyone's ratings or the similarity graph — a compilation
     /// isn't a taste anchor, and this is an acquisition, not a preference.
+    ///
+    /// <para><paramref name="username"/> is whoever pasted the link. It rides on the row until the
+    /// album lands and is then stamped on it as the permanent "&lt;user&gt;_added" credit — this is the
+    /// clearest case of it, since a hand-pasted compilation has nothing but a person behind it.</para>
     /// </summary>
-    public async Task<ManualAddOutcome> AddManual(string? pasted)
+    public async Task<ManualAddOutcome> AddManual(string? pasted, string? username = null)
     {
         var albumId = DeezerAlbumLink.TryParse(pasted);
         if (albumId is null)
@@ -159,7 +166,7 @@ public class PurchaseService
             PurchaseStatus.Pending, default, null, albumId,
             // Album-artist and listing artist are the same thing here: there is no discography this
             // was reached through, so nothing to differ from.
-            artist, DownloadFailure.None, Manual: true);
+            artist, DownloadFailure.None, Manual: true, AddedBy: username);
         await _purchases.Upsert(item);
 
         _logger.LogInformation(
@@ -401,6 +408,10 @@ public class PurchaseService
             {
                 if (row.Status != PurchaseStatus.InLibrary)
                 {
+                    // The record has arrived, so there is finally a Plex item to credit. Stamped here
+                    // and only here: this branch runs once per row, on the transition into the library.
+                    await StampAddedBy(
+                        row, MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist));
                     await _purchases.SetStatus(row.Id, PurchaseStatus.InLibrary);
                 }
                 continue;
@@ -419,6 +430,36 @@ public class PurchaseService
                 await _purchases.Remove(row.Id);
             }
         }
+    }
+
+    /// <summary>
+    /// Writes the permanent "&lt;user&gt;_added" credit onto a record that has just landed, naming
+    /// whoever asked for it. The album-level twin of nothing — there is no artist equivalent on
+    /// purpose: an artist is a shelf that fills up over years, while a record enters the library once,
+    /// because one person went and got it.
+    ///
+    /// <para>Album rows only. An artist row has no record to stamp, and an upgrade row's album was
+    /// already on the shelf — swapping in a better rip is not adding it, and whoever originally did
+    /// still holds the credit from when it first landed.</para>
+    ///
+    /// <para>Best-effort, like every tagging path in this app: <see cref="IAlbumTagger"/> logs and
+    /// swallows, so a Plex blip costs this credit rather than stalling the row in the acquisition list
+    /// for ever. The row keeps <see cref="PurchaseItem.AddedBy"/> either way, so the attribution
+    /// survives even when the tag write didn't.</para>
+    /// </summary>
+    private async Task StampAddedBy(PurchaseItem row, string albumArtist)
+    {
+        if (row.Kind != FeedKind.MissingAlbum
+            || row.Album is not { Length: > 0 } album
+            || ArtistTag.Added(row.AddedBy) is not { } tag)
+        {
+            return;
+        }
+
+        await _albumTagger.SetTags(albumArtist, album, tag, Array.Empty<string>());
+        _logger.LogInformation(
+            "Credited \"{Album}\" ({Artist}) to {User} as it landed in the library",
+            album, albumArtist, row.AddedBy);
     }
 
     /// <summary>

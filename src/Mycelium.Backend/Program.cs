@@ -770,7 +770,8 @@ api.MapPost("/collections/rate", async (
 // stay restricted to dev users rather than any signed-in user.
 var dev = api.MapGroup("/dev/plex-tags").RequireAuthorization("DevUser");
 
-// Strip every managed tag from every artist (clean slate).
+// Strip every verdict tag from every artist (clean slate). The "_added" credits survive — see
+// PlexTagMaintenance.
 dev.MapPost("/clear", async (PlexTagMaintenance maint) =>
         Results.Ok(new { cleared = await maint.ClearManagedTags() }))
     .WithName("DevClearPlexTags");
@@ -917,8 +918,10 @@ api.MapPost("/purchases/fast", async (bool fast, DownloadSettings settings, Down
 
 // Manually queue an item for download now (the "Download now"/"Retry" button). Non-blocking — the
 // drainer does the fetch; returns immediately. Works whether or not automatic downloads are on.
-api.MapPost("/purchases/download", async (string id, DownloadService downloads) =>
-        await downloads.RequestDownload(id)
+// The presser is recorded on the row and becomes the album's permanent "<user>_added" mood once the
+// download lands in the library (see PurchaseService.Reconcile).
+api.MapPost("/purchases/download", async (string id, HttpContext http, DownloadService downloads) =>
+        await downloads.RequestDownload(id, http.User.FindFirst("preferred_username")?.Value)
             ? Results.NoContent()
             : Results.Problem("Item isn't a downloadable Deezer album.", statusCode: 409))
     .RequireAuthorization()
@@ -943,9 +946,12 @@ api.MapPost("/purchases/deezer-arl", async (ArlUpdateRequest body, DeezerCredent
 // releases no owned artist's discography lists, chiefly various-artists compilations. Body rather
 // than query string: a pasted URL carries '/' and '?' and Deezer's share tracking params. Answers
 // 200 with the created/existing row, or 400 carrying the reason so the paste box can explain itself.
-api.MapPost("/purchases/add", async (ManualAddRequest body, PurchaseService purchases) =>
+api.MapPost("/purchases/add", async (ManualAddRequest body, HttpContext http, PurchaseService purchases) =>
     {
-        var outcome = await purchases.AddManual(body.Url);
+        // Whoever pasted the link gets the "<user>_added" credit when the album lands — a hand-added
+        // compilation has nothing but a person behind it.
+        var outcome = await purchases.AddManual(
+            body.Url, http.User.FindFirst("preferred_username")?.Value);
         return outcome.Result is ManualAddResult.Added or ManualAddResult.AlreadyQueued
             ? Results.Ok(outcome)
             : Results.BadRequest(outcome);
