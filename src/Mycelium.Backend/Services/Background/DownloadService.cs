@@ -42,6 +42,11 @@ public class DownloadService : BackgroundService
     // Unbounded but effectively tiny; ProcessOne dedups by re-checking status, so duplicate ids are cheap.
     private readonly Channel<string> _queue = Channel.CreateUnbounded<string>();
 
+    // Lets something outside the loop cut the wait between enqueue passes short (see WakeEnqueue).
+    // Capacity one: a sleeping loop can only use one wake, and a second while a pass is already
+    // running would just buy a redundant pass.
+    private readonly SemaphoreSlim _enqueueWake = new(0, 1);
+
     public DownloadService(
         IPurchaseRepo repo,
         IDownloader downloader,
@@ -287,7 +292,7 @@ public class DownloadService : BackgroundService
 
                 var wait = await NextEnqueueWait();
                 _schedule.BatchWait(wait);
-                await Task.Delay(wait, ct);
+                await WaitForNextPass(wait, ct);
             }
         }
         catch (OperationCanceledException)
@@ -308,6 +313,35 @@ public class DownloadService : BackgroundService
         // A floor, not a throttle: a misconfigured interval of zero would otherwise spin the loop
         // against Mongo as fast as the CPU allows.
         return wait > TimeSpan.Zero ? wait : TimeSpan.FromSeconds(1);
+    }
+
+    /// <summary>
+    /// Waits out the gap between two enqueue passes, returning early — and true — if
+    /// <see cref="WakeEnqueue"/> is called meanwhile. Its own method (rather than a bare
+    /// <c>Task.Delay</c>) so the wake is part of the wait rather than something bolted on beside it.
+    /// </summary>
+    internal Task<bool> WaitForNextPass(TimeSpan wait, CancellationToken ct) =>
+        _enqueueWake.WaitAsync(wait, ct);
+
+    /// <summary>
+    /// Cuts the current wait short so the loop runs a pass now and re-reads its cadence. Fast mode is
+    /// what needs it: a burst is typically switched on while the loop is already minutes into a
+    /// half-hour sleep, and the deadline alone only changes what the <em>next</em> pass does — until
+    /// that sleep ends the pace is still the batch pace, so an album marked just after the burst
+    /// started sat Pending for the rest of the interval, which is exactly what the burst was turned on
+    /// to avoid. Fire-and-forget: never blocks, and a wake arriving while one is already queued is
+    /// dropped rather than stacking up passes.
+    /// </summary>
+    public void WakeEnqueue()
+    {
+        try
+        {
+            _enqueueWake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // A wake is already queued — the loop hasn't taken it yet, so it will pass regardless.
+        }
     }
 
     /// <summary>

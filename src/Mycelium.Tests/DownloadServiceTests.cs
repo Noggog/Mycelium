@@ -319,6 +319,27 @@ public class DownloadServiceTests
     }
 
     [Fact]
+    public async Task Waking_the_drainer_cuts_the_wait_between_passes_short()
+    {
+        var sut = Sut(Config(batchInterval: TimeSpan.FromMinutes(30)));
+
+        // Nothing has woken it, so a wait simply expires (zero here, so the test doesn't sleep).
+        (await sut.WaitForNextPass(TimeSpan.Zero, CancellationToken.None)).Should().BeFalse();
+
+        // Turning fast mode on wakes it mid-sleep. Without this the burst lifts the batch cap but not
+        // the pace — the loop would keep sleeping out the half-hour it entered before the burst began,
+        // and an album added in between would sit Pending for the rest of it.
+        sut.WakeEnqueue();
+        (await sut.WaitForNextPass(TimeSpan.FromMinutes(30), CancellationToken.None)).Should().BeTrue();
+
+        // One wake, one pass: a second wake queued while a pass is already running doesn't stack up.
+        sut.WakeEnqueue();
+        sut.WakeEnqueue();
+        (await sut.WaitForNextPass(TimeSpan.Zero, CancellationToken.None)).Should().BeTrue();
+        (await sut.WaitForNextPass(TimeSpan.Zero, CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Fast_mode_does_not_drain_while_the_switch_says_manual()
     {
         Wanted("Big Thief", "Capacity", deezerId: 12345);

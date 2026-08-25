@@ -820,12 +820,18 @@ api.MapPost("/purchases/automatic", async (bool automatic, DownloadSettings sett
 // has to switch it back off). Turning it on runs an enqueue pass right here rather than waiting for
 // the next batch tick — "queue everything" is the point, and the pass only reads Mongo. The reply
 // carries the deadline so the page can start counting down without a second round trip.
+// The drainer is then woken as well, because that inline pass only covers the backlog as it stands
+// right now: the loop itself may be twenty minutes into a half-hour sleep, and until it wakes it is
+// still running at the batch pace — so an album added a minute into the burst would sit Pending for
+// the rest of that interval. Waking it makes it re-read the deadline and drop to the fast cadence at
+// once; the pass it runs on waking merely repeats one that just happened, which is idempotent.
 api.MapPost("/purchases/fast", async (bool fast, DownloadSettings settings, DownloadService downloads) =>
     {
         var until = await settings.SetFast(fast);
         if (fast)
         {
             await downloads.EnqueuePendingBatch();
+            downloads.WakeEnqueue();
         }
         return Results.Ok(new FastModeResponse(until));
     })
