@@ -180,6 +180,61 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.Normalize(title).Should().Be(expected);
     }
 
+    // Record granularity: the post-download landing check, and nothing else. Plex names an album from
+    // its own metadata match and drops the edition decoration the release was fetched under, so the
+    // copy that arrives can't be recognised at release granularity.
+    [Theory]
+    [InlineData("Light Upon the Lake (10th Anniversary Edition)")]
+    [InlineData("Light Upon the Lake [10th Anniversary Deluxe]")]
+    [InlineData("Light Upon the Lake (Deluxe Edition)")]
+    [InlineData("Light Upon the Lake (Bonus Track Version)")]
+    [InlineData("Light Upon the Lake - Remastered")]
+    [InlineData("Light Upon the Lake (Expanded Edition) [Remastered]")]
+    [InlineData("Light Upon the Lake")]
+    public void An_edition_is_the_same_record_as_the_plain_release(string title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be("light upon the lake");
+    }
+
+    [Fact]
+    public void Record_granularity_still_leaves_the_release_keys_apart()
+    {
+        // The two live side by side: the same pair of titles is one record and two releases, which is
+        // exactly why the landing check may ask the first question and the feed must ask the second.
+        AlbumTitleMatcher.Normalize("Light Upon the Lake (10th Anniversary Edition)")
+            .Should().NotBe(AlbumTitleMatcher.Normalize("Light Upon the Lake"));
+    }
+
+    // A genuinely different reading of a record is not decoration, at either granularity.
+    [Theory]
+    [InlineData("Celebration Rock (Live)")]
+    [InlineData("Sound Kapital (Clean Slate)")]
+    [InlineData("A Color Map of the Sun (Remixes)")]
+    [InlineData("Post-Nothing")]
+    public void A_tail_that_carries_meaning_survives_the_record_fold(string title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title)
+            .Should().Be(AlbumTitleMatcher.Normalize(title));
+    }
+
+    [Theory]
+    [InlineData("EP", "ep")]
+    [InlineData("Deluxe", "deluxe")]
+    [InlineData("(Deluxe Edition)", "(deluxe edition)")]
+    public void The_record_fold_never_eats_the_whole_name(string title, string expected)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Blank_input_normalizes_to_empty_at_record_granularity(string? title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title).Should().BeEmpty();
+    }
+
     [Fact]
     public void Distinct_titles_still_normalize_differently()
     {

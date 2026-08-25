@@ -234,7 +234,10 @@ public class PurchaseService
         // Normalize the owned album titles up front so typography / whitespace / zero-width
         // differences between Plex and Deezer can't keep an already-owned album stuck in the queue.
         // This is the same canonical match the missing-album diff uses, so the two agree.
-        var ownedAlbums = NormalizeOwned(await _catalog.GetOwnedAlbums());
+        // Kept alongside the normalized map: the landing check below has to hand the merge it records
+        // the library's own spelling of the title, which normalizing throws away.
+        var libraryAlbums = await _catalog.GetOwnedAlbums();
+        var ownedAlbums = NormalizeOwned(libraryAlbums);
         // User-asserted merges (near-miss titles the normalizer can't collapse): an album carrying an
         // override key is treated as owned, so it leaves the queue and stays gone across reconciles.
         var overrideKeys = await LoadOverrideKeys();
@@ -359,6 +362,39 @@ public class PurchaseService
                 continue;
             }
 
+            // Post-download landing. Plex names an album from its own metadata match, and that match
+            // routinely drops the edition decoration the release was fetched under — "Light Upon the
+            // Lake (10th Anniversary Edition)" arrives as "Light Upon the Lake", or its tracks are
+            // folded straight into the album Plex already had. Matched at release granularity like
+            // everything else, the row can never see its own download arrive: it sits in Sent for ever
+            // and the diff keeps calling the release a gap.
+            //
+            // So this asks the looser question — did the *record* land (see
+            // AlbumTitleMatcher.NormalizeRecord) — and only of a row we actually sent. By then the
+            // files are on disk and nothing is being offered or declined, which is what makes the
+            // looser reading safe here and wrong everywhere else: a pending row still has to treat the
+            // deluxe edition as its own release, or owning the plain one would quietly cancel a
+            // download nobody dismissed. Recorded as a match override rather than just flipping the
+            // status, so the missing-album diff reaches the same verdict instead of re-offering the
+            // release on the next sweep.
+            if (!nowOwned
+                && row.Status == PurchaseStatus.Sent
+                && row.Kind == FeedKind.MissingAlbum
+                && row.Album is { } sentAlbum
+                && LandedTitleFor(
+                       libraryAlbums,
+                       MatchArtistFor(row.Artist.ArtistName, sentAlbum, row.AlbumArtist),
+                       row.Artist.ArtistName,
+                       sentAlbum) is { } landedTitle)
+            {
+                _logger.LogInformation(
+                    "\"{Album}\" ({Artist}) landed in the library as \"{Library}\" — recording the match "
+                    + "so it stops reading as missing",
+                    sentAlbum, row.Artist.ArtistName, landedTitle);
+                await MergeAlbum(row.Artist.ArtistName, sentAlbum, landedTitle);
+                continue;
+            }
+
             if (nowOwned)
             {
                 if (row.Status != PurchaseStatus.InLibrary)
@@ -418,6 +454,48 @@ public class PurchaseService
         (ownedAlbums.TryGetValue(artist, out var set)
          && set.ContainsKey(AlbumTitleMatcher.Normalize(album)))
         || overrideKeys.Contains(AlbumOverrideKey.For(artist, album));
+
+    /// <summary>
+    /// The library's own title for a downloaded release that has landed under a simplified name, or
+    /// null when nothing in the library answers to that record. Tried under the act the library files
+    /// the album under first, then the listing artist — the two differ for a collaboration, and either
+    /// is a real answer.
+    ///
+    /// Deliberately record-level (<see cref="AlbumTitleMatcher.NormalizeRecord"/>) rather than the
+    /// release-level match ownership turns on; see the caller for why that is only safe once the
+    /// download has already happened.
+    /// </summary>
+    private static string? LandedTitleFor(
+        Dictionary<string, Dictionary<string, AudioQuality?>> libraryAlbums,
+        string matchArtist,
+        string listingArtist,
+        string album)
+    {
+        var wanted = AlbumTitleMatcher.NormalizeRecord(album);
+        if (wanted.Length == 0)
+        {
+            return null;
+        }
+
+        foreach (var artist in new[] { matchArtist, listingArtist }
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!libraryAlbums.TryGetValue(artist, out var albums))
+            {
+                continue;
+            }
+
+            foreach (var title in albums.Keys)
+            {
+                if (AlbumTitleMatcher.NormalizeRecord(title) == wanted)
+                {
+                    return title;
+                }
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// The quality of the copy the library holds, or null when it holds none <em>or</em> hasn't had

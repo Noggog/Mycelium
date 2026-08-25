@@ -1,7 +1,7 @@
 namespace Mycelium.Backend.Services.Singletons;
 
 /// <summary>
-/// The lookup key for a manual album merge (<see cref="Mycelium.Interfaces.AlbumMatchOverride"/>):
+/// The lookup key for an album merge (<see cref="Mycelium.Interfaces.AlbumMatchOverride"/>):
 /// the act the library files the album under, plus the album title in its canonical form. Built
 /// identically by the purchase reconcile and the missing-album diff — the same discipline as
 /// <see cref="AlbumTitleMatcher"/> — so a merge recorded once is honoured by both, and typography

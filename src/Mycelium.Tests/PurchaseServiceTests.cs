@@ -184,6 +184,86 @@ public class PurchaseServiceTests
     }
 
     [Fact]
+    public async Task A_sent_edition_closes_out_when_plex_files_it_under_the_plain_title()
+    {
+        // Plex names an album from its own metadata match, which drops the edition decoration the
+        // release was fetched under. Matched at release granularity — the way every offer decision is —
+        // the row can never see its own download arrive and sits in Sent for ever.
+        const string deezerTitle = "Light Upon the Lake (10th Anniversary Edition)";
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Whitney"), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        await _purchases.SetStatus(PurchaseKey.ForAlbum("Whitney", deezerTitle), PurchaseStatus.Sent);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Whitney"] = new(StringComparer.OrdinalIgnoreCase) { ["Light Upon the Lake"] = null },
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Should().BeEmpty();
+        _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+        // Recorded as a merge too, so the missing-album diff reaches the same verdict rather than
+        // listing the release as a gap on the next sweep.
+        _overrides.Items.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(
+                new AlbumMatchOverride("Whitney", deezerTitle, "Light Upon the Lake"));
+    }
+
+    [Fact]
+    public async Task A_pending_edition_is_not_cancelled_by_owning_the_plain_release()
+    {
+        // The other half of the same rule: before the download, an edition is its own release with its
+        // own Deezer id, and owning the plain one is not a reason to quietly cancel a fetch nobody
+        // dismissed. Only a row we actually sent gets the looser reading.
+        const string deezerTitle = "Light Upon the Lake (10th Anniversary Edition)";
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Whitney"), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),
+        });
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Whitney"] = new(StringComparer.OrdinalIgnoreCase) { ["Light Upon the Lake"] = null },
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Select(p => p.Album).Should().Equal(deezerTitle);
+        active.Single().Status.Should().Be(PurchaseStatus.Pending);
+        _overrides.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_sent_row_stays_open_when_only_a_different_record_is_in_the_library()
+    {
+        // The record fold is not a fuzzy match: a tail that carries meaning ("(Remixes)") is a
+        // different record, and its download has not landed just because the original is on the shelf.
+        AllLiked(new[]
+        {
+            new AlbumRating(
+                new ArtistKey("Pretty Lights"), new AlbumKey("A Color Map of the Sun (Remixes)"),
+                "art", DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        await _purchases.SetStatus(
+            PurchaseKey.ForAlbum("Pretty Lights", "A Color Map of the Sun (Remixes)"),
+            PurchaseStatus.Sent);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Pretty Lights"] = new(StringComparer.OrdinalIgnoreCase) { ["A Color Map of the Sun"] = null },
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Single().Status.Should().Be(PurchaseStatus.Sent);
+        _overrides.Items.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Album_owned_under_a_different_album_artist_closes_out_to_in_library()
     {
         // A collaboration surfaced/liked under "Milo", but the library files it under the duo

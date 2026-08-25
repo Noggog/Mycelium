@@ -1,9 +1,11 @@
 namespace Mycelium.Interfaces;
 
 /// <summary>
-/// One user-asserted album merge: a release the diff sees as "missing" is actually already in the
+/// One asserted album merge: a release the diff sees as "missing" is actually already in the
 /// library under a slightly different title (e.g. Deezer's "DOOM (Original Game Soundtrack)" vs.
 /// Plex's "Doom: Original Game Soundtrack"), which the title normalizer can't collapse on its own.
+/// Usually the user's assertion, made from the merge picker; the purchase reconcile also writes one
+/// on its own account when a release it downloaded lands under the title Plex simplified it to.
 /// Keyed by the act the library files the album under (<see cref="MatchArtist"/>) plus the Deezer
 /// title; <see cref="LibraryTitle"/> is the owned album it was merged into (kept for display/audit).
 /// </summary>
