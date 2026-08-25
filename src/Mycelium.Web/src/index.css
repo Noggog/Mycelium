@@ -1136,9 +1136,7 @@ input[type='checkbox'] {
 @media (hover: hover) {
   .disc-main .disc-row:hover {
     transform: translateX(2px);
-    /* Only has to clear the readout pane (z-index 1) for the flyout to spill over it — kept low so a
-       row half-tucked under the sticky Browse header (z-index 10) can't paint back over it. */
-    z-index: 5;
+    z-index: 60;
   }
 }
 /* The row currently open in the readout panel — the boldest expression of the art colour: a strong
@@ -2684,37 +2682,16 @@ a.detail-chip.via:hover {
 /* Artists page — search filter, Deezer column, correction picker              */
 /* ========================================================================== */
 
-/* Pinned under the top bar so the title + search stay reachable however far the list scrolls —
-   the same trick the readout pane pulls on the right. The negative side margins (cancelled by equal
-   padding) bleed the bar out to the viewport edges, so rows sliding underneath are covered edge to
-   edge rather than peeking past `.content`'s gutters. */
 .artists-header {
-  position: sticky;
-  top: var(--topbar-h);
-  /* Above the list (hovered rows sit at 5) but below the top bar (20) and its dropdowns, and below
-     the correction picker's modal backdrop (50). */
-  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 1.25rem;
   flex-wrap: wrap;
-  margin: -2.25rem -2.5rem 1.25rem;
-  padding: 1.1rem 2.5rem;
-  background: linear-gradient(180deg, rgba(11, 9, 18, 0.92), rgba(11, 9, 18, 0.78));
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.25rem;
 }
 .artists-header h1 {
   margin: 0;
-}
-/* Match the narrower mobile gutters so the pinned header still bleeds edge to edge. */
-@media (max-width: 960px) {
-  .artists-header {
-    margin: -1.5rem -1.1rem 1.25rem;
-    padding: 0.9rem 1.1rem;
-  }
 }
 .artist-search {
   display: flex;
