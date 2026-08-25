@@ -49,20 +49,6 @@ public record DiscoveryPage(
 /// each as its own checkbox-toggleable, independently-paged section.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
-/// <summary>What a <see cref="FeedKind"/> means for acquisition.</summary>
-public static class FeedKindExtensions
-{
-    /// <summary>
-    /// Whether a row of this kind is something the downloader can fetch. Artists are wishlist-only
-    /// (there is no such thing as downloading an artist); both album kinds are fetchable, and an
-    /// upgrade differs only in what has to happen to the copy already on disk before the new one
-    /// lands. One definition because five separate call sites gate on this, and a kind admitted by
-    /// four of them would queue and never drain.
-    /// </summary>
-    public static bool IsDownloadableAlbum(this FeedKind kind) =>
-        kind is FeedKind.MissingAlbum or FeedKind.UpgradeAlbum;
-}
-
 public enum FeedKind
 {
     /// <summary>A new artist not in the library, grown from the user's liked artists.</summary>
@@ -118,6 +104,20 @@ public enum FeedKind
     /// thumbs-down. Thumbing it up a second time confirms the like and it never returns.
     /// </summary>
     SecondThoughtsArtist,
+}
+
+/// <summary>What a <see cref="FeedKind"/> means for acquisition.</summary>
+public static class FeedKindExtensions
+{
+    /// <summary>
+    /// Whether a row of this kind is something the downloader can fetch. Artists are wishlist-only
+    /// (there is no such thing as downloading an artist); both album kinds are fetchable, and an
+    /// upgrade differs only in what has to happen to the copy already on disk before the new one
+    /// lands. One definition because five separate call sites gate on this, and a kind admitted by
+    /// four of them would queue and never drain.
+    /// </summary>
+    public static bool IsDownloadableAlbum(this FeedKind kind) =>
+        kind is FeedKind.MissingAlbum or FeedKind.UpgradeAlbum;
 }
 
 /// <summary>
