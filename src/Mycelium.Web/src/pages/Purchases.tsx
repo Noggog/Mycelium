@@ -485,8 +485,12 @@ export default function Purchases() {
   // A hand-added row has no rating behind it — clearing one would be a no-op and the row would sit
   // there forever — so it's deleted directly instead.
   const remove = useMutation({
-    mutationFn: (item: PurchaseItem) => {
+    mutationFn: async (item: PurchaseItem) => {
+      // A manual row is deleted outright whatever state it's in, queued included: nothing re-creates
+      // it, and the drainer re-reads the row before fetching, so a stale id left in its queue finds
+      // nothing there and is skipped.
       if (item.manual) return removeManualPurchase(item.id)
+
       const feedItem: FeedItem = {
         kind: item.kind,
         artist: item.artist,
@@ -499,7 +503,19 @@ export default function Purchases() {
         reconsider: null,
         ownedQuality: null,
       }
-      return clearRating(feedItem)
+      await clearRating(feedItem)
+
+      // Dropping the want isn't enough once a row has been handed to the drainer: the reconcile
+      // only prunes Pending/Failed rows, so an unwanted Queued one survives every pass and gets
+      // downloaded anyway. Moving it back to Pending is what puts it back in the prune's reach —
+      // and it defuses the id already sitting in the drainer's in-memory queue too, since the
+      // consumer re-reads the status before fetching and skips a row that is no longer Queued.
+      //
+      // Deliberately after the rating is cleared rather than before: a Pending row that is *still*
+      // wanted is precisely what the auto-enqueue pass picks up, and during a fast-mode burst that
+      // pass runs every few seconds. Clearing first means every reconcile that could re-queue the
+      // row prunes it instead — the enqueue pass reconciles before it selects candidates.
+      if (item.status === 'Queued') await unsendPurchase(item.id)
     },
     onSuccess: () => {
       invalidate()
@@ -602,9 +618,24 @@ export default function Purchases() {
               row(
                 item,
                 item.status === 'Downloading' ? (
+                  // Nothing is offered mid-fetch: the download is already running and can't be
+                  // called back, so a button here would only pretend to stop it.
                   <span className="dl-spinner" title="Downloading">⬇</span>
                 ) : (
-                  <span className="disc-provenance" title="Queued to download">Queued…</span>
+                  // Still only waiting its turn, so it can still be called off — either back onto
+                  // the pending list, or off the list entirely.
+                  <>
+                    <span className="disc-provenance" title="Queued to download">Queued…</span>
+                    <button
+                      className="disc-btn"
+                      title="Cancel download — back to the pending list"
+                      disabled={busy}
+                      onClick={() => unsend.mutate(item.id)}
+                    >
+                      <IconUndo />
+                    </button>
+                    {removeBtn(item)}
+                  </>
                 ),
               ),
             )}
