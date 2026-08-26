@@ -73,12 +73,12 @@ export default function Dev() {
 
 // ---- The server's own Plex credential ----
 
-// Everything else on this page that touches Plex depends on this token, so it renders first. It used
-// to be PLEX_TOKEN alone, read once at startup: an expired one meant a 500 from whichever button you
-// pressed next, and a redeploy to fix. Now it's stored, checked, and re-mintable here.
+// Everything else on this page that touches Plex depends on this token, so it renders first. It is
+// minted here and stored, rather than configured — an expired one is re-linked in the browser instead
+// of costing a redeploy.
 
 function tokenVerdict(status: PlexServerTokenStatus): { text: string; className: string } {
-  if (!status.configured) return { text: 'Not configured', className: 'error' }
+  if (!status.configured) return { text: 'Not linked', className: 'error' }
   if (status.valid === false) return { text: 'Rejected by Plex', className: 'error' }
   // "Present" is not the same claim as "works" — an unchecked token says so rather than reading green.
   if (status.valid === null) return { text: 'Not checked yet', className: 'dev-status' }
@@ -195,17 +195,15 @@ function PlexServerToken() {
     <div className="dev-tool">
       <h2>Plex connection</h2>
       <p>
-        The token every library read is made with — the catalog sync, the quality sweep, the tag
-        writes. Linking here stores a <strong>server-scoped</strong> token (it can reach this one
-        library and nothing else in the account) and takes effect on the next call, with no restart.
-        The <code>PLEX_TOKEN</code> environment variable is now only the bootstrap: what a fresh
-        deployment uses before anything has been linked here.
+        The credential every library read is made with — the catalog sync, the quality sweep, the tag
+        writes. Linking stores a <strong>server-scoped</strong> token (it reaches this one library and
+        nothing else in the account) and takes effect on the next call, with no restart. Link as the{' '}
+        <strong>server owner</strong>: the same token writes the library&rsquo;s mood tags.
       </p>
       <p>
-        Plex tokens don&rsquo;t last forever — they&rsquo;re revoked when the account password changes
-        with &ldquo;sign out connected devices&rdquo; set, and Plex is moving to shorter-lived ones. The
-        daily catalog sync checks this token and pings plex.tv to push its expiry back, so a lapse
-        shows up here rather than as a button that fails.
+        Plex revokes tokens when the account password changes with &ldquo;sign out connected
+        devices&rdquo; set. The daily catalog sync re-checks this one and pings plex.tv to keep it
+        fresh, so a lapse shows up here rather than as a button that fails.
       </p>
 
       {status.isLoading && <p><em>…</em></p>}
@@ -214,10 +212,7 @@ function PlexServerToken() {
       {current && verdict && (
         <p className={verdict.className}>
           <strong>{verdict.text}</strong>
-          {current.configured && (
-            <> — {current.origin === 'Linked' ? 'linked in-app' : 'from PLEX_TOKEN'}</>
-          )}
-          {current.username && <> as {current.username}</>}
+          {current.username && <> — linked as {current.username}</>}
           {current.checkedAt && <> · checked {new Date(current.checkedAt).toLocaleString()}</>}
         </p>
       )}
@@ -230,9 +225,9 @@ function PlexServerToken() {
         <button type="button" onClick={() => check.mutate()} disabled={check.isPending}>
           {check.isPending ? 'Checking…' : 'Check now'}
         </button>
-        {current?.origin === 'Linked' && (
+        {current?.configured && (
           <button type="button" onClick={() => clear.mutate()} disabled={clear.isPending}>
-            {clear.isPending ? 'Clearing…' : 'Forget stored token'}
+            {clear.isPending ? 'Disconnecting…' : 'Disconnect Plex'}
           </button>
         )}
       </div>

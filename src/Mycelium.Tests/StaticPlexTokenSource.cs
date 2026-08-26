@@ -4,9 +4,8 @@ using Mycelium.Plex.Services.Singletons;
 namespace Mycelium.Tests;
 
 /// <summary>
-/// A fixed token with no store behind it. The real <see cref="PlexTokenSource"/> reads Mongo and falls
-/// back to the environment; tests that only need <see cref="PlexApi"/> to send *a* token shouldn't have
-/// to stand either up.
+/// A fixed token with no store behind it. The real <see cref="PlexTokenSource"/> reads Mongo; tests
+/// that only need <see cref="PlexApi"/> to send *a* token shouldn't have to stand that up.
 /// </summary>
 public sealed class StaticPlexTokenSource : IPlexTokenSource
 {
@@ -17,7 +16,7 @@ public sealed class StaticPlexTokenSource : IPlexTokenSource
     public Task<string> Current() => Task.FromResult(_token);
 
     public Task<PlexTokenResolution> Resolve() =>
-        Task.FromResult(new PlexTokenResolution(_token, PlexTokenOrigin.Environment, null));
+        Task.FromResult(new PlexTokenResolution(_token, null));
 
     public void Invalidate()
     {

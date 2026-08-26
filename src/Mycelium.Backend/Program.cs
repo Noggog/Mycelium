@@ -199,6 +199,12 @@ static IResult DeezerBusy() => Results.Problem(
 // session — the upstream this app depends on turned *it* away — and answering 401 would have the
 // SPA bounce the user through a sign-in that fixes nothing. The message names the fix, because the
 // alternative is a bare 500 that sends whoever pressed the button into the container logs.
+// Nothing is linked. Distinct from a rejection: telling someone to re-mint a credential they have
+// never minted sends them looking for a token that doesn't exist.
+static IResult PlexNotLinked() => Results.Problem(
+    "Plex isn't connected. Link it from the dev panel (Dev tools \u2192 Plex connection).",
+    statusCode: StatusCodes.Status502BadGateway);
+
 static IResult PlexTokenRejected() => Results.Problem(
     "Plex rejected this server's token — it has expired or been revoked. Re-link Plex in the dev "
     + "panel to mint a new one; it takes effect immediately, with no restart.",
@@ -394,6 +400,10 @@ api.MapPost("/catalog/refresh", async (CatalogRefresher refresher) =>
             // explicitly-named dev action (POST /api/dev/catalog/quality-sweep) rather than a side
             // effect of pressing "refresh".
             return Results.Ok(await refresher.Refresh(CatalogRefresher.QualityRead.GapFill));
+        }
+        catch (PlexNotLinkedException)
+        {
+            return PlexNotLinked();
         }
         catch (PlexUnauthorizedException)
         {
@@ -807,11 +817,10 @@ dev.MapPost("/rebuild", async (PlexTagMaintenance maint) =>
     .WithName("DevRebuildPlexTags");
 
 // --- Dev panel: the server's own Plex credential ---
-// The token every library read is made with. It used to be PLEX_TOKEN alone, fixed at startup, so
-// replacing an expired one meant editing the environment and redeploying. These endpoints re-mint it
-// in place: the same plex.tv PIN flow the per-user link uses, pointed at the server credential, with
-// the result stored in Mongo and picked up by the next Plex call. DevUser-gated — this is the
-// credential the whole app reads the library with.
+// The token every library read is made with. These endpoints mint it in place: the same plex.tv PIN
+// flow the per-user link uses, pointed at the server credential, with the result stored in Mongo and
+// picked up by the next Plex call. It is the only way the app gets a Plex credential — DevUser-gated,
+// since this is what the whole app reads the library with.
 var plexToken = api.MapGroup("/dev/plex/server-token").RequireAuthorization("DevUser");
 
 // Cheap and pollable: reports the last verdict rather than asking Plex again.
@@ -848,7 +857,8 @@ plexToken.MapPost("/token", async (PlexTokenLinkRequest body, PlexServerTokenSer
     })
     .WithName("SetPlexServerToken");
 
-// Forget the stored token and fall back to PLEX_TOKEN, if the environment still sets one.
+// Disconnect Plex entirely. The app keeps serving the stored catalog; nothing can refresh it until
+// something links again.
 plexToken.MapDelete("", async (PlexServerTokenService tokens) =>
         Results.Ok(await tokens.Clear()))
     .WithName("ClearPlexServerToken");
@@ -863,6 +873,10 @@ api.MapPost("/dev/catalog/quality-sweep", async (CatalogRefresher refresher) =>
         {
             var result = await refresher.Refresh(CatalogRefresher.QualityRead.Full);
             return Results.Ok(new { artists = result.TotalPresent });
+        }
+        catch (PlexNotLinkedException)
+        {
+            return PlexNotLinked();
         }
         catch (PlexUnauthorizedException)
         {

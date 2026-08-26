@@ -24,8 +24,9 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
       # --- Plex ---
+      # No token here: Plex is connected from the dev panel ("Link with Plex"), and the credential is
+      # stored in Mongo. A fresh deployment starts unlinked and prompts for it.
       PLEX_ENDPOINT: ${PLEX_ENDPOINT}
-      PLEX_TOKEN: ${PLEX_TOKEN}
       PLEX_LIBRARY: ${PLEX_LIBRARY:-}
       # --- Data store ---
       MONGO_URI: mongodb://mongo:27017

@@ -30,7 +30,6 @@ public class PlaylistWiringTests : IDisposable
         // MainModule reads these at registration time and throws without them. Values are never dialled:
         // MongoClient resolves its connection lazily and no Plex call is made by resolution alone.
         Environment.SetEnvironmentVariable("PLEX_ENDPOINT", "http://plex.invalid:32400");
-        Environment.SetEnvironmentVariable("PLEX_TOKEN", "test-token");
         Environment.SetEnvironmentVariable("MONGO_URI", "mongodb://mongo.invalid:27017");
 
         var builder = new ContainerBuilder();

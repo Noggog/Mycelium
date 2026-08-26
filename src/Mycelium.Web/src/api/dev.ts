@@ -114,16 +114,12 @@ export async function getSimilarityWarmStatus(): Promise<SimilarityWarmStatus> {
 
 // ---- The server's own Plex credential ----
 // The token every library read is made with, as opposed to the per-user tokens in api/playlists.ts.
-// It lives in Mongo once linked (PLEX_TOKEN is only the bootstrap), so it can be re-minted here
-// instead of by editing the environment and redeploying.
-
-export type PlexTokenOrigin = 'Linked' | 'Environment' | 'None'
+// It is minted here and stored in Mongo — there is no environment variable for it.
 
 export interface PlexServerTokenStatus {
   configured: boolean
   /** null until something has actually asked Plex — "present" is not the same claim as "works". */
   valid: boolean | null
-  origin: PlexTokenOrigin
   username: string | null
   email: string | null
   linkedAt: string | null
@@ -188,7 +184,7 @@ export async function setPlexServerToken(token: string): Promise<PlexServerToken
   return body!
 }
 
-// Forget the stored token and fall back to PLEX_TOKEN, if the environment still sets one.
+// Disconnect Plex. The stored catalog keeps serving; nothing can refresh it until it's linked again.
 export async function clearPlexServerToken(): Promise<PlexServerTokenStatus> {
   const res = await fetch('/api/dev/plex/server-token', { method: 'DELETE' })
   if (!res.ok) {

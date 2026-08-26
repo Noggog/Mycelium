@@ -19,11 +19,9 @@ public class PlexApi : IPlexApi
     {
         _endpointInfo = endpointInfo;
         _logger = logger;
-        // Two things every call needs, done once here rather than at ~20 call sites: the token is
-        // stamped on the way out (per request, so re-linking takes effect without a restart) and a
-        // refusal comes back as PlexUnauthorizedException rather than a bare 500 several layers up.
-        this.httpClient = new HttpClient(
-            new PlexAuthFailureHandler(new PlexServerTokenHandler(tokens, new HttpClientHandler())));
+        // The credential is applied and its refusal translated in one place rather than at ~20 call
+        // sites — see PlexTokenHandler.
+        this.httpClient = new HttpClient(new PlexTokenHandler(tokens, new HttpClientHandler()));
         this.httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
     }
 
@@ -34,8 +32,12 @@ public class PlexApi : IPlexApi
             return _machineIdentifier;
         }
 
-        // The root endpoint's MediaContainer carries the server identity, including machineIdentifier.
-        var url = $"{_endpointInfo.BaseUri}/";
+        // /identity rather than the root endpoint, because Plex serves this one *without* a token
+        // (the root 401s like everything else). That matters: the machine id is what scopes a new
+        // credential to this server during linking, so reading it must not itself require a working
+        // token — otherwise a dead token can never be replaced, which is exactly the deadlock this
+        // whole flow exists to break.
+        var url = $"{_endpointInfo.BaseUri}/identity";
         _logger.LogDebug("Plex GetMachineIdentifier: {Url}", url);
         var response = await httpClient.GetStringAsync(url);
         var data = JObject.Parse(response);

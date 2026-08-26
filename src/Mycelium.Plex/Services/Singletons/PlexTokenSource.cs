@@ -4,7 +4,7 @@ using Mycelium.Interfaces;
 namespace Mycelium.Plex.Services.Singletons;
 
 /// <summary>
-/// <see cref="IPlexTokenSource"/> over the Mongo-stored credential, falling back to the environment.
+/// <see cref="IPlexTokenSource"/> over the credential linked in the dev panel and stored in Mongo.
 ///
 /// <para>Cached behind a gate rather than read per request: every Plex call goes through here, and a
 /// Mongo round trip on each one would be a real cost for a value that changes about once a year. The
@@ -14,25 +14,22 @@ namespace Mycelium.Plex.Services.Singletons;
 public class PlexTokenSource : IPlexTokenSource
 {
     private readonly IPlexServerTokenRepo _repo;
-    private readonly PlexClientInfo _environment;
     private readonly ILogger<PlexTokenSource> _logger;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PlexTokenResolution? _cached;
 
-    public PlexTokenSource(
-        IPlexServerTokenRepo repo, PlexClientInfo environment, ILogger<PlexTokenSource> logger)
+    public PlexTokenSource(IPlexServerTokenRepo repo, ILogger<PlexTokenSource> logger)
     {
         _repo = repo;
-        _environment = environment;
         _logger = logger;
     }
 
     public async Task<string> Current()
     {
         var resolved = await Resolve();
-        return resolved.Token ?? throw new PlexUnauthorizedException(
-            "No Plex token is configured: nothing is linked in the dev panel and PLEX_TOKEN is unset.");
+        return resolved.Token ?? throw new PlexNotLinkedException(
+            "No Plex credential is linked. Connect Plex from the dev panel.");
     }
 
     public async Task<PlexTokenResolution> Resolve()
@@ -53,13 +50,12 @@ public class PlexTokenSource : IPlexTokenSource
             }
 
             var linked = await _repo.Get();
-            _cached = linked is not null
-                ? new PlexTokenResolution(linked.Token, PlexTokenOrigin.Linked, linked)
-                : string.IsNullOrWhiteSpace(_environment.Token)
-                    ? new PlexTokenResolution(null, PlexTokenOrigin.None, null)
-                    : new PlexTokenResolution(_environment.Token, PlexTokenOrigin.Environment, null);
-
-            _logger.LogInformation("Plex server token resolved from {Origin}.", _cached.Origin);
+            _cached = new PlexTokenResolution(linked?.Token, linked);
+            _logger.LogInformation(
+                linked is not null
+                    ? "Plex credential loaded (linked {Username})."
+                    : "No Plex credential is linked; link one in the dev panel.",
+                linked?.Username ?? "");
             return _cached;
         }
         finally

@@ -14,7 +14,7 @@ export async function getArtists(): Promise<ArtistListItem[]> {
 // Triggers the Library Catalog sync job (POST /catalog/refresh): the backend pulls
 // the artist list from Plex and upserts the catalog. The only Plex-touching call.
 //
-// The failure worth reading is an expired PLEX_TOKEN, which the backend answers as a 502 whose
+// The failure worth reading is an expired Plex credential, which the backend answers as a 502 whose
 // ProblemDetails `detail` names the remedy — so prefer that text over the status line, which on its
 // own says nothing a person can act on.
 export async function refreshCatalog(): Promise<CatalogSyncResult> {

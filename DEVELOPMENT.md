@@ -85,7 +85,6 @@ AppHost env vars to child services).
 
 | Env var | Required? | Purpose |
 |---|---|---|
-| `PLEX_TOKEN` | **Yes** | Plex authentication token |
 | `PLEX_ENDPOINT` | **Yes** | Plex server base URL (backend throws if unset) |
 | `PLEX_LIBRARY` | No | Which Plex library to crawl; if unset, falls back to the first artist-type library |
 | `PLEX_APP_PRODUCT` | No | Name this app shows under in a user's Plex authorised-devices list (default `Mycelium`) |
@@ -94,10 +93,18 @@ AppHost env vars to child services).
 
 There are no hardcoded defaults — every value comes from the environment.
 
+The Plex **credential** is deliberately not among them. It is minted by the plex.tv PIN flow from
+**Dev tools → Plex connection** and stored in Mongo, so an expired token is re-linked in the browser
+rather than by editing the environment and redeploying. A deployment that has never linked simply
+can't read the library; everything else runs. The daily catalog sync re-checks the token and pings
+plex.tv to push its expiry back, so a lapse is reported in the panel and the log instead of surfacing
+as a failed button.
+
 ### Per-user Plex accounts (playlist features)
 
-`PLEX_TOKEN` is the *server owner's* token and stays the app's identity for library metadata — the
-mood tags a thumb writes are shared state and need the owner's rights. That covers both levels: an
+The credential linked in the dev panel is the *server owner's* and stays the app's identity for
+library metadata — the mood tags a thumb writes are shared state and need the owner's rights, so link
+it as the owner. That covers both levels: an
 artist thumb stamps `<user>_liked` on the artist (metadata type 8), and a thumb on a *collection* — a
 compilation or soundtrack, credited to an umbrella rather than an act — stamps the same tag on the
 **album** (type 9), since "Various Artists" is nothing anyone has taste about. The stock "My Library"

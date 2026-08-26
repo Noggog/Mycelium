@@ -6,8 +6,8 @@ namespace Mycelium.Interfaces;
 /// <para><see cref="ServerToken"/> is a credential. It is scoped to the single Plex server this app is
 /// configured against (plex.tv issues a per-server access token, which is what the link flow keeps —
 /// never the account-wide token), so its blast radius is that one library. It is still stored in plain
-/// text in Mongo, like <c>PLEX_TOKEN</c> is in the environment today; encrypting it at rest is worth
-/// doing before this app is exposed to anyone the operator doesn't trust.</para>
+/// text in Mongo, as the server's own credential is; encrypting it at rest is worth doing before this
+/// app is exposed to anyone the operator doesn't trust.</para>
 /// </summary>
 public record PlexLink(
     string Subject,

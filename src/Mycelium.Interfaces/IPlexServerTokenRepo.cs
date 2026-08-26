@@ -19,8 +19,8 @@ public record PlexServerCredential(
 
 /// <summary>
 /// Stores the server-wide Plex token, so it can be re-minted from the dev panel instead of being
-/// baked into the environment and requiring a redeploy to change. Absent means "never linked here",
-/// in which case the caller falls back to the <c>PLEX_TOKEN</c> environment variable.
+/// baked into the environment and requiring a redeploy to change. Absent means the deployment has
+/// never linked Plex — a legitimate starting state, and what the dev panel prompts to fix.
 /// </summary>
 public interface IPlexServerTokenRepo
 {

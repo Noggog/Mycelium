@@ -31,8 +31,13 @@ cp .env.example .env
 # edit .env — see the inline comments
 ```
 
-Required: `PUBLIC_ORIGIN`, the three `OIDC_*` values, `PLEX_ENDPOINT`, `PLEX_TOKEN`,
+Required: `PUBLIC_ORIGIN`, the three `OIDC_*` values, `PLEX_ENDPOINT`,
 `MUSIC_DOWNLOAD_DIR_HOST`, `STREAMRIP_CONFIG_HOST`.
+
+There is no Plex token to set. Once the stack is up, sign in and open **Dev tools → Plex connection →
+Link with Plex**: approving in the browser stores a server-scoped token in Mongo. Do this as the
+**server owner**, since the same credential writes the library's mood tags. The app runs unlinked
+until you do — it just can't read the library.
 
 `MUSIC_DOWNLOAD_DIR_HOST` **must be the same storage Plex scans** for its music library — that's how
 downloaded albums show up in Plex (the app can also trigger a Plex rescan via

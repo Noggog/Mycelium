@@ -75,12 +75,6 @@ public class MainModule : Autofac.Module
 
         builder.RegisterInstance(
             new PlexEndpointInfo(Environment.GetEnvironmentVariable("PLEX_ENDPOINT") ?? throw new InvalidOperationException()));
-        // The bootstrap token only. The credential in use is resolved per request by IPlexTokenSource,
-        // which prefers whatever was linked in the dev panel — so this may now be unset on a
-        // deployment that has linked one, and a fresh deployment uses it to get far enough to link.
-        builder.RegisterInstance(
-            new PlexClientInfo(Environment.GetEnvironmentVariable("PLEX_TOKEN")));
-
         // How the app names itself to plex.tv when linking a user's own Plex account. The client
         // identifier must be stable across restarts — plex.tv ties a link PIN to the device that created
         // it, and a regenerated id would orphan any link the user was midway through approving.

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Net;
 using Mycelium.Interfaces;
 using Mycelium.Plex.Services.Singletons;
@@ -15,7 +15,6 @@ namespace Mycelium.Backend.Services.Singletons;
 public record PlexServerTokenStatus(
     bool Configured,
     bool? Valid,
-    PlexTokenOrigin Origin,
     string? Username,
     string? Email,
     DateTimeOffset? LinkedAt,
@@ -80,7 +79,6 @@ public class PlexServerTokenService
         return new PlexServerTokenStatus(
             Configured: resolved.Token is not null,
             Valid: null,
-            Origin: resolved.Origin,
             Username: resolved.Linked?.Username,
             Email: resolved.Linked?.Email,
             LinkedAt: resolved.Linked?.LinkedAt,
@@ -103,8 +101,8 @@ public class PlexServerTokenService
         if (resolved.Token is null)
         {
             return Record(new PlexServerTokenStatus(
-                false, false, resolved.Origin, null, null, null, DateTimeOffset.UtcNow,
-                "No Plex token is configured. Link one in the dev panel, or set PLEX_TOKEN."));
+                false, false, null, null, null, DateTimeOffset.UtcNow,
+                "Plex isn't linked yet. Use \u201cLink with Plex\u201d above to connect it."));
         }
 
         bool accepted;
@@ -118,7 +116,7 @@ public class PlexServerTokenService
             // recorded as one — the status says "can't tell" rather than blaming the credential.
             _logger.LogWarning(ex, "Couldn't verify the Plex token: the server didn't answer.");
             return Record(new PlexServerTokenStatus(
-                true, null, resolved.Origin, resolved.Linked?.Username, resolved.Linked?.Email,
+                true, null, resolved.Linked?.Username, resolved.Linked?.Email,
                 resolved.Linked?.LinkedAt, DateTimeOffset.UtcNow,
                 $"Couldn't reach the Plex server to check: {ex.Message}"));
         }
@@ -130,15 +128,13 @@ public class PlexServerTokenService
         else
         {
             _logger.LogError(
-                "The Plex server token ({Origin}) is no longer valid. Re-link it in the dev panel; "
-                + "until then the catalog serves whatever the last successful sync stored.",
-                resolved.Origin);
+                "The Plex token is no longer valid. Re-link it in the dev panel; until then the "
+                + "catalog serves whatever the last successful sync stored.");
         }
 
         return Record(new PlexServerTokenStatus(
             Configured: true,
             Valid: accepted,
-            Origin: resolved.Origin,
             Username: resolved.Linked?.Username,
             Email: resolved.Linked?.Email,
             LinkedAt: resolved.Linked?.LinkedAt,
@@ -264,15 +260,13 @@ public class PlexServerTokenService
         }
     }
 
-    /// <summary>
-    /// Forgets the stored token, reverting to <c>PLEX_TOKEN</c> if the environment still supplies one.
-    /// </summary>
+    /// <summary>Disconnects Plex, leaving the app with no credential until something links one.</summary>
     public async Task<PlexServerTokenStatus> Clear()
     {
         await _repo.Clear();
         _tokens.Invalidate();
         _last = null;
-        _logger.LogInformation("The stored Plex server token was cleared; falling back to PLEX_TOKEN.");
+        _logger.LogInformation("The stored Plex token was cleared; Plex is now unlinked.");
         return await Verify();
     }
 
