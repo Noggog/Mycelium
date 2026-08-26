@@ -210,56 +210,6 @@ public class PlexServerTokenService
         return (PlexLinkOutcome.Linked, await Verify());
     }
 
-    /// <summary>
-    /// Stores a token pasted by the operator instead of running the PIN flow — the escape hatch when
-    /// the browser dance isn't available, and the way to install a token copied out of Plex Web.
-    ///
-    /// <para>Verified against the server before anything is written, so a truncated paste is refused
-    /// rather than stored and left to fail every later call. plex.tv is asked for the account name too,
-    /// but only as a label: a server access token isn't a plex.tv account token and won't resolve to
-    /// one, and that must not stop a token the server plainly accepts from being installed.</para>
-    /// </summary>
-    public async Task<(PlexLinkOutcome Outcome, PlexServerTokenStatus Status)> LinkWithToken(string? token)
-    {
-        var pasted = token?.Trim();
-        if (string.IsNullOrEmpty(pasted))
-        {
-            return (PlexLinkOutcome.InvalidToken, await Status());
-        }
-
-        if (!await _plexApi.AcceptsToken(pasted))
-        {
-            return (PlexLinkOutcome.InvalidToken, await Status());
-        }
-
-        await Store(pasted, await AttributeToken(pasted), null);
-        _logger.LogInformation("The server's Plex token was replaced from a pasted value.");
-        return (PlexLinkOutcome.Linked, await Verify());
-    }
-
-    /// <summary>
-    /// Best-effort "who does this belong to", for the panel's benefit only. A server access token is
-    /// not a plex.tv account token, so this legitimately comes back empty for a perfectly good paste.
-    /// </summary>
-    private async Task<string?> AttributeToken(string token)
-    {
-        try
-        {
-            var machineId = await _plexApi.GetMachineIdentifier();
-            return machineId is null ? null : (await _accounts.ResolveAccount(token, machineId))?.Username;
-        }
-        catch (HttpRequestException ex) when (ex.StatusCode
-                   is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogInformation(ex, "Couldn't attribute the pasted Plex token to an account.");
-            return null;
-        }
-    }
-
     /// <summary>Disconnects Plex, leaving the app with no credential until something links one.</summary>
     public async Task<PlexServerTokenStatus> Clear()
     {

@@ -20,7 +20,6 @@ import {
   reapplyPlexTags,
   rebuildPlexTags,
   runQualitySweep,
-  setPlexServerToken,
   setUserQuality,
   startPlexServerTokenLink,
   startSimilarityWarm,
@@ -90,7 +89,6 @@ function PlexServerToken() {
   const [waiting, setWaiting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)
-  const [paste, setPaste] = useState('')
   const authTab = useRef<Window | null>(null)
 
   const status = useQuery<PlexServerTokenStatus>({
@@ -172,20 +170,6 @@ function PlexServerToken() {
 
   const check = useMutation({ mutationFn: verifyPlexServerToken, onSuccess: settle })
 
-  const pasteToken = useMutation({
-    mutationFn: setPlexServerToken,
-    onSuccess: (completion) => {
-      if (completion.outcome !== 'linked') {
-        setProblem("Plex won't accept that token — check it copied whole, and that it hasn't been reset.")
-        return
-      }
-      setProblem(null)
-      setPaste('')
-      settle(completion.status)
-    },
-    onError: (e: Error) => setProblem(e.message),
-  })
-
   const clear = useMutation({ mutationFn: clearPlexServerToken, onSuccess: settle })
 
   const current = status.data
@@ -238,25 +222,6 @@ function PlexServerToken() {
           <a href={fallbackUrl} target="_blank" rel="noreferrer noopener">open it here</a>.
         </p>
       )}
-
-      <form
-        className="controls"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault()
-          if (paste.trim()) pasteToken.mutate(paste.trim())
-        }}
-      >
-        <input
-          type="password"
-          value={paste}
-          onChange={(e) => setPaste(e.target.value)}
-          placeholder="…or paste a token from Plex Web"
-          autoComplete="off"
-        />
-        <button type="submit" disabled={!paste.trim() || pasteToken.isPending}>
-          {pasteToken.isPending ? 'Checking…' : 'Use pasted token'}
-        </button>
-      </form>
 
       {problem && <p className="error">{problem}</p>}
     </div>

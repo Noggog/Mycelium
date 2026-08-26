@@ -169,21 +169,6 @@ export async function completePlexServerTokenLink(): Promise<PlexServerTokenComp
   return (await res.json()) as PlexServerTokenCompletion
 }
 
-// A POST body, never a query parameter — the credential must not reach logs, proxies or history.
-// 400 carries the outcome too, so a refusal is a verdict rather than an error to re-word.
-export async function setPlexServerToken(token: string): Promise<PlexServerTokenCompletion> {
-  const res = await fetch('/api/dev/plex/server-token/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token }),
-  })
-  const body = (await res.json().catch(() => null)) as PlexServerTokenCompletion | null
-  if (!res.ok && !body) {
-    throw new Error(`Failed to set the Plex token: ${res.status} ${res.statusText}`)
-  }
-  return body!
-}
-
 // Disconnect Plex. The stored catalog keeps serving; nothing can refresh it until it's linked again.
 export async function clearPlexServerToken(): Promise<PlexServerTokenStatus> {
   const res = await fetch('/api/dev/plex/server-token', { method: 'DELETE' })

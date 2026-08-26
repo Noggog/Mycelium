@@ -845,18 +845,6 @@ plexToken.MapPost("/complete", async (HttpContext http, PlexServerTokenService t
     })
     .WithName("CompletePlexServerTokenLink");
 
-// Install a token pasted from Plex Web instead. A POST body, never a query parameter: the credential
-// must not reach the request log, proxies or history — same rule as the per-user paste path.
-plexToken.MapPost("/token", async (PlexTokenLinkRequest body, PlexServerTokenService tokens) =>
-    {
-        var (outcome, status) = await tokens.LinkWithToken(body.Token);
-        var payload = new { outcome = outcome.ToString().ToLowerInvariant(), status };
-        // 400 on refusal: that's input for the operator to correct, and the body carries the outcome
-        // either way so the paste box can say which thing went wrong.
-        return outcome == PlexLinkOutcome.Linked ? Results.Ok(payload) : Results.BadRequest(payload);
-    })
-    .WithName("SetPlexServerToken");
-
 // Disconnect Plex entirely. The app keeps serving the stored catalog; nothing can refresh it until
 // something links again.
 plexToken.MapDelete("", async (PlexServerTokenService tokens) =>
