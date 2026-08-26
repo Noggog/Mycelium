@@ -1,4 +1,5 @@
-using Mycelium.Backend.Services.Singletons;
+﻿using Mycelium.Backend.Services.Singletons;
+using Mycelium.Plex.Services.Singletons;
 
 namespace Mycelium.Backend.Services.Background;
 
@@ -57,6 +58,15 @@ public class CatalogSyncService : BackgroundService
             // compilation arriving usually adds a record to an umbrella act the library already had —
             // so it re-checks the (small) set of rated collections against what is now owned.
             await _albumTagBackfill.Backfill();
+        }
+        catch (PlexUnauthorizedException ex)
+        {
+            // No stack trace: nothing here is broken and there is nothing to debug. Retrying nightly
+            // is also futile until someone acts, so the line says what the action is.
+            _logger.LogError(
+                "Scheduled catalog sync cannot read Plex: {Reason} Mint a new token and restart; "
+                + "until then the catalog serves whatever the last successful sync stored.",
+                ex.Message);
         }
         catch (Exception ex)
         {

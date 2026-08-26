@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authentication;
+﻿using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Mycelium.Backend;
@@ -8,6 +8,7 @@ using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
 using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
+using Mycelium.Plex.Services.Singletons;
 using Serilog;
 using Serilog.Events;
 
@@ -194,6 +195,15 @@ static IResult DeezerBusy() => Results.Problem(
     "Deezer didn't answer — it rate-limits bursts. Try again in a moment.",
     statusCode: StatusCodes.Status503ServiceUnavailable);
 
+// Plex refused the server's token. A 502 rather than a 401: nothing is wrong with the caller's
+// session — the upstream this app depends on turned *it* away — and answering 401 would have the
+// SPA bounce the user through a sign-in that fixes nothing. The message names the fix, because the
+// alternative is a bare 500 that sends whoever pressed the button into the container logs.
+static IResult PlexTokenRejected() => Results.Problem(
+    "Plex rejected this server's token (PLEX_TOKEN). It has expired or been revoked — mint a new "
+    + "one and restart the app.",
+    statusCode: StatusCodes.Status502BadGateway);
+
 api.MapGet("/artists", (ILibraryProvider libraryProvider) =>
     {
         return libraryProvider.GetArtistList();
@@ -376,12 +386,19 @@ api.MapPost("/artists/deezer/resolve-all", async (ILibraryProvider library, Deez
 
 // The Library Catalog sync job: pull the artist list from Plex into the local catalog.
 // Daily reads (GET /artists) serve from that catalog, so this is the only Plex-touching path.
-api.MapPost("/catalog/refresh", (CatalogRefresher refresher) =>
+api.MapPost("/catalog/refresh", async (CatalogRefresher refresher) =>
     {
-        // Gap-fill like the scheduled syncs. Re-deriving every album's quality is a separate,
-        // explicitly-named dev action (POST /api/dev/catalog/quality-sweep) rather than a side
-        // effect of pressing "refresh".
-        return refresher.Refresh(CatalogRefresher.QualityRead.GapFill);
+        try
+        {
+            // Gap-fill like the scheduled syncs. Re-deriving every album's quality is a separate,
+            // explicitly-named dev action (POST /api/dev/catalog/quality-sweep) rather than a side
+            // effect of pressing "refresh".
+            return Results.Ok(await refresher.Refresh(CatalogRefresher.QualityRead.GapFill));
+        }
+        catch (PlexUnauthorizedException)
+        {
+            return PlexTokenRejected();
+        }
     })
     .WithName("RefreshCatalog");
 
@@ -795,8 +812,17 @@ dev.MapPost("/rebuild", async (PlexTagMaintenance maint) =>
 // gap-fill new arrivals one small read at a time and this is only for recomputing from scratch.
 api.MapPost("/dev/catalog/quality-sweep", async (CatalogRefresher refresher) =>
     {
-        var result = await refresher.Refresh(CatalogRefresher.QualityRead.Full);
-        return Results.Ok(new { artists = result.TotalPresent });
+        try
+        {
+            var result = await refresher.Refresh(CatalogRefresher.QualityRead.Full);
+            return Results.Ok(new { artists = result.TotalPresent });
+        }
+        catch (PlexUnauthorizedException)
+        {
+            // The whole-library sweep is the other button that reads Plex directly, so it hits an
+            // expired token exactly as the plain refresh does.
+            return PlexTokenRejected();
+        }
     })
     .RequireAuthorization("DevUser")
     .WithName("DevAudioQualitySweep");

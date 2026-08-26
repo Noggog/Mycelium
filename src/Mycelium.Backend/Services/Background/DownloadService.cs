@@ -1,7 +1,8 @@
-using System.Threading.Channels;
+﻿using System.Threading.Channels;
 using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
 using Mycelium.Interfaces;
+using Mycelium.Plex.Services.Singletons;
 
 namespace Mycelium.Backend.Services.Background;
 
@@ -512,6 +513,15 @@ public class DownloadService : BackgroundService
             // album has no arrival signal of its own, so this re-checks the rated set against the
             // catalog rather than reading NewlyPresent.
             await _albumTagBackfill.Backfill();
+        }
+        catch (PlexUnauthorizedException ex)
+        {
+            // This pass ticks every few minutes for hours after a download, so an expired token would
+            // otherwise fill the log with identical stack traces. One actionable line instead.
+            _logger.LogWarning(
+                "Settle pass cannot read Plex: {Reason} Downloaded albums stay marked Sent until a "
+                + "valid token lets a sync see them land.",
+                ex.Message);
         }
         catch (Exception ex)
         {

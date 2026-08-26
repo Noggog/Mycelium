@@ -21,7 +21,9 @@ public class PlexApi : IPlexApi
         _endpointInfo = endpointInfo;
         _clientInfo = clientInfo;
         _logger = logger;
-        this.httpClient = new HttpClient();
+        // Auth failures become PlexUnauthorizedException here rather than a bare 500 several
+        // layers up — see PlexAuthFailureHandler.
+        this.httpClient = new HttpClient(new PlexAuthFailureHandler(new HttpClientHandler()));
         this.httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
         this.httpClient.DefaultRequestHeaders.Add("X-Plex-Token", clientInfo.Token);
     }
@@ -254,16 +256,20 @@ public class PlexApi : IPlexApi
     {
         // The root endpoint is the cheapest thing the server will refuse to answer for a bad token.
         using var request = AsToken(HttpMethod.Get, $"{_endpointInfo.BaseUri}/", token);
-        using var response = await httpClient.SendAsync(request);
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        try
+        {
+            // "Plex refused this token" is the answer this method exists to give, so the refusal the
+            // handler raises for every other call is caught and returned here instead.
+            using var response = await httpClient.SendAsync(request);
+            // Anything else unexpected is the server misbehaving, not a verdict on the token —
+            // throwing keeps that from being reported to the user as "your token is wrong".
+            response.EnsureSuccessStatusCode();
+            return true;
+        }
+        catch (PlexUnauthorizedException)
         {
             return false;
         }
-
-        // Anything else unexpected is the server misbehaving, not a verdict on the token — throwing
-        // keeps that from being reported to the user as "your token is wrong".
-        response.EnsureSuccessStatusCode();
-        return true;
     }
 
     /// <summary>

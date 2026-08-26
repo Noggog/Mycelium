@@ -13,12 +13,29 @@ export async function getArtists(): Promise<ArtistListItem[]> {
 
 // Triggers the Library Catalog sync job (POST /catalog/refresh): the backend pulls
 // the artist list from Plex and upserts the catalog. The only Plex-touching call.
+//
+// The failure worth reading is an expired PLEX_TOKEN, which the backend answers as a 502 whose
+// ProblemDetails `detail` names the remedy — so prefer that text over the status line, which on its
+// own says nothing a person can act on.
 export async function refreshCatalog(): Promise<CatalogSyncResult> {
   const res = await fetch('/api/catalog/refresh', { method: 'POST' })
   if (!res.ok) {
-    throw new Error(`Failed to refresh catalog: ${res.status} ${res.statusText}`)
+    throw new Error(await problemDetail(res, 'Failed to refresh catalog'))
   }
   return (await res.json()) as CatalogSyncResult
+}
+
+// Reads an ASP.NET ProblemDetails body for its human-facing `detail`, falling back to the status
+// line when the response carries none (or isn't JSON at all — a proxy error page, say).
+async function problemDetail(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: string; title?: string }
+    const message = body.detail ?? body.title
+    if (message) return message
+  } catch {
+    // Body wasn't JSON; fall through to the status line.
+  }
+  return `${fallback}: ${res.status} ${res.statusText}`
 }
 
 // Pin a library artist to a specific Deezer artist id (fix a misassociation). The backend stores
