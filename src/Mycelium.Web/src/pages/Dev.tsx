@@ -195,15 +195,9 @@ function PlexServerToken() {
     <div className="dev-tool">
       <h2>Plex connection</h2>
       <p>
-        The credential every library read is made with — the catalog sync, the quality sweep, the tag
-        writes. Linking stores a <strong>server-scoped</strong> token (it reaches this one library and
-        nothing else in the account) and takes effect on the next call, with no restart. Link as the{' '}
-        <strong>server owner</strong>: the same token writes the library&rsquo;s mood tags.
-      </p>
-      <p>
-        Plex revokes tokens when the account password changes with &ldquo;sign out connected
-        devices&rdquo; set. The daily catalog sync re-checks this one and pings plex.tv to keep it
-        fresh, so a lapse shows up here rather than as a button that fails.
+        The credential everything else on this page uses. Link it as the{' '}
+        <strong>server owner</strong> if the status below says it&rsquo;s missing or expired &mdash;
+        nothing that touches the library works until you do. Takes effect immediately, no restart.
       </p>
 
       {status.isLoading && <p><em>…</em></p>}
@@ -287,20 +281,10 @@ function QueueRebuild() {
     <div className="dev-tool">
       <h2>Rebuild recommendations</h2>
       <p>
-        Discards the pending recommendation queue for <strong>every user</strong> and recomputes each
-        from scratch by re-expanding one hop out from that user's currently-liked artists. This is a
-        site-wide sweep — it touches all accounts — and it <strong>keeps ratings</strong> (likes/dislikes/
-        snoozes are untouched); it just rebuilds the <em>undecided</em> candidates the swipe feed draws
-        from. It reads the already-persisted similarity graph (lazily fetching a source on a cache miss),
-        so a cold graph makes it slower — warm it first with <em>Rebuild entire graph</em> for speed.
-      </p>
-      <p>
-        <em>
-          You normally shouldn't need this. Liking an artist already expands its recommendations
-          immediately, and disliking / un-liking now prunes the candidates that artist had seeded — so
-          each queue tracks taste on its own. This is the emergency "nuke and recompute" button for
-          when they drift anyway.
-        </em>
+        Throws away the pending swipe queue for <strong>every user</strong> and recomputes it from
+        their liked artists. Ratings are kept. Rarely needed — queues already update on every
+        like/dislike — so reach for this only when someone&apos;s feed has clearly drifted. Warm the
+        graph first or it&apos;ll be slow.
       </p>
 
       <div className="controls">
@@ -334,14 +318,9 @@ function QualitySweep() {
     <div className="dev-tool">
       <h2>Audio quality sweep</h2>
       <p>
-        Reads every track in the Plex library to work out what format each album is actually in.
-        Needed <strong>once</strong>, to fill in albums that predate quality tracking — after that the
-        ordinary syncs resolve new arrivals a few at a time, whether they came from a download or were
-        dropped into the library by hand.
-      </p>
-      <p>
-        Takes roughly <strong>20&ndash;30 seconds</strong> on a large library and only reads from Plex
-        — nothing is moved, changed or downloaded.
+        Works out what format each album is actually in. Needed <strong>once</strong>, to backfill
+        albums that predate quality tracking — new arrivals resolve on their own after that. Takes
+        20&ndash;30 seconds and only reads from Plex.
       </p>
 
       <div className="controls">
@@ -392,13 +371,9 @@ function UserQuality() {
     <div className="dev-tool">
       <h2>Download quality</h2>
       <p>
-        What each account&apos;s requests are downloaded at. FLAC is roughly <strong>3x</strong> the
-        size of MP3 320 for the same album, so this caps what one person&apos;s likes cost on the
-        shared library. It doesn&apos;t affect listening — Plex transcodes on playback either way.
-      </p>
-      <p>
-        An album several people want is fetched <em>once</em>, at the best of their settings. Accounts
-        appear here after they have signed in at least once.
+        What each account&apos;s requests download at. Turn someone down to cap what their likes cost
+        on the shared disk — FLAC is roughly <strong>3x</strong> the size of MP3 320. Doesn&apos;t
+        affect listening. An album several people want is fetched once, at the best of their settings.
       </p>
 
       {isPending && <p><em>Loading users…</em></p>}
@@ -503,9 +478,9 @@ function CleanupTool() {
     <div className="dev-tool">
       <h2>Cleanup {entries.length > 0 ? `(${entries.length})` : ''}</h2>
       <p>
-        Plex sometimes joins collaborators into one name with a semicolon (e.g.{' '}
-        <code>Nina Simone;Hot Chip</code>). These are really two artists. Resolving splits them apart
-        in the library and re-attributes any ratings to each real artist.
+        Plex sometimes joins collaborators into one name (<code>Nina Simone;Hot Chip</code>). Resolve
+        splits them back into real artists and moves the ratings across. Worth clicking whenever the
+        count above isn&apos;t zero.
       </p>
 
       {isError && <p className="error">Failed to scan: {(error as Error).message}</p>}
@@ -562,15 +537,9 @@ function CatalogRefresh() {
     <div className="dev-tool">
       <h2>Refresh from Plex</h2>
       <p>
-        Re-syncs the <strong>library catalog</strong> from your Plex server — the one and only call
-        that touches Plex directly. It pulls the full artist list from your Plex music library and
-        upserts it into the local catalog store: artists new to Plex are added, artists still present
-        have their metadata refreshed, and artists no longer in Plex are <strong>marked absent</strong>{' '}
-        (soft-removed) so they drop out of the Artists list. It does <strong>not</strong> resolve
-        Deezer identities, warm the similarity graph, or change any ratings/tags — just the artist
-        roster. The catalog already auto-syncs on startup and once daily, so this is only needed when
-        you've just added/removed artists in Plex and want the change reflected immediately. Safe to
-        run repeatedly; it's idempotent.
+        Pulls the artist list from Plex into the local catalog. Click it when you&rsquo;ve just added
+        or removed artists in Plex and don&rsquo;t want to wait for the daily sync. Ratings and tags
+        are untouched; safe to re-run.
       </p>
 
       <div className="controls">
@@ -616,11 +585,10 @@ function SimilarityWarm() {
     <div className="dev-tool">
       <h2>Rebuild entire graph</h2>
       <p>
-        Warms the similarity graph for <strong>every artist in the library</strong> across all
-        sources (Deezer + ListenBrainz), instead of waiting for the lazy path to fill it as you
-        browse/swipe. Runs in the background — bounded by MusicBrainz's ~1 request/second, so a large
-        library takes a while. <em>Force refresh</em> re-fetches even edges that are still fresh;
-        otherwise only missing/stale edges are filled.
+        Fetches similarity data for every artist up front instead of waiting for browsing to fill it
+        in. Worth running on a cold library, or before a recommendation rebuild, to make both fast.
+        Runs in the background and takes a while (MusicBrainz allows ~1 request/second).{' '}
+        <em>Force refresh</em> also re-fetches entries that are still fresh.
       </p>
 
       <div className="controls">
@@ -701,11 +669,10 @@ function PlexTagTools() {
     <div className="dev-tool">
       <h2>Plex tags</h2>
       <p>
-        Per-user <code>&lt;username&gt;_liked</code> / <code>_disliked</code> mood tags mirrored onto
-        artists in Plex. Clear nukes every verdict tag — moods, plus the same-named collections an
-        earlier version wrote; reapply re-derives the moods from stored ratings; rebuild does both (the
-        true reset). The permanent <code>&lt;username&gt;_added</code> credits on albums are untouched by
-        all three — nothing could rebuild them.
+        Per-user <code>&lt;username&gt;_liked</code> / <code>_disliked</code> mood tags on Plex
+        artists. Use these when the tags in Plex have drifted from the ratings here:{' '}
+        <em>rebuild</em> is the full reset, <em>clear</em> just removes them, <em>reapply</em> just
+        re-derives them. <code>&lt;username&gt;_added</code> album credits are never touched.
       </p>
 
       <div className="controls">
@@ -784,9 +751,8 @@ function SimilarityDebug() {
     <div className="dev-tool">
       <h2>Similarity graph</h2>
       <p>
-        Hits <code>GET /related/{'{artist}'}</code> — ingests from every source (Deezer +
-        ListenBrainz) on a cache miss / stale entry, persists the graph, then unifies across sources.
-        Click a card to explore from it.
+        Look up one artist to see the similar artists the recommender sees. Click a card to explore
+        from it; <em>force refresh</em> re-fetches instead of trusting the stored graph.
       </p>
 
       <form onSubmit={onSubmit} className="controls">
