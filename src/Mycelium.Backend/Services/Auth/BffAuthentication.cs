@@ -29,7 +29,16 @@ public static class BffAuthentication
             .AddAuthentication(options =>
             {
                 options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-                options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+                // Challenge falls through to the cookie scheme, which answers 401 (see
+                // OnRedirectToLogin below). Deliberately NOT the OIDC scheme: this is an API, and an
+                // OIDC challenge writes a correlation and a nonce cookie before redirecting to the
+                // IdP. A fetch() can never finish that login, so every such response left two dead
+                // cookies on the origin — a page polling an endpoint while signed out planted them
+                // faster than they expired, until the request header outgrew Kestrel's 32KB limit
+                // and the whole site answered 431 to that browser.
+                //
+                // Login is started deliberately, by the browser navigating to /auth/login, which
+                // names the OIDC scheme itself. Nothing else should ever start one.
             })
             .AddCookie(options =>
             {
@@ -100,6 +109,24 @@ public static class BffAuthentication
                 options.Events.OnRedirectToIdentityProviderForSignOut = ctx =>
                 {
                     ctx.ProtocolMessage.PostLogoutRedirectUri = publicOrigin + "/";
+                    return Task.CompletedTask;
+                };
+
+                // A completed login makes every pending correlation/nonce cookie moot — including
+                // any left by an abandoned attempt. Clearing them here keeps a browser from carrying
+                // dead ones around until they lapse, so a session that accumulated some recovers by
+                // signing in rather than by the user clearing site data.
+                options.Events.OnTicketReceived = ctx =>
+                {
+                    foreach (var name in ctx.HttpContext.Request.Cookies.Keys)
+                    {
+                        if (name.StartsWith(".AspNetCore.Correlation.", StringComparison.Ordinal)
+                            || name.StartsWith(".AspNetCore.OpenIdConnect.Nonce.", StringComparison.Ordinal))
+                        {
+                            ctx.Response.Cookies.Delete(name, new CookieOptions { Path = "/" });
+                        }
+                    }
+
                     return Task.CompletedTask;
                 };
 
