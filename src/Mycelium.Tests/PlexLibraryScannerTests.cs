@@ -24,7 +24,7 @@ public class PlexLibraryScannerTests
 
         public TestScanner(LibraryScannerConfig config, IScheduler scheduler)
             : base(
-                new PlexApi(new PlexEndpointInfo("http://localhost"), new PlexClientInfo("token"),
+                new PlexApi(new PlexEndpointInfo("http://localhost"), new StaticPlexTokenSource("token"),
                     NullLogger<PlexApi>.Instance),
                 config,
                 NullLogger<PlexLibraryScanner>.Instance,

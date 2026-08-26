@@ -38,6 +38,17 @@ public interface IPlexAccountApi
     Task<string?> ClaimPin(long id, string code);
 
     /// <summary>
+    /// Pings plex.tv as <paramref name="token"/>, which refreshes it and pushes back its expiry — the
+    /// same trick python-plexapi's <c>MyPlexAccount.ping()</c> exists for, and the one Overseerr added
+    /// to stop users re-authenticating for watchlist sync. Cheap, so it rides along with the daily
+    /// sync rather than getting a schedule of its own.
+    ///
+    /// <para>Returns false when plex.tv refuses the token — that is a real answer (the credential is
+    /// dead), not a failure to report. Throws only if plex.tv itself errors.</para>
+    /// </summary>
+    Task<bool> Ping(string token);
+
+    /// <summary>
     /// Resolves who a token belongs to and what it may reach on <paramref name="machineIdentifier"/>.
     /// Returns null when that account has no access to this server — the one case worth refusing a link
     /// over, since nothing the app would create could be seen by them.

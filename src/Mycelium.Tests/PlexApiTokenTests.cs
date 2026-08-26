@@ -9,9 +9,10 @@ namespace Mycelium.Tests;
 
 /// <summary>
 /// <see cref="PlexApi.AcceptsToken"/> against a loopback server, because the whole point of the method
-/// is a header override and nothing but a real request proves it happened. <see cref="PlexApi"/> pins
-/// the app's own token to the client's default headers; if the per-request one didn't take precedence,
-/// the pasted-token check would silently validate the *admin* token and accept any string at all.
+/// is a header override and nothing but a real request proves it happened. <see cref="PlexApi"/> stamps
+/// the app's own token onto every request that hasn't set one; if the per-request one didn't take
+/// precedence, the pasted-token check would silently validate the *admin* token and accept any string
+/// at all.
 /// </summary>
 public class PlexApiTokenTests : IDisposable
 {
@@ -69,7 +70,7 @@ public class PlexApiTokenTests : IDisposable
     }
 
     private PlexApi Api() => new(
-        new PlexEndpointInfo(_origin), new PlexClientInfo(AppToken), NullLogger<PlexApi>.Instance);
+        new PlexEndpointInfo(_origin), new StaticPlexTokenSource(AppToken), NullLogger<PlexApi>.Instance);
 
     private string? LastToken()
     {
@@ -95,8 +96,32 @@ public class PlexApiTokenTests : IDisposable
     {
         _reply = HttpStatusCode.Unauthorized;
 
+        // Every other call turns a 401 into PlexUnauthorizedException; this is the one method whose
+        // job is to answer the question, so it catches that and reports a verdict instead.
         (await Api().AcceptsToken("bad-token")).Should().BeFalse();
         LastToken().Should().Be("bad-token");
+    }
+
+    [Fact]
+    public async Task ARefusedTokenSurfacesAsPlexUnauthorized_NotABareHttpFailure()
+    {
+        // The reason the dev panel can say "your token expired" instead of returning a naked 500.
+        _reply = HttpStatusCode.Unauthorized;
+
+        await Api().Invoking(a => a.GetLibraries())
+            .Should().ThrowAsync<PlexUnauthorizedException>()
+            .WithMessage("*no longer valid*");
+    }
+
+    [Fact]
+    public async Task TheServerTokenIsStampedOnCallsThatDontCarryOne()
+    {
+        // Asked per request rather than fixed on the client, which is what lets a re-link take effect
+        // without a restart. GetMachineIdentifier because it tolerates the stub's empty body — the
+        // assertion is about the header, not the payload.
+        await Api().GetMachineIdentifier();
+
+        LastToken().Should().Be(AppToken);
     }
 
     [Fact]

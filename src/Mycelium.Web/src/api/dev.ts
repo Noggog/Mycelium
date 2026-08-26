@@ -111,3 +111,88 @@ export async function getSimilarityWarmStatus(): Promise<SimilarityWarmStatus> {
   }
   return (await res.json()) as SimilarityWarmStatus
 }
+
+// ---- The server's own Plex credential ----
+// The token every library read is made with, as opposed to the per-user tokens in api/playlists.ts.
+// It lives in Mongo once linked (PLEX_TOKEN is only the bootstrap), so it can be re-minted here
+// instead of by editing the environment and redeploying.
+
+export type PlexTokenOrigin = 'Linked' | 'Environment' | 'None'
+
+export interface PlexServerTokenStatus {
+  configured: boolean
+  /** null until something has actually asked Plex — "present" is not the same claim as "works". */
+  valid: boolean | null
+  origin: PlexTokenOrigin
+  username: string | null
+  email: string | null
+  linkedAt: string | null
+  checkedAt: string | null
+  problem: string | null
+}
+
+export type PlexLinkOutcome = 'linked' | 'pending' | 'expired' | 'noserveraccess' | 'invalidtoken'
+
+export interface PlexServerTokenCompletion {
+  outcome: PlexLinkOutcome
+  status: PlexServerTokenStatus
+}
+
+export async function getPlexServerToken(): Promise<PlexServerTokenStatus> {
+  const res = await fetch('/api/dev/plex/server-token')
+  if (!res.ok) {
+    throw new Error(`Failed to load Plex token status: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as PlexServerTokenStatus
+}
+
+// Asks Plex now, rather than reporting the last verdict.
+export async function verifyPlexServerToken(): Promise<PlexServerTokenStatus> {
+  const res = await fetch('/api/dev/plex/server-token/verify', { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to check the Plex token: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as PlexServerTokenStatus
+}
+
+export async function startPlexServerTokenLink(forwardUrl?: string): Promise<string> {
+  const params = new URLSearchParams()
+  if (forwardUrl) params.set('forwardUrl', forwardUrl)
+  const res = await fetch(`/api/dev/plex/server-token/start?${params}`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to start the Plex link: ${res.status} ${res.statusText}`)
+  }
+  return ((await res.json()) as { authUrl: string }).authUrl
+}
+
+export async function completePlexServerTokenLink(): Promise<PlexServerTokenCompletion> {
+  const res = await fetch('/api/dev/plex/server-token/complete', { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to complete the Plex link: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as PlexServerTokenCompletion
+}
+
+// A POST body, never a query parameter — the credential must not reach logs, proxies or history.
+// 400 carries the outcome too, so a refusal is a verdict rather than an error to re-word.
+export async function setPlexServerToken(token: string): Promise<PlexServerTokenCompletion> {
+  const res = await fetch('/api/dev/plex/server-token/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  const body = (await res.json().catch(() => null)) as PlexServerTokenCompletion | null
+  if (!res.ok && !body) {
+    throw new Error(`Failed to set the Plex token: ${res.status} ${res.statusText}`)
+  }
+  return body!
+}
+
+// Forget the stored token and fall back to PLEX_TOKEN, if the environment still sets one.
+export async function clearPlexServerToken(): Promise<PlexServerTokenStatus> {
+  const res = await fetch('/api/dev/plex/server-token', { method: 'DELETE' })
+  if (!res.ok) {
+    throw new Error(`Failed to clear the Plex token: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as PlexServerTokenStatus
+}

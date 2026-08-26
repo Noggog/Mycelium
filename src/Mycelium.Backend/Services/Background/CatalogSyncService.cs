@@ -16,6 +16,7 @@ namespace Mycelium.Backend.Services.Background;
 public class CatalogSyncService : BackgroundService
 {
     private readonly CatalogRefresher _refresher;
+    private readonly PlexServerTokenService _serverToken;
     private readonly PurchaseService _purchases;
     private readonly ArtistTagBackfill _tagBackfill;
     private readonly AlbumTagBackfill _albumTagBackfill;
@@ -24,11 +25,12 @@ public class CatalogSyncService : BackgroundService
     private readonly ILogger<CatalogSyncService> _logger;
 
     public CatalogSyncService(
-        CatalogRefresher refresher, PurchaseService purchases, ArtistTagBackfill tagBackfill,
-        AlbumTagBackfill albumTagBackfill, JitterPolicy jitter, DailySyncSchedule schedule,
-        ILogger<CatalogSyncService> logger)
+        CatalogRefresher refresher, PlexServerTokenService serverToken, PurchaseService purchases,
+        ArtistTagBackfill tagBackfill, AlbumTagBackfill albumTagBackfill, JitterPolicy jitter,
+        DailySyncSchedule schedule, ILogger<CatalogSyncService> logger)
     {
         _refresher = refresher;
+        _serverToken = serverToken;
         _purchases = purchases;
         _tagBackfill = tagBackfill;
         _albumTagBackfill = albumTagBackfill;
@@ -46,6 +48,19 @@ public class CatalogSyncService : BackgroundService
     {
         try
         {
+            // Before anything reads Plex: confirm the credential still works and ping plex.tv to push
+            // its expiry back. This is the pass that runs at startup and then daily, which makes it
+            // the right place for both — an expired token is found by the app rather than by whoever
+            // next presses a button, and a token in daily use never goes cold enough to lapse.
+            var credential = await _serverToken.Verify();
+            if (credential.Valid == false)
+            {
+                // Verify() has already logged what's wrong and what to do about it. Reading the whole
+                // library with a token we just watched Plex refuse would only restate that as a stack
+                // trace. A null verdict is different — the server didn't answer, which may have passed.
+                return;
+            }
+
             // Gap-fill, not a full sweep: after the one-off catch-up the only albums without a
             // recorded quality are new arrivals, and those cost one small read each.
             var result = await _refresher.Refresh(CatalogRefresher.QualityRead.GapFill);
@@ -61,11 +76,11 @@ public class CatalogSyncService : BackgroundService
         }
         catch (PlexUnauthorizedException ex)
         {
-            // No stack trace: nothing here is broken and there is nothing to debug. Retrying nightly
-            // is also futile until someone acts, so the line says what the action is.
+            // Reachable when the token dies *between* the check above and the read — rare, and the
+            // check has said nothing about it, so this line stands alone. No stack trace: nothing is
+            // broken and there is nothing to debug.
             _logger.LogError(
-                "Scheduled catalog sync cannot read Plex: {Reason} Mint a new token and restart; "
-                + "until then the catalog serves whatever the last successful sync stored.",
+                "Scheduled catalog sync cannot read Plex: {Reason} Re-link Plex in the dev panel.",
                 ex.Message);
         }
         catch (Exception ex)

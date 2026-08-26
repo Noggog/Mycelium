@@ -71,6 +71,24 @@ public class PlexAccountApi : IPlexAccountApi
         return string.IsNullOrWhiteSpace(token) ? null : token;
     }
 
+    public async Task<bool> Ping(string token)
+    {
+        using var request = Build(HttpMethod.Post, $"{PlexTv}/ping");
+        request.Headers.Add("X-Plex-Token", token);
+        using var response = await _httpClient.SendAsync(request);
+
+        if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized
+            or System.Net.HttpStatusCode.Forbidden)
+        {
+            _logger.LogWarning("plex.tv refused the keep-alive ping — the token is no longer valid.");
+            return false;
+        }
+
+        response.EnsureSuccessStatusCode();
+        _logger.LogDebug("Pinged plex.tv; the token's expiry has been pushed back.");
+        return true;
+    }
+
     public async Task<PlexAccount?> ResolveAccount(string accountToken, string machineIdentifier)
     {
         var user = await GetJson(accountToken, $"{PlexTv}/user") as JObject

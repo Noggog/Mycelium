@@ -200,8 +200,8 @@ static IResult DeezerBusy() => Results.Problem(
 // SPA bounce the user through a sign-in that fixes nothing. The message names the fix, because the
 // alternative is a bare 500 that sends whoever pressed the button into the container logs.
 static IResult PlexTokenRejected() => Results.Problem(
-    "Plex rejected this server's token (PLEX_TOKEN). It has expired or been revoked — mint a new "
-    + "one and restart the app.",
+    "Plex rejected this server's token — it has expired or been revoked. Re-link Plex in the dev "
+    + "panel to mint a new one; it takes effect immediately, with no restart.",
     statusCode: StatusCodes.Status502BadGateway);
 
 api.MapGet("/artists", (ILibraryProvider libraryProvider) =>
@@ -805,6 +805,53 @@ dev.MapPost("/rebuild", async (PlexTagMaintenance maint) =>
         return Results.Ok(new { cleared = result.Cleared, applied = result.Applied });
     })
     .WithName("DevRebuildPlexTags");
+
+// --- Dev panel: the server's own Plex credential ---
+// The token every library read is made with. It used to be PLEX_TOKEN alone, fixed at startup, so
+// replacing an expired one meant editing the environment and redeploying. These endpoints re-mint it
+// in place: the same plex.tv PIN flow the per-user link uses, pointed at the server credential, with
+// the result stored in Mongo and picked up by the next Plex call. DevUser-gated — this is the
+// credential the whole app reads the library with.
+var plexToken = api.MapGroup("/dev/plex/server-token").RequireAuthorization("DevUser");
+
+// Cheap and pollable: reports the last verdict rather than asking Plex again.
+plexToken.MapGet("", async (PlexServerTokenService tokens) =>
+        Results.Ok(await tokens.Status()))
+    .WithName("GetPlexServerToken");
+
+// Asks Plex now. The panel's "check again" button, and what the daily sync calls on its own.
+plexToken.MapPost("/verify", async (PlexServerTokenService tokens) =>
+        Results.Ok(await tokens.Verify()))
+    .WithName("VerifyPlexServerToken");
+
+plexToken.MapPost("/start", async (HttpContext http, PlexServerTokenService tokens, string? forwardUrl) =>
+        Results.Ok(new { authUrl = await tokens.Start(http.User.GetSubject()!, forwardUrl) }))
+    .WithName("StartPlexServerTokenLink");
+
+// Polled while the operator approves in their browser; "pending" until they finish.
+plexToken.MapPost("/complete", async (HttpContext http, PlexServerTokenService tokens) =>
+    {
+        var (outcome, status) = await tokens.Complete(http.User.GetSubject()!);
+        return Results.Ok(new { outcome = outcome.ToString().ToLowerInvariant(), status });
+    })
+    .WithName("CompletePlexServerTokenLink");
+
+// Install a token pasted from Plex Web instead. A POST body, never a query parameter: the credential
+// must not reach the request log, proxies or history — same rule as the per-user paste path.
+plexToken.MapPost("/token", async (PlexTokenLinkRequest body, PlexServerTokenService tokens) =>
+    {
+        var (outcome, status) = await tokens.LinkWithToken(body.Token);
+        var payload = new { outcome = outcome.ToString().ToLowerInvariant(), status };
+        // 400 on refusal: that's input for the operator to correct, and the body carries the outcome
+        // either way so the paste box can say which thing went wrong.
+        return outcome == PlexLinkOutcome.Linked ? Results.Ok(payload) : Results.BadRequest(payload);
+    })
+    .WithName("SetPlexServerToken");
+
+// Forget the stored token and fall back to PLEX_TOKEN, if the environment still sets one.
+plexToken.MapDelete("", async (PlexServerTokenService tokens) =>
+        Results.Ok(await tokens.Clear()))
+    .WithName("ClearPlexServerToken");
 
 // --- Dev panel: audio-quality catch-up sweep ---
 // Re-derives every owned album's format from a paged read of the whole library (~82k tracks, ~22s).

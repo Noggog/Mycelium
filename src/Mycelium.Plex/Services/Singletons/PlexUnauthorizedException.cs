@@ -2,13 +2,13 @@ namespace Mycelium.Plex.Services.Singletons;
 
 /// <summary>
 /// Plex refused the token — a 401/403 from the media server, not a transport failure. In practice
-/// that means the configured <c>PLEX_TOKEN</c> has been invalidated: Plex revokes every token when
-/// the account password changes with "sign out connected devices" set, and a device registering a
-/// JWK with plex.tv retires the legacy token it replaces.
+/// that means the credential <see cref="IPlexTokenSource"/> resolved has been invalidated: Plex
+/// revokes every token when the account password changes with "sign out connected devices" set, and a
+/// device registering a JWK with plex.tv retires the legacy token it replaces.
 ///
 /// Distinguished from a generic <see cref="HttpRequestException"/> because the remedy is specific
-/// and human: mint a new token and redeploy. Left as a plain 500 it reads as "the app is broken"
-/// and sends you into the logs to find out otherwise.
+/// and human: re-link Plex in the dev panel. Left as a plain 500 it reads as "the app is broken" and
+/// sends you into the logs to find out otherwise.
 /// </summary>
 public class PlexUnauthorizedException : Exception
 {

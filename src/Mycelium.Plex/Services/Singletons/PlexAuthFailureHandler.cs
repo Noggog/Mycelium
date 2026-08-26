@@ -9,7 +9,7 @@ namespace Mycelium.Plex.Services.Singletons;
 /// whatever request happens to run first, so the one place worth catching it is the one every
 /// request passes through.
 /// </summary>
-public class PlexAuthFailureHandler : DelegatingHandler
+internal class PlexAuthFailureHandler : DelegatingHandler
 {
     public PlexAuthFailureHandler(HttpMessageHandler inner) : base(inner)
     {
@@ -24,7 +24,7 @@ public class PlexAuthFailureHandler : DelegatingHandler
             response.Dispose();
             throw new PlexUnauthorizedException(
                 $"Plex rejected the token on {request.Method} {request.RequestUri?.AbsolutePath} "
-                + $"({(int)response.StatusCode}). The configured PLEX_TOKEN is no longer valid.");
+                + $"({(int)response.StatusCode}). The configured Plex token is no longer valid.");
         }
 
         return response;

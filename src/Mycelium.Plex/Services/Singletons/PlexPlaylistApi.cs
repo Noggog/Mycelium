@@ -17,7 +17,7 @@ namespace Mycelium.Plex.Services.Singletons;
 public class PlexPlaylistApi : IPlexPlaylistApi
 {
     private readonly PlexEndpointInfo _endpointInfo;
-    private readonly PlexClientInfo _clientInfo;
+    private readonly IPlexTokenSource _tokens;
     private readonly PlexAppIdentity _identity;
     private readonly IPlexApi _plexApi;
     private readonly ILogger<PlexPlaylistApi> _logger;
@@ -25,13 +25,13 @@ public class PlexPlaylistApi : IPlexPlaylistApi
 
     public PlexPlaylistApi(
         PlexEndpointInfo endpointInfo,
-        PlexClientInfo clientInfo,
+        IPlexTokenSource tokens,
         PlexAppIdentity identity,
         IPlexApi plexApi,
         ILogger<PlexPlaylistApi> logger)
     {
         _endpointInfo = endpointInfo;
-        _clientInfo = clientInfo;
+        _tokens = tokens;
         _identity = identity;
         _plexApi = plexApi;
         _logger = logger;
@@ -106,7 +106,7 @@ public class PlexPlaylistApi : IPlexPlaylistApi
     {
         // Library metadata, identical for every account — read with the server token.
         var response = await Send(
-            HttpMethod.Get, $"/library/sections/{sectionKey}/{field}?type={type}", _clientInfo.Token);
+            HttpMethod.Get, $"/library/sections/{sectionKey}/{field}?type={type}", await _tokens.Current());
         var directory = response?["MediaContainer"]?["Directory"] as JArray;
         if (directory is null)
         {

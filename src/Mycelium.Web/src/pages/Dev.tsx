@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
 import { getRelated } from '../api/related'
@@ -11,14 +11,21 @@ import {
   type CombinedNameEntry,
 } from '../api/maintenance'
 import {
+  clearPlexServerToken,
   clearPlexTags,
+  completePlexServerTokenLink,
+  getPlexServerToken,
   getSimilarityWarmStatus,
   getUserQualities,
   reapplyPlexTags,
   rebuildPlexTags,
   runQualitySweep,
+  setPlexServerToken,
   setUserQuality,
+  startPlexServerTokenLink,
   startSimilarityWarm,
+  verifyPlexServerToken,
+  type PlexServerTokenStatus,
   type RebuildResult,
 } from '../api/dev'
 import type { AudioQuality } from '../types'
@@ -51,6 +58,7 @@ export default function Dev() {
   return (
     <section>
       <h1>Dev tools</h1>
+      <PlexServerToken />
       <CatalogRefresh />
       <QualitySweep />
       <UserQuality />
@@ -60,6 +68,209 @@ export default function Dev() {
       <QueueRebuild />
       <SimilarityDebug />
     </section>
+  )
+}
+
+// ---- The server's own Plex credential ----
+
+// Everything else on this page that touches Plex depends on this token, so it renders first. It used
+// to be PLEX_TOKEN alone, read once at startup: an expired one meant a 500 from whichever button you
+// pressed next, and a redeploy to fix. Now it's stored, checked, and re-mintable here.
+
+function tokenVerdict(status: PlexServerTokenStatus): { text: string; className: string } {
+  if (!status.configured) return { text: 'Not configured', className: 'error' }
+  if (status.valid === false) return { text: 'Rejected by Plex', className: 'error' }
+  // "Present" is not the same claim as "works" — an unchecked token says so rather than reading green.
+  if (status.valid === null) return { text: 'Not checked yet', className: 'dev-status' }
+  return { text: 'Working', className: 'dev-status' }
+}
+
+function PlexServerToken() {
+  const queryClient = useQueryClient()
+  const [waiting, setWaiting] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)
+  const [paste, setPaste] = useState('')
+  const authTab = useRef<Window | null>(null)
+
+  const status = useQuery<PlexServerTokenStatus>({
+    queryKey: ['plex-server-token'],
+    queryFn: getPlexServerToken,
+  })
+
+  const settle = (next: PlexServerTokenStatus) => {
+    queryClient.setQueryData(['plex-server-token'], next)
+    // A token that just started working makes the stale catalog worth re-reading.
+    if (next.valid) queryClient.invalidateQueries({ queryKey: ['artists'] })
+  }
+
+  // While the operator approves in the other tab, ask whether plex.tv has handed over a token yet.
+  // Same shape as the per-user flow in usePlexLink — there's nothing to react to here but the clock.
+  useEffect(() => {
+    if (!waiting) return
+    let cancelled = false
+
+    const timer = setInterval(async () => {
+      try {
+        const { outcome, status: next } = await completePlexServerTokenLink()
+        if (cancelled || outcome === 'pending') return
+
+        setWaiting(false)
+        if (outcome === 'linked') {
+          queryClient.setQueryData(['plex-server-token'], next)
+          queryClient.invalidateQueries({ queryKey: ['artists'] })
+          authTab.current?.close()
+        } else if (outcome === 'noserveraccess') {
+          setProblem("That Plex account can't see this server's library, so its token would be useless here.")
+        } else {
+          setProblem('Timed out — try again.')
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setWaiting(false)
+          setProblem((e as Error).message)
+        }
+      }
+    }, 2000)
+
+    const giveUp = setTimeout(() => {
+      if (!cancelled) {
+        setWaiting(false)
+        setProblem('Timed out — try again.')
+      }
+    }, 5 * 60 * 1000)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      clearTimeout(giveUp)
+    }
+  }, [waiting, queryClient])
+
+  // The tab is opened synchronously on the click, before the round trip that fetches the URL — one
+  // opened in the promise continuation is a popup as far as the browser is concerned, and gets blocked.
+  const connect = async () => {
+    setProblem(null)
+    setFallbackUrl(null)
+    const tab = window.open('about:blank', '_blank')
+    try {
+      const authUrl = await startPlexServerTokenLink(window.location.href)
+      if (tab && !tab.closed) {
+        // Severs the opener reference before handing the tab to plex.tv.
+        tab.opener = null
+        tab.location.href = authUrl
+        authTab.current = tab
+      } else {
+        setFallbackUrl(authUrl)
+      }
+      setWaiting(true)
+    } catch (e) {
+      tab?.close()
+      setProblem((e as Error).message)
+    }
+  }
+
+  const check = useMutation({ mutationFn: verifyPlexServerToken, onSuccess: settle })
+
+  const pasteToken = useMutation({
+    mutationFn: setPlexServerToken,
+    onSuccess: (completion) => {
+      if (completion.outcome !== 'linked') {
+        setProblem("Plex won't accept that token — check it copied whole, and that it hasn't been reset.")
+        return
+      }
+      setProblem(null)
+      setPaste('')
+      settle(completion.status)
+    },
+    onError: (e: Error) => setProblem(e.message),
+  })
+
+  const clear = useMutation({ mutationFn: clearPlexServerToken, onSuccess: settle })
+
+  const current = status.data
+  const verdict = current ? tokenVerdict(current) : null
+
+  return (
+    <div className="dev-tool">
+      <h2>Plex connection</h2>
+      <p>
+        The token every library read is made with — the catalog sync, the quality sweep, the tag
+        writes. Linking here stores a <strong>server-scoped</strong> token (it can reach this one
+        library and nothing else in the account) and takes effect on the next call, with no restart.
+        The <code>PLEX_TOKEN</code> environment variable is now only the bootstrap: what a fresh
+        deployment uses before anything has been linked here.
+      </p>
+      <p>
+        Plex tokens don&rsquo;t last forever — they&rsquo;re revoked when the account password changes
+        with &ldquo;sign out connected devices&rdquo; set, and Plex is moving to shorter-lived ones. The
+        daily catalog sync checks this token and pings plex.tv to push its expiry back, so a lapse
+        shows up here rather than as a button that fails.
+      </p>
+
+      {status.isLoading && <p><em>…</em></p>}
+      {status.isError && <p className="error">{(status.error as Error).message}</p>}
+
+      {current && verdict && (
+        <p className={verdict.className}>
+          <strong>{verdict.text}</strong>
+          {current.configured && (
+            <> — {current.origin === 'Linked' ? 'linked in-app' : 'from PLEX_TOKEN'}</>
+          )}
+          {current.username && <> as {current.username}</>}
+          {current.checkedAt && <> · checked {new Date(current.checkedAt).toLocaleString()}</>}
+        </p>
+      )}
+      {current?.problem && <p className="error">{current.problem}</p>}
+
+      <div className="controls">
+        <button type="button" onClick={connect} disabled={waiting}>
+          {waiting ? 'Waiting for approval…' : 'Link with Plex'}
+        </button>
+        <button type="button" onClick={() => check.mutate()} disabled={check.isPending}>
+          {check.isPending ? 'Checking…' : 'Check now'}
+        </button>
+        {current?.origin === 'Linked' && (
+          <button type="button" onClick={() => clear.mutate()} disabled={clear.isPending}>
+            {clear.isPending ? 'Clearing…' : 'Forget stored token'}
+          </button>
+        )}
+      </div>
+
+      {waiting && (
+        <p className="dev-status">
+          Approve the request in the Plex tab and this will pick it up.{' '}
+          <button type="button" onClick={() => setWaiting(false)}>Cancel</button>
+        </p>
+      )}
+      {fallbackUrl && (
+        <p className="dev-status">
+          The approval tab was blocked —{' '}
+          <a href={fallbackUrl} target="_blank" rel="noreferrer noopener">open it here</a>.
+        </p>
+      )}
+
+      <form
+        className="controls"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault()
+          if (paste.trim()) pasteToken.mutate(paste.trim())
+        }}
+      >
+        <input
+          type="password"
+          value={paste}
+          onChange={(e) => setPaste(e.target.value)}
+          placeholder="…or paste a token from Plex Web"
+          autoComplete="off"
+        />
+        <button type="submit" disabled={!paste.trim() || pasteToken.isPending}>
+          {pasteToken.isPending ? 'Checking…' : 'Use pasted token'}
+        </button>
+      </form>
+
+      {problem && <p className="error">{problem}</p>}
+    </div>
   )
 }
 

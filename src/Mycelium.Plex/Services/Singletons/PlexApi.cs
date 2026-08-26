@@ -9,23 +9,22 @@ namespace Mycelium.Plex.Services.Singletons;
 public class PlexApi : IPlexApi
 {
     private readonly PlexEndpointInfo _endpointInfo;
-    private readonly PlexClientInfo _clientInfo;
     private readonly ILogger<PlexApi> _logger;
     private readonly HttpClient httpClient;
 
     // The server's machineIdentifier is immutable; fetched once and cached for the process lifetime.
     private string? _machineIdentifier;
 
-    public PlexApi(PlexEndpointInfo endpointInfo, PlexClientInfo clientInfo, ILogger<PlexApi> logger)
+    public PlexApi(PlexEndpointInfo endpointInfo, IPlexTokenSource tokens, ILogger<PlexApi> logger)
     {
         _endpointInfo = endpointInfo;
-        _clientInfo = clientInfo;
         _logger = logger;
-        // Auth failures become PlexUnauthorizedException here rather than a bare 500 several
-        // layers up — see PlexAuthFailureHandler.
-        this.httpClient = new HttpClient(new PlexAuthFailureHandler(new HttpClientHandler()));
+        // Two things every call needs, done once here rather than at ~20 call sites: the token is
+        // stamped on the way out (per request, so re-linking takes effect without a restart) and a
+        // refusal comes back as PlexUnauthorizedException rather than a bare 500 several layers up.
+        this.httpClient = new HttpClient(
+            new PlexAuthFailureHandler(new PlexServerTokenHandler(tokens, new HttpClientHandler())));
         this.httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
-        this.httpClient.DefaultRequestHeaders.Add("X-Plex-Token", clientInfo.Token);
     }
 
     public async Task<string?> GetMachineIdentifier()
