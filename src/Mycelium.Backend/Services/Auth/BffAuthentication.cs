@@ -14,6 +14,23 @@ namespace Mycelium.Backend.Services.Auth;
 /// </summary>
 public static class BffAuthentication
 {
+    /// <summary>
+    /// The default scheme: a policy scheme that dispatches to the cookie or the API-token scheme
+    /// depending on what the request carries. Never authenticates anything itself.
+    /// </summary>
+    public const string SelectorScheme = "Mycelium";
+
+    /// <summary>
+    /// "A human, at a browser, right now." The cookie scheme and nothing else.
+    ///
+    /// <para>Used to gate the token-management endpoints. An API token can therefore call the whole
+    /// API as its user but cannot mint another token or revoke one — so a leaked token is a credential
+    /// with a fixed blast radius and a fixed lifetime, not a foothold that can issue itself fresh
+    /// credentials and delete the trail. Rotation stays a thing a person does, which for a credential
+    /// measured in months is the right cadence anyway.</para>
+    /// </summary>
+    public const string InteractiveUserPolicy = "InteractiveUser";
+
     public static void AddBffAuthentication(this WebApplicationBuilder builder)
     {
         // Issuer URL + client credentials of the OIDC provider (Authentik). Required for login;
@@ -28,7 +45,18 @@ public static class BffAuthentication
         builder.Services
             .AddAuthentication(options =>
             {
-                options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                // The default is a *policy* scheme, not a real one: it looks at the request and hands
+                // off to either the cookie scheme or the API-token scheme (see AddPolicyScheme below).
+                // Doing it here rather than per-route is what lets every existing
+                // RequireAuthorization() and RequireAuthorization("DevUser") keep working verbatim
+                // while gaining a second way to authenticate — the alternative, naming both schemes on
+                // forty-odd endpoints, is forty-odd chances to miss one.
+                options.DefaultScheme = SelectorScheme;
+                // Sign-in and sign-out must name a real scheme. Left to default they would inherit
+                // DefaultScheme — the policy scheme above — which can do neither, and the OIDC
+                // callback would fail at the moment it tried to issue the session cookie.
+                options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                options.DefaultSignOutScheme = CookieAuthenticationDefaults.AuthenticationScheme;
                 // Challenge falls through to the cookie scheme, which answers 401 (see
                 // OnRedirectToLogin below). Deliberately NOT the OIDC scheme: this is an API, and an
                 // OIDC challenge writes a correlation and a nonce cookie before redirecting to the
@@ -40,6 +68,24 @@ public static class BffAuthentication
                 // Login is started deliberately, by the browser navigating to /auth/login, which
                 // names the OIDC scheme itself. Nothing else should ever start one.
             })
+            // Picks the credential the request actually presented. A request carrying an API token
+            // header is never treated as a browser session and vice versa, so the two paths can't
+            // shadow each other: a script with a bad token gets a token 401 rather than silently
+            // falling back to an anonymous cookie identity, and a browser is never asked for a bearer.
+            // Forwarding covers challenge and forbid as well as authenticate, so the 401 a caller sees
+            // is written by the handler for the credential they used.
+            .AddPolicyScheme(SelectorScheme, SelectorScheme, options =>
+            {
+                options.ForwardDefaultSelector = context =>
+                    ApiTokenDefaults.HasToken(context.Request)
+                        ? ApiTokenDefaults.AuthenticationScheme
+                        : CookieAuthenticationDefaults.AuthenticationScheme;
+            })
+            // Long-lived tokens for unattended scripts. A second authentication scheme rather than
+            // middleware, so HttpContext.User, [Authorize] and every policy mean the same thing however
+            // the caller authenticated. See ApiTokenAuthenticationHandler.
+            .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
+                ApiTokenDefaults.AuthenticationScheme, _ => { })
             .AddCookie(options =>
             {
                 options.Cookie.Name = "myc.auth";
@@ -155,8 +201,28 @@ public static class BffAuthentication
         // the destructive tag-maintenance endpoints).
         var devUsers = new DevUsers(Environment.GetEnvironmentVariable("DEV_USERNAMES"));
         builder.Services.AddSingleton(devUsers);
+
+        // Minting and checking the API tokens. Registered here rather than in MainModule's assembly
+        // scan because the scan only covers Services.Singletons; its own dependencies (IApiTokenRepo,
+        // IUserRepo) come from Autofac, which is the same container this collection is folded into.
+        builder.Services.AddSingleton<ApiTokenService>();
+
         builder.Services.AddAuthorization(options =>
-            options.AddPolicy("DevUser", policy => policy.RequireAssertion(ctx => devUsers.Includes(ctx.User))));
+        {
+            // Both halves have to agree: the user is listed in DEV_USERNAMES *and* the credential in
+            // hand is allowed dev scope. Checking only the first — which is all this did before tokens
+            // existed, and was correct then — would hand every dev user's automation token the ability
+            // to wipe the library's mood tags. See DevUsers.AllowsDevTools.
+            options.AddPolicy("DevUser", policy =>
+                policy.RequireAssertion(ctx => devUsers.AllowsDevTools(ctx.User)));
+
+            // Naming the cookie scheme makes the policy re-authenticate against it alone, so a request
+            // holding only an API token is unauthenticated *for these endpoints* and gets a 401 —
+            // regardless of what the selector scheme decided for the request as a whole.
+            options.AddPolicy(InteractiveUserPolicy, policy => policy
+                .AddAuthenticationSchemes(CookieAuthenticationDefaults.AuthenticationScheme)
+                .RequireAuthenticatedUser());
+        });
     }
 
     /// <summary>The OIDC subject ("sub") of the current user, or null if unauthenticated.</summary>

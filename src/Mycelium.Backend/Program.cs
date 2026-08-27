@@ -153,7 +153,10 @@ app.MapGet("/auth/me", async (
             return Results.Unauthorized();
         }
 
-        var isDev = devUsers.Includes(user);
+        // The credential matters as well as the person: an API token minted without dev scope is not
+        // a dev session even when its owner is in DEV_USERNAMES. Same call the DevUser policy makes,
+        // so the panel is never offered where the server would refuse it.
+        var isDev = devUsers.AllowsDevTools(user);
         var quality = await qualities.For(user.GetSubject()!);
 
         // Diagnostic: dump every claim and the dev-match decision so we can see exactly what the IdP
@@ -176,6 +179,9 @@ app.MapGet("/auth/me", async (
             // Drives the in-app dev panel's visibility (DEV_USERNAMES). The dev endpoints enforce the
             // same check server-side, so this only governs what the UI bothers to show.
             isDev,
+            // How this request authenticated. Cheap, and it makes /auth/me the one call a script can
+            // make to confirm its token works and resolves to the identity it expected.
+            viaApiToken = ApiTokenClaims.IsApiToken(user),
             // What quality this account's requests download at, resolved (stored tier else the
             // deployment default) so the UI never has to know the default itself. Lets an album card
             // say "you'll get FLAC" rather than leaving the user to guess.
@@ -790,6 +796,55 @@ api.MapPost("/collections/rate", async (
     .RequireAuthorization()
     .WithName("RateCollection");
 
+// --- API tokens for unattended automation ---
+// Long-lived credentials that authenticate as an existing user, so the seeding and playlist-
+// acquisition scripts stop needing a session cookie copied out of devtools every time the old one
+// lapses. See ApiTokenService for what a token is and why it carries the user's own identity.
+//
+// Gated on InteractiveUser — the cookie scheme specifically — rather than plain RequireAuthorization:
+// a token can drive the whole API as its user, but cannot mint another or revoke one. Issuing
+// credentials stays something a person does at a browser, so a leaked token can't quietly reissue
+// itself once the operator starts revoking.
+var apiTokens = api.MapGroup("/tokens").RequireAuthorization(BffAuthentication.InteractiveUserPolicy);
+
+// The caller's own tokens, live and dead. No secrets: the app doesn't have them to return.
+apiTokens.MapGet("", async (HttpContext http, ApiTokenService tokens) =>
+        Results.Ok(await tokens.List(http.User.GetSubject()!)))
+    .WithName("ListApiTokens");
+
+// Mint one. The response is the only time the token value exists anywhere but the caller's hands —
+// it is not stored, not logged, and not retrievable afterwards, so a lost token is re-minted rather
+// than recovered.
+apiTokens.MapPost("", async (
+        HttpContext http, ApiTokenCreateRequest body, ApiTokenService tokens, DevUsers devUsers) =>
+    {
+        var wantsDev = body.Dev == true;
+        if (wantsDev && !devUsers.AllowsDevTools(http.User))
+        {
+            // Refused rather than quietly downgraded to a non-dev token: a script handed a token it
+            // was told is dev-scoped would otherwise fail later, on the one endpoint it needed.
+            return Results.Problem(
+                "Only a dev user, signed in at a browser, can grant a token dev scope.",
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var lifetime = body.ExpiresInDays is { } days ? TimeSpan.FromDays(days) : (TimeSpan?)null;
+        var result = await tokens.Mint(http.User.GetSubject()!, body.Name, wantsDev, lifetime);
+        return result.Minted is { } minted
+            ? Results.Ok(minted)
+            : Results.BadRequest(new { error = result.Error });
+    })
+    .WithName("CreateApiToken");
+
+// Revoke one, by its public id. Takes effect on the next request the token makes — nothing caches a
+// verification. Scoped to the caller's own tokens, so a 404 covers both "no such token" and
+// "somebody else's".
+apiTokens.MapDelete("/{id}", async (string id, HttpContext http, ApiTokenService tokens) =>
+        await tokens.Revoke(http.User.GetSubject()!, id)
+            ? Results.NoContent()
+            : Results.NotFound(new { error = "No live token of yours with that id." }))
+    .WithName("RevokeApiToken");
+
 // --- Dev panel: Plex tag maintenance ---
 // Wipe and/or rebuild the per-user like/dislike mood tags so we can iterate on the tagging logic
 // without leaving orphaned tags scattered across the library. Gated by the "DevUser" policy
@@ -1244,6 +1299,19 @@ internal record PlexTokenLinkRequest(string? Token, string? Label);
 /// would have to be escaped into a query param and unescaped back out for no gain.
 /// </summary>
 internal record ManualAddRequest(string? Url);
+
+/// <summary>
+/// Body of a token mint. A POST body rather than query parameters to match the other mutating
+/// endpoints, and because <paramref name="Dev"/> is a privilege decision that belongs somewhere less
+/// easily copy-pasted than a URL.
+/// </summary>
+/// <param name="Name">Label for the revoke list — which script this is for.</param>
+/// <param name="ExpiresInDays">Null for "until revoked". An expiry is optional because the workflow
+/// this exists for runs on a schedule nobody watches; a token that lapses unannounced would recreate
+/// the exact failure it was built to end.</param>
+/// <param name="Dev">Whether the token may reach the dev endpoints. Off unless asked for, and only
+/// grantable by a dev user at a browser — see the endpoint.</param>
+internal record ApiTokenCreateRequest(string? Name, int? ExpiresInDays, bool? Dev);
 
 /// <summary>
 /// Body of a per-user quality change. A POST body rather than a query parameter to match the other

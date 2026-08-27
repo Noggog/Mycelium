@@ -122,6 +122,129 @@ The "Download now" button works as soon as the ARL is set. The queue also drains
 default — flip the **auto/manual switch** on the Download page to change that. That choice is stored
 in Mongo (not an env var), so it survives redeploys and takes effect without a restart.
 
+## API tokens (unattended scripts)
+
+Every `/api` route is behind the OIDC session cookie, which is fine for the SPA and useless for a
+script: the cookie expires, and the run that inherits the expired one dies with a 401 that only a
+human at a browser can clear. An **API token** is the same identity with a lifetime you choose.
+
+A token authenticates **as an existing user**, not as a service account. Everything per-user keeps
+working exactly as it does in the browser — the ratings it writes are that person's, the mood tags it
+stamps are `<their username>_liked`, and albums it queues come down at their quality tier. There is no
+"a robot did this" code path anywhere in the app, and there didn't need to be.
+
+### Mint one
+
+Minting needs a signed-in browser session, so the least fiddly way is the devtools console on the
+app's own tab — the session cookie goes along on its own and never has to be copied anywhere:
+
+```js
+await (await fetch('/api/tokens', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'playlist acquisition', expiresInDays: 365 }),
+})).json()
+```
+
+The same call with `curl`, if you'd rather — this one does need the cookie pasted, the last time
+you'll have to:
+
+```bash
+curl -sS -X POST "$PUBLIC_ORIGIN/api/tokens" \
+  -H 'Content-Type: application/json' \
+  -b 'myc.auth=<your session cookie>' \
+  -d '{"name":"playlist acquisition","expiresInDays":365}'
+```
+
+```json
+{
+  "id": "9f2c41ab77e0d135",
+  "token": "myc_9f2c41ab77e0d135.qP7…",
+  "name": "playlist acquisition",
+  "subject": "…",
+  "devScope": false,
+  "expiresAt": "2027-08-27T10:14:03Z"
+}
+```
+
+**`token` is shown once and never again.** It is not stored — only a SHA-256 of its secret half is —
+so it cannot be read back, re-sent, or recovered from the database or the logs. Lose it and you mint
+a new one; that is the intended repair, not a limitation to work around. Put it wherever that script
+keeps its secrets.
+
+- `name` — a label for the revoke list. Say which script it's for.
+- `expiresInDays` — optional. Omit for "until revoked". A schedule nobody watches is exactly where an
+  unannounced expiry recreates the problem this feature exists to end, so there is no default expiry.
+- `dev` — see **Dev scope** below. Off unless asked for.
+
+Minting requires an interactive browser session. A token **cannot mint another token or revoke one**,
+by design: that keeps a leaked token to a fixed blast radius and a fixed lifetime, rather than a
+foothold that can reissue itself while you're revoking. Rotation is a thing a person does.
+
+### Use one
+
+```bash
+curl -H "Authorization: Bearer $MYCELIUM_TOKEN" "$PUBLIC_ORIGIN/api/artists"
+```
+
+`Authorization: Bearer` is the header to use. If your reverse proxy has claimed `Authorization` for
+its own handshake — an Authentik forward-auth outpost in front of this app may — the token is also
+read from an app-specific header, which nothing else will touch:
+
+```bash
+curl -H "X-Mycelium-Token: $MYCELIUM_TOKEN" "$PUBLIC_ORIGIN/api/artists"
+```
+
+`GET /auth/me` is the one call to make first: it answers with the subject, username and quality tier
+the token resolves to, plus `viaApiToken: true`. If that returns what you expect, everything under
+`/api` will act as that user.
+
+An invalid, revoked or expired token is always a plain **401** — never a redirect, never a 500. The
+body says nothing about *why*; the app's log names the token's **id** (never its value) and the
+reason, so `podman logs mycelium-app-1 | grep 'Rejected an API token'` tells you which of your tokens
+stopped working and whether it was revoked, expired or never existed.
+
+### Revoke one
+
+```bash
+curl -sS "$PUBLIC_ORIGIN/api/tokens" -b 'myc.auth=<your session cookie>'          # list yours
+curl -sS -X DELETE "$PUBLIC_ORIGIN/api/tokens/9f2c41ab77e0d135" -b 'myc.auth=…'  # revoke by id
+```
+
+Revocation takes effect on the token's next request — nothing caches a verification. The row is kept
+rather than deleted, so an id in an old log line still resolves to something. You only ever see and
+revoke **your own** tokens; there is no cross-user revoke, so removing a departed maintainer means
+dropping them from `DEV_USERNAMES` and, if you want their tokens dead, deleting their rows from the
+`apiTokens` collection in Mongo by hand.
+
+### Dev scope
+
+The dev endpoints include destructive maintenance — `POST /api/dev/plex-tags/clear` strips every
+`_liked`/`_disliked` tag off the entire library. A token does **not** reach them just because its
+owner is listed in `DEV_USERNAMES`. Dev scope is opt-in at creation:
+
+```bash
+curl -sS -X POST "$PUBLIC_ORIGIN/api/tokens" -H 'Content-Type: application/json' -b 'myc.auth=…' \
+  -d '{"name":"tag rebuild","dev":true,"expiresInDays":7}'
+```
+
+Only a dev user, signed in at a browser, can grant it, and it is a *ceiling* rather than a grant:
+dropping a username out of `DEV_USERNAMES` takes their tokens' dev access with it, so revoking a
+maintainer doesn't mean hunting down every token they ever minted. Give ordinary automation the
+default (no dev scope) and mint a short-lived dev-scoped token for the run that actually needs one.
+
+### Notes
+
+- Tokens live in the `apiTokens` collection in Mongo, hashed. Unlike the Deezer ARL and the Plex
+  server token — both of which are stored in the clear because the app has to *replay* them to a
+  third party — this one is only ever *checked*, so the plaintext is never kept. A dump of that
+  collection hands an attacker nothing they can present.
+- A token for an account with no `preferred_username` is refused at creation. The Plex mood tags are
+  built from that username and are skipped silently without one, so such a token would rate happily
+  and tag nothing for weeks before anyone noticed. Sign in to the app once as that user first.
+- Nothing about the browser session changed. The SPA still uses the cookie; the token is a second,
+  parallel way in.
+
 ## Per-user download quality
 
 Lossless runs roughly **3x** the size of 320kbps MP3 for the same album (measured against a real
