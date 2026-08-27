@@ -55,12 +55,15 @@ public class DownloadServiceTests
     }
 
     private static DownloaderConfig Config(
-        TimeSpan? settleWindow = null, int batchSize = 10, TimeSpan? batchInterval = null) =>
+        TimeSpan? settleWindow = null, int batchSize = 10, TimeSpan? batchInterval = null,
+        TimeSpan? fastSettleInterval = null, TimeSpan? fastSettleWindow = null, TimeSpan? itemDelay = null) =>
         new(DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQualities: new[] { "1", "0" },
-            Codec: "", BatchSize: batchSize, ItemDelay: TimeSpan.Zero,
+            Codec: "", BatchSize: batchSize, ItemDelay: itemDelay ?? TimeSpan.Zero,
             BatchInterval: batchInterval ?? TimeSpan.Zero,
             DownloadTimeout: TimeSpan.FromMinutes(15), SettleInterval: TimeSpan.FromMinutes(15),
-            SettleWindow: settleWindow ?? TimeSpan.FromHours(6));
+            SettleWindow: settleWindow ?? TimeSpan.FromHours(6),
+            FastSettleInterval: fastSettleInterval ?? TimeSpan.Zero,
+            FastSettleWindow: fastSettleWindow ?? TimeSpan.Zero);
 
     private DownloadService Sut(DownloaderConfig? config = null)
     {
@@ -178,6 +181,43 @@ public class DownloadServiceTests
         await sut.ConsumeNext(CancellationToken.None);
 
         await _scanner.Received(1).RequestScan(Arg.Any<bool>());
+    }
+
+    /// <summary>
+    /// The between-albums wait paces <em>Deezer</em>, and is scattered so the fetches don't land on a
+    /// machine cadence. Plex is the user's own server: it needs neither. Behind that wait, a drained
+    /// batch sat on a jittered 42-78s before it could even ask for the scan that starts the close-out.
+    /// </summary>
+    [Fact]
+    public async Task The_drained_batch_asks_for_its_rescan_before_taking_the_between_albums_wait()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var item = Album("Big Thief", "Capacity", 12345);
+        _repo.Seed(item);
+        var scanned = new TaskCompletionSource();
+        _scanner.RequestScan(Arg.Any<bool>()).Returns(_ =>
+        {
+            scanned.TrySetResult();
+            return Task.CompletedTask;
+        });
+        // Long enough that a request stuck behind it would never arrive within this test.
+        var sut = Sut(Config(itemDelay: TimeSpan.FromMinutes(10)));
+        await sut.RequestDownload(item.Id);
+
+        using var cts = new CancellationTokenSource();
+        var consuming = sut.ConsumeNext(cts.Token);
+
+        (await Task.WhenAny(scanned.Task, Task.Delay(TimeSpan.FromSeconds(5)))).Should().Be(scanned.Task);
+
+        cts.Cancel();
+        try
+        {
+            await consuming;
+        }
+        catch (OperationCanceledException)
+        {
+            // the item wait was still running; that's the point of the test
+        }
     }
 
     /// <summary>A queue that drained without downloading anything has nothing for Plex to find.</summary>
@@ -551,6 +591,65 @@ public class DownloadServiceTests
 
         await Sut().SettleOnce();
 
+        await _libraryQuery.DidNotReceive().QueryAllArtistMetadata();
+    }
+
+    /// <summary>
+    /// Fast mode already shortens the rescan debounce so albums reach Plex while the user watches. The
+    /// flip behind it still waited on the free-running 15-minute settle timer, whose phase has nothing
+    /// to do with when the batch finished — so a drain in fast mode now runs its own short burst.
+    /// </summary>
+    [Fact]
+    public async Task Fast_settle_burst_re_checks_the_library_once_per_interval_across_its_window()
+    {
+        _repo.Seed(Album("Big Thief", "Capacity", 1, PurchaseStatus.Sent) with { SentAt = DateTimeOffset.UtcNow });
+        var sut = Sut(Config(
+            fastSettleInterval: TimeSpan.FromMilliseconds(1),
+            fastSettleWindow: TimeSpan.FromMilliseconds(6)));
+
+        await sut.FastSettleBurst(CancellationToken.None);
+
+        await _libraryQuery.Received(6).QueryAllArtistMetadata();
+    }
+
+    [Fact]
+    public async Task A_fast_mode_drain_kicks_the_burst()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var item = Album("Big Thief", "Capacity", 12345);
+        _repo.Seed(item);
+        var settled = new TaskCompletionSource();
+        _libraryQuery.QueryAllArtistMetadata().Returns(_ =>
+        {
+            settled.TrySetResult();
+            return Array.Empty<ArtistMetadata>();
+        });
+        await new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance).SetFast(true);
+        var sut = Sut();
+        await sut.RequestDownload(item.Id);
+
+        await sut.ConsumeNext(CancellationToken.None);
+
+        // The burst is deliberately not awaited by the consumer — blocking the loop on it would stall
+        // the downloads it exists to watch for — so wait on the pass rather than on ConsumeNext.
+        (await Task.WhenAny(settled.Task, Task.Delay(TimeSpan.FromSeconds(5)))).Should().Be(settled.Task);
+        await _scanner.Received(1).RequestScan(true);
+    }
+
+    /// <summary>On the normal pace the 15-minute settle loop is enough; nothing extra fires.</summary>
+    [Fact]
+    public async Task A_normal_drain_starts_no_burst()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var item = Album("Big Thief", "Capacity", 12345);
+        _repo.Seed(item);
+        var sut = Sut();
+        await sut.RequestDownload(item.Id);
+
+        await sut.ConsumeNext(CancellationToken.None);
+        await Task.Delay(50);
+
+        await _scanner.Received(1).RequestScan(false);
         await _libraryQuery.DidNotReceive().QueryAllArtistMetadata();
     }
 

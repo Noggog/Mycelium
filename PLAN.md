@@ -196,7 +196,17 @@ Each is independently buildable and testable.
     catalog every `DOWNLOAD_SETTLE_INTERVAL_MINUTES` (file in Plex → reconcile → `in-library`)
     instead of leaving it to the daily catalog sync. That only closes a row early if Plex has
     *already* filed the album (a `PLEX_RESCAN_AFTER_DOWNLOAD` rescan, or a manual library refresh);
-    left to Plex's own nightly pass, the album lands at the daily anchor below instead.
+    left to Plex's own nightly pass, the album lands at the daily anchor below instead. That loop is
+    free-running — its phase has nothing to do with when a batch finished, so a tick can fire moments
+    before the rescan is even requested and then idle a full interval — which is tolerable on the
+    normal pace and not in **fast mode**, where the point is that the page keeps up. So a drain in
+    fast mode also fires a **settle burst**: a pass every `DOWNLOAD_FAST_SETTLE_INTERVAL_SECONDS`
+    (10) for `DOWNLOAD_FAST_SETTLE_WINDOW_MINUTES` (2), which costs nothing once the albums have
+    landed (a settle pass with nothing waiting is one Mongo read) and closes the row while the user
+    is still looking at it. The rescan request itself is made **before** the between-albums wait, not
+    after: that wait paces *Deezer* and is jittered to hide the cadence from it, and neither concerns
+    the user's own Plex — behind it, a drained batch sat on a jittered 42–78 s before it could even
+    ask.
   - **The automatic/manual switch** lives on the Download page and is **persisted in Mongo**
     (`appSettings`, via `IAppSettingsRepo`), so it survives a redeploy and is re-read on every
     drainer tick — flipping it needs no restart. It is **deliberately not an env var** (automatic
@@ -205,7 +215,8 @@ Each is independently buildable and testable.
     `MUSIC_DOWNLOAD_DIR`, `STREAMRIP_BIN`, `DEEZER_QUALITY` (2), `DEEZER_FALLBACK_QUALITY` (1),
     `DEEZER_CODEC`, `DOWNLOAD_BATCH_SIZE` (3), `DOWNLOAD_ITEM_DELAY_SECONDS` (60),
     `DOWNLOAD_BATCH_INTERVAL_MINUTES` (30), `DEEZER_DOWNLOAD_TIMEOUT_MINUTES` (15),
-    `DOWNLOAD_SETTLE_INTERVAL_MINUTES` (15), `DOWNLOAD_SETTLE_WINDOW_HOURS` (6).
+    `DOWNLOAD_SETTLE_INTERVAL_MINUTES` (15), `DOWNLOAD_SETTLE_WINDOW_HOURS` (6),
+    `DOWNLOAD_FAST_SETTLE_INTERVAL_SECONDS` (10), `DOWNLOAD_FAST_SETTLE_WINDOW_MINUTES` (2).
   - **Timer jitter (`JitterPolicy`, app-wide):** recurring waits on the **third-party** paths —
     between albums, between batches, and the daily missing-album / queue-replenish passes — are
     scattered by ±`TIMER_JITTER_PERCENT` (30, clamped 0–90) instead of firing on an exact cadence,
@@ -324,7 +335,9 @@ Worked one at a time. Full design in `~/.claude/plans/dreamy-forging-hearth.md`.
    `PLEX_RESCAN_AFTER_DOWNLOAD`** is on (default off). The window is chosen per request rather than fixed
    (hence the duration-selector `Throttle`): a **fast-mode** burst passes `fast: true` and settles on
    `PLEX_RESCAN_FAST_DEBOUNCE_SECONDS` (default 30, never longer than the normal window), so the panel's
-   in-library flip keeps up with a burst instead of trailing it by five minutes. The debounce clock is
+   in-library flip keeps up with a burst instead of trailing it by five minutes — paired with the
+   fast-mode settle burst above, since a shortened debounce alone still left the flip behind the
+   15-minute settle timer. The debounce clock is
    scheduler-injected so tests drive it deterministically with a `TestScheduler` (no wall-clock waits).
    Library resolution moved from `PlexRepo` to a shared `PlexApi.ResolveLibrary()` so reads and the
    rescan target the same section. Best-effort: scan failures are logged, never thrown. (The `InLibrary`

@@ -30,7 +30,8 @@ public class PurchaseServiceTests
         DownloadDir: "", RipBinary: "rip", Quality: "2", FallbackQualities: new[] { "1", "0" },
         Codec: "", BatchSize: 3, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
         DownloadTimeout: TimeSpan.FromMinutes(15), SettleInterval: TimeSpan.FromMinutes(15),
-        SettleWindow: TimeSpan.FromHours(6));
+        SettleWindow: TimeSpan.FromHours(6), FastSettleInterval: TimeSpan.Zero,
+        FastSettleWindow: TimeSpan.Zero);
 
     public PurchaseServiceTests()
     {

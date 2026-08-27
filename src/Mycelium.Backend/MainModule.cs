@@ -205,7 +205,9 @@ public class MainModule : Autofac.Module
             BatchInterval: TimeSpan.FromMinutes(EnvDouble("DOWNLOAD_BATCH_INTERVAL_MINUTES", 30)),
             DownloadTimeout: TimeSpan.FromMinutes(EnvDouble("DEEZER_DOWNLOAD_TIMEOUT_MINUTES", 15)),
             SettleInterval: TimeSpan.FromMinutes(EnvDouble("DOWNLOAD_SETTLE_INTERVAL_MINUTES", 15)),
-            SettleWindow: TimeSpan.FromHours(EnvDouble("DOWNLOAD_SETTLE_WINDOW_HOURS", 6)));
+            SettleWindow: TimeSpan.FromHours(EnvDouble("DOWNLOAD_SETTLE_WINDOW_HOURS", 6)),
+            FastSettleInterval: TimeSpan.FromSeconds(EnvDouble("DOWNLOAD_FAST_SETTLE_INTERVAL_SECONDS", 10)),
+            FastSettleWindow: TimeSpan.FromMinutes(EnvDouble("DOWNLOAD_FAST_SETTLE_WINDOW_MINUTES", 2)));
     }
 
     private static LibraryScannerConfig BuildLibraryScannerConfig()

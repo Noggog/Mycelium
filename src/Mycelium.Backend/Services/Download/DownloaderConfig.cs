@@ -16,6 +16,13 @@ namespace Mycelium.Backend.Services.Download;
 /// next daily catalog sync.</param>
 /// <param name="SettleWindow">How long after a download we keep watching for it to land. Past this,
 /// the row is left for the daily sync — so an album that never arrives can't keep polling Plex.</param>
+/// <param name="FastSettleInterval">Gap between the close-out re-checks of the fast-mode burst (below).</param>
+/// <param name="FastSettleWindow">How long that burst runs for. In fast mode the user is watching the
+/// Download page while albums land, and a 15-minute <paramref name="SettleInterval"/> — a free-running
+/// timer whose phase has nothing to do with when the batch finished — leaves a finished album sitting on
+/// "Complete" long after Plex can see it. So a drain in fast mode also fires a short burst of settle
+/// passes, <paramref name="FastSettleInterval"/> apart for <paramref name="FastSettleWindow"/>, and the
+/// row closes out while the user is still looking at it. Outside fast mode nothing changes.</param>
 public record DownloaderConfig(
     string DownloadDir,
     string RipBinary,
@@ -35,4 +42,6 @@ public record DownloaderConfig(
     TimeSpan BatchInterval,
     TimeSpan DownloadTimeout,
     TimeSpan SettleInterval,
-    TimeSpan SettleWindow);
+    TimeSpan SettleWindow,
+    TimeSpan FastSettleInterval,
+    TimeSpan FastSettleWindow);

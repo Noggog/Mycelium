@@ -25,7 +25,9 @@ namespace Mycelium.Backend.Services.Background;
 /// Each item goes Pending → Queued → Downloading → Sent/Failed; a downloaded album then closes the loop
 /// (file lands in Plex → reconcile → in-library, drops off the list) — via the settle pass here if it lands
 /// soon after the download, else at the next daily catalog sync. The Plex rescan that starts that is asked
-/// for once the queue has drained, not after each album (see <see cref="RequestScanIfDrained"/>).
+/// for once the queue has drained, not after each album (see <see cref="RequestScanIfDrained"/>), and in
+/// fast mode the drain also kicks a short burst of settle passes (<see cref="FastSettleBurst"/>) so the
+/// close-out keeps pace with the shortened rescan debounce instead of waiting on the 15-minute timer.
 /// Registered as a shared singleton hosted service so the endpoint and the loop are the same instance.
 /// </summary>
 public class DownloadService : BackgroundService
@@ -194,10 +196,20 @@ public class DownloadService : BackgroundService
             var downloaded = await ProcessOne(id);
             if (downloaded)
             {
-                // Drop anything that became owned/unwanted, and space out fetches.
+                // Drop anything that became owned/unwanted.
                 await _purchases.Reconcile();
                 _scanPending = true;
+            }
 
+            // Asked *before* the between-albums wait, not after. That wait exists to space Deezer
+            // fetches and is scattered so they don't land on a machine cadence — neither of which has
+            // anything to do with Plex, which is the user's own server and has no interest in what a
+            // request looks like. Behind the wait, a drained batch sat on a jittered 42-78s before it
+            // could even ask for the scan that starts the whole close-out chain.
+            await RequestScanIfDrained(ct);
+
+            if (downloaded)
+            {
                 // Publish the wait before taking it, so the monitor can show when the next
                 // album starts rather than just "Idle".
                 var wait = _jitter.Apply(_config.ItemDelay);
@@ -205,8 +217,6 @@ public class DownloadService : BackgroundService
                 await Delay(wait, ct);
                 _schedule.ClearItemWait();
             }
-
-            await RequestScanIfDrained();
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
@@ -236,17 +246,83 @@ public class DownloadService : BackgroundService
     /// the point of fast mode is that the panel keeps up with the downloads, which it can't if the
     /// library flip trails them by the normal multi-minute settle.</para>
     /// </summary>
-    private async Task RequestScanIfDrained()
+    private async Task RequestScanIfDrained(CancellationToken ct)
     {
         if (!_scanPending || _queue.Reader.Count > 0)
         {
             return;
         }
 
-        await _scanner.RequestScan(await FastMode());
+        var fast = await FastMode();
+        await _scanner.RequestScan(fast);
         // Cleared after the request, not before: a scanner that threw leaves the flag up so the next
         // item through the loop asks again.
         _scanPending = false;
+
+        if (fast)
+        {
+            StartFastSettle(ct);
+        }
+    }
+
+    /// <summary>The in-flight fast-mode burst, so a second drain joins the one already running.</summary>
+    private Task? _fastSettle;
+
+    /// <summary>
+    /// Starts the fast-mode close-out burst if one isn't already running. Deliberately not awaited:
+    /// the burst outlives this turn of the consumer by design, and blocking the loop on it would stall
+    /// the very downloads it's watching for.
+    /// </summary>
+    private void StartFastSettle(CancellationToken ct)
+    {
+        if (_fastSettle is { IsCompleted: false })
+        {
+            return;
+        }
+
+        _fastSettle = FastSettleBurst(ct);
+    }
+
+    /// <summary>
+    /// Re-checks the library every <c>DOWNLOAD_FAST_SETTLE_INTERVAL_SECONDS</c> for
+    /// <c>DOWNLOAD_FAST_SETTLE_WINDOW_MINUTES</c> after a fast-mode batch drains.
+    ///
+    /// <para>The plain <see cref="Settle"/> loop is a free-running timer: its phase has nothing to do
+    /// with when a batch finished, so a tick can fire moments before the rescan is even requested and
+    /// then idle a full <c>DOWNLOAD_SETTLE_INTERVAL_MINUTES</c> while the album has been visible in
+    /// Plex for most of it. That's tolerable on the normal pace and absurd in fast mode, whose whole
+    /// point is that the page keeps up with the downloads — fast mode already shortens the rescan
+    /// debounce, and without this the flip behind it still waited on the 15-minute timer.</para>
+    ///
+    /// <para>Counted passes rather than a deadline check so the burst is exactly as long as the
+    /// configured window however slow a pass runs, and so a test can drive it with zero delays. Each
+    /// pass is a <see cref="SettleOnce"/>, which is already a no-op (one Mongo read) once nothing is
+    /// waiting to land — so a burst that outlives its albums costs nothing, and one that catches them
+    /// on the first pass doesn't keep hammering Plex for the rest of the window.</para>
+    /// </summary>
+    internal async Task FastSettleBurst(CancellationToken ct)
+    {
+        var interval = _config.FastSettleInterval;
+        var passes = interval > TimeSpan.Zero
+            ? (int)Math.Ceiling(_config.FastSettleWindow / interval)
+            : 1;
+
+        try
+        {
+            for (var i = 0; i < passes && !ct.IsCancellationRequested; i++)
+            {
+                if (i > 0)
+                {
+                    await Delay(interval, ct);
+                }
+
+                await SettleOnce();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // shutting down
+        }
     }
 
     /// <summary>

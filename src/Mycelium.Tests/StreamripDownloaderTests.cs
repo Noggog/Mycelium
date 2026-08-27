@@ -129,7 +129,8 @@ public class StreamripDownloaderTests : IDisposable
                 FallbackQualities: fallbacks ?? new[] { "1", "0" },
                 Codec: "", BatchSize: 1, ItemDelay: TimeSpan.Zero, BatchInterval: TimeSpan.Zero,
                 DownloadTimeout: TimeSpan.FromMinutes(1), SettleInterval: TimeSpan.Zero,
-                SettleWindow: TimeSpan.Zero),
+                SettleWindow: TimeSpan.Zero, FastSettleInterval: TimeSpan.Zero,
+                FastSettleWindow: TimeSpan.Zero),
             _deezer,
             // These cases cover gap downloads, which never reach the swap. The upgrade path has its
             // own tests against a real path map and trash directory.
