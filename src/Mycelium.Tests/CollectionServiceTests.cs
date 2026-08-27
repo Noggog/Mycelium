@@ -421,4 +421,124 @@ public class CollectionServiceTests
         // Recovered from the global row, which is what makes it downloadable and linkable.
         item.DeezerAlbumId.Should().Be(246803);
     }
+
+    // --- RateMany -------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The case the batch endpoint exists to survive. A migration client pastes thirty ids and one of
+    /// them doesn't resolve — Deezer answers an id it has never heard of and an id it is rate-limiting
+    /// with the same nothing. The two that <em>did</em> resolve must still be written, and the caller
+    /// must be told which one didn't and why, or it has to re-read its own ratings to find out.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_records_what_resolved_and_reports_what_didnt()
+    {
+        _deezer.GetAlbum(246803).Returns(Album(246803, "The Breakfast Club", "Various Artists"));
+        _deezer.GetAlbum(999).Returns(Album(999, "Dragon New Warm Mountain", "Big Thief"));
+        _deezer.GetAlbum(404).Returns((DeezerAlbum?)null); // Deezer answered: nothing under that id
+
+        var response = await _sut.RateMany(User, Username, new[]
+        {
+            new CollectionRateItem(246803, "up"),
+            new CollectionRateItem(404, "up"),
+            new CollectionRateItem(999, "up"),
+        });
+
+        response.Total.Should().Be(3);
+        response.Succeeded.Should().Be(2);
+        response.Failed.Should().Be(1);
+
+        // Order and index track the submission, so the caller can line the answer up against what it sent.
+        response.Results.Select(r => r.Index).Should().Equal(0, 1, 2);
+        response.Results[0].Ok.Should().BeTrue();
+        response.Results[0].Item!.Title.Should().Be("The Breakfast Club");
+        response.Results[2].Ok.Should().BeTrue();
+
+        var failure = response.Results[1];
+        failure.Ok.Should().BeFalse();
+        failure.Id.Should().Be(404);
+        failure.Item.Should().BeNull();
+        failure.Error.Should().Contain("404", "the caller retries by id, so the reason has to name one");
+
+        // The point of not aborting on the first failure: the item after it was still written.
+        await _ratings.Received(1).Rate(
+            User, "Big Thief", "Dragon New Warm Mountain", Arg.Any<string?>(), DiscoveryStatus.Liked);
+    }
+
+    /// <summary>
+    /// A batch goes through the same <c>Rate</c> the single-item route does, so the writes a verdict
+    /// implies cannot drift apart between the two paths. Asserted on the tagging in particular, across
+    /// all three rules at once: an umbrella credit stamps the record, a liked ordinary album stamps its
+    /// artist, and a disliked one stamps nothing. Getting any of those wrong in only one of the two
+    /// paths fails nothing at the time it happens.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_tags_each_album_exactly_as_the_single_route_would()
+    {
+        _deezer.GetAlbum(246803).Returns(Album(246803, "The Breakfast Club", "Various Artists"));
+        _deezer.GetAlbum(999).Returns(Album(999, "Dragon New Warm Mountain", "Big Thief"));
+        _deezer.GetAlbum(777).Returns(Album(777, "Gemini Rights", "Steve Lacy"));
+
+        await _sut.RateMany(User, Username, new[]
+        {
+            new CollectionRateItem(246803, "up"),
+            new CollectionRateItem(999, "up"),
+            new CollectionRateItem(777, "down"),
+        });
+
+        // Umbrella credit: the mood goes on the record, and the umbrella act stays clean.
+        _followUps.Received(1).QueueAlbumTagWrite(
+            "Various Artists", "The Breakfast Club", Liked,
+            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Disliked })));
+        // Liked ordinary album: the mood goes on the artist instead, never on the record.
+        _artistFollowUps.Received(1).QueueArtistTagWrite(
+            "Big Thief", Liked,
+            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Disliked })));
+        _followUps.DidNotReceive().QueueAlbumTagWrite(
+            "Big Thief", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        // Disliked ordinary album: nothing at all. A thumbs-down acquires nothing, so it has no gap to
+        // repair, and moving the act's mood would cost a liked band its place in "My Library".
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            "Steve Lacy", Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        _followUps.DidNotReceive().QueueAlbumTagWrite(
+            "Steve Lacy", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+    }
+
+    /// <summary>
+    /// Over the cap the whole batch is refused and <em>nothing</em> is written. Truncating would be the
+    /// worst of both: the caller is told it succeeded and then waits forever on the albums past the cut,
+    /// with no way to learn they were never accepted.
+    /// </summary>
+    [Fact]
+    public async Task An_overlong_batch_is_refused_whole_rather_than_truncated()
+    {
+        _deezer.GetAlbum(Arg.Any<long>()).Returns(Album(1, "Anything", "Various Artists"));
+        var tooMany = Enumerable.Range(0, BatchLimits.MaxItems + 1)
+            .Select(i => new CollectionRateItem(i, "up"))
+            .ToArray();
+
+        var rate = () => _sut.RateMany(User, Username, tooMany);
+
+        (await rate.Should().ThrowAsync<ArgumentException>())
+            .Which.Message.Should().Contain(BatchLimits.MaxItems.ToString())
+            .And.Contain(tooMany.Length.ToString(), "the caller needs to see by how much it overshot");
+        await _ratings.DidNotReceive().Rate(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+            Arg.Any<DiscoveryStatus>());
+    }
+
+    /// <summary>A batch exactly at the cap is accepted — the limit is inclusive.</summary>
+    [Fact]
+    public async Task A_batch_at_the_cap_is_accepted()
+    {
+        _deezer.GetAlbum(Arg.Any<long>()).Returns(Album(1, "Anything", "Various Artists"));
+        var atCap = Enumerable.Range(0, BatchLimits.MaxItems)
+            .Select(i => new CollectionRateItem(i, "up"))
+            .ToArray();
+
+        var response = await _sut.RateMany(User, Username, atCap);
+
+        response.Total.Should().Be(BatchLimits.MaxItems);
+        response.Failed.Should().Be(0);
+    }
 }

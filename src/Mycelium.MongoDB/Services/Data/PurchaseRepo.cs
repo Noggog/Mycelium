@@ -50,6 +50,26 @@ public class PurchaseRepo : IPurchaseRepo
         return (await cursor.ToListAsync()).Select(ToItem).ToArray();
     }
 
+    /// <summary>
+    /// The ids go into the query rather than being matched after the fact, the same way
+    /// <c>ArtistCatalogRepo.GetAlbumPlexRatingKeys</c> resolves a set of artists: a caller asking about
+    /// thirty albums should not pull the whole shared queue across the wire to keep thirty rows. The
+    /// empty case short-circuits before the round trip — <c>$in: []</c> matches nothing, so the trip
+    /// would be pure cost.
+    /// </summary>
+    public async Task<PurchaseItem[]> GetByDeezerAlbumIds(IReadOnlyCollection<long> deezerAlbumIds)
+    {
+        if (deezerAlbumIds.Count == 0)
+        {
+            return Array.Empty<PurchaseItem>();
+        }
+
+        var cursor = await Collection.FindAsync(
+            Builders<BsonDocument>.Filter.In(FieldDeezerAlbumId, deezerAlbumIds.Select(id => new BsonInt64(id))),
+            new FindOptions<BsonDocument> { Sort = Builders<BsonDocument>.Sort.Descending(FieldRequestedAt) });
+        return (await cursor.ToListAsync()).Select(ToItem).ToArray();
+    }
+
     public Task Upsert(PurchaseItem item)
     {
         var update = Builders<BsonDocument>.Update

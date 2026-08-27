@@ -77,6 +77,9 @@ public class PlaylistWiringTests : IDisposable
     [InlineData(typeof(IArtistTagger))]
     // ...and the arrival repair that stamps a verdict once the download lands.
     [InlineData(typeof(AlbumTagBackfill))]
+    // The service every discovery verdict now goes through, single-item and batch alike. Reached by the
+    // scan like the rest, and a parameter of both routes — unresolvable means every thumb 500s.
+    [InlineData(typeof(DiscoveryRatingService))]
     public void Collection_services_resolve(Type service)
     {
         _container.Invoking(c => c.Resolve(service))
@@ -104,11 +107,11 @@ public class PlaylistWiringTests : IDisposable
     }
 
     /// <summary>
-    /// The same requirement stated directly, and the reason anything may take the worker by concrete
-    /// type at all: the registration is single-instance, so every injection site is handed the copy the
-    /// host actually started. A transient registration would hand one of them a second worker whose
-    /// channel nothing drains, and the verdicts written through it would be accepted and then never
-    /// reach Plex.
+    /// The same requirement one level up, and the reason DiscoveryRatingService can take the worker by
+    /// concrete type at all: the registration is single-instance, so every injection site — the rating
+    /// service included — is handed the copy the host actually started. A transient registration would
+    /// give it a second worker whose channel nothing drains, and a whole batch of verdicts at a time
+    /// would be accepted and then never reach Plex.
     /// </summary>
     [Fact]
     public void The_follow_up_worker_is_a_single_shared_instance()

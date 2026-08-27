@@ -268,6 +268,67 @@ public class CollectionService
     }
 
     /// <summary>
+    /// Thumbs a whole set of albums and reports on each one separately.
+    ///
+    /// <para><b>Partial failure is the normal case here</b>, which is why there is no single verdict on
+    /// the batch. Every item costs a <c>/album/{id}</c> lookup, and out of the thirty-odd albums a
+    /// migration script works through, one or two routinely come back unresolvable. Aborting on the
+    /// first would leave the set half-applied with no record of where it stopped; collapsing them into
+    /// one "failed" would hide the twenty-eight that went in. Each item carries its own outcome, and
+    /// the caller retries only what didn't land.</para>
+    ///
+    /// <para><b>On pacing.</b> Sequential, deliberately — that is what keeps a forty-album batch from
+    /// arriving at Deezer as forty concurrent requests. Beyond that the work is already paced, and not
+    /// here: <see cref="IDeezerApi"/>'s implementation puts every call in the process through a rolling
+    /// 40-per-5-seconds window with quota retries behind it, which is the ceiling Deezer actually
+    /// enforces and is shared with the nightly sweeps and everything the UI does. A second delay
+    /// layered on top would throttle nothing that isn't already throttled, while costing this endpoint
+    /// minutes per batch. (<see cref="JitterPolicy"/> is not the precedent for this: it scatters
+    /// <em>recurring background cadences</em> so a fetch doesn't land on the same second of every
+    /// minute. A batch someone triggered is not a cadence and has no signature to hide.)</para>
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// More than <see cref="BatchLimits.MaxItems"/> items — rejected whole rather than truncated.
+    /// </exception>
+    public async Task<RateBatchResponse<CollectionRateResult>> RateMany(
+        string userId, string? username, IReadOnlyList<CollectionRateItem> items)
+    {
+        BatchLimits.Guard(items.Count);
+
+        var results = new List<CollectionRateResult>(items.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var status = item.Verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
+                ? DiscoveryStatus.Liked
+                : DiscoveryStatus.Disliked;
+
+            try
+            {
+                // The same Rate the single-item route calls, so the missing-album row, the per-user
+                // verdict and the album mood are written identically whichever endpoint was used.
+                var rated = await Rate(userId, username, item.Id, status);
+                results.Add(rated is null
+                    // Kept distinct from a thrown failure on purpose: this is Deezer having answered,
+                    // and answered that it holds nothing under that id.
+                    ? new CollectionRateResult(
+                        i, item.Id, Ok: false, Error: $"Deezer has no album {item.Id}.", Item: null)
+                    : new CollectionRateResult(i, item.Id, Ok: true, Error: null, Item: rated));
+            }
+            catch (Exception ex)
+            {
+                // One album failing must not cost the rest of the playlist.
+                _logger.LogWarning(ex, "Batch rating failed for Deezer album {Id}; continuing", item.Id);
+                results.Add(new CollectionRateResult(i, item.Id, Ok: false, Error: ex.Message, Item: null));
+            }
+        }
+
+        var failed = results.Count(r => !r.Ok);
+        return new RateBatchResponse<CollectionRateResult>(
+            results.Count, results.Count - failed, failed, results);
+    }
+
+    /// <summary>
     /// Queues the Plex mood write a verdict on an album implies — the album-level twin of what
     /// <see cref="ArtistFollowUpService.QueueVerdictFollowUp"/> does for an artist. A no-op unless the
     /// album is umbrella-credited: an ordinary album's verdict is already carried by its artist, and
@@ -300,8 +361,8 @@ public class CollectionService
     /// Gives an ordinary album's <em>artist</em> a Plex mood when a like would otherwise leave the
     /// record with no trace in the library at all.
     ///
-    /// <para><b>The gap.</b> <c>POST /api/collections/rate?id=</c> is the only id-keyed way to rate an
-    /// album, which makes it the one external automation uses. On an ordinary,
+    /// <para><b>The gap.</b> <c>POST /api/collections/rate?id=</c> (and the batch beside it) is the only
+    /// id-keyed way to rate an album, which makes it the one external automation uses. On an ordinary,
     /// non-umbrella record it writes the per-user verdict and stops: the album gets no mood, because an
     /// ordinary release must not carry one, and the artist gets no mood, because nothing rated the
     /// artist. <see cref="ArtistTagBackfill"/> cannot repair it either — it re-stamps from <em>artist</em>
@@ -454,3 +515,20 @@ public class CollectionService
             Verdicts.TryGetValue(key, out var status) ? status : null;
     }
 }
+
+/// <summary>
+/// One item of a collection-rating batch — the same two fields the single-item route takes as query
+/// parameters, so a client moving from one endpoint to the other doesn't have to re-derive what a
+/// verdict is.
+/// </summary>
+/// <param name="Id">The Deezer album id.</param>
+/// <param name="Verdict">"up" or "down"; anything that isn't "up" reads as down, exactly as the
+/// single-item route has always treated it.</param>
+public record CollectionRateItem(long Id, string Verdict);
+
+/// <summary>
+/// What became of one item of a collection batch. <paramref name="Item"/> is the rated row — the same
+/// body the single-item route returns — and is null when the item failed, so a caller can act on the
+/// successes without a second read of the list.
+/// </summary>
+public record CollectionRateResult(int Index, long Id, bool Ok, string? Error, CollectionItem? Item);

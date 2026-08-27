@@ -14,6 +14,16 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
 
     public Task<PurchaseItem[]> GetAll() => Task.FromResult(_items.Values.ToArray());
 
+    // Mirrors the Mongo query: an empty ask matches nothing (not everything), and a row that carries
+    // no Deezer id can never match.
+    public Task<PurchaseItem[]> GetByDeezerAlbumIds(IReadOnlyCollection<long> deezerAlbumIds)
+    {
+        var wanted = deezerAlbumIds.ToHashSet();
+        return Task.FromResult(_items.Values
+            .Where(p => p.DeezerAlbumId is { } id && wanted.Contains(id))
+            .ToArray());
+    }
+
     public Task Upsert(PurchaseItem item)
     {
         _items[item.Id] = _items.TryGetValue(item.Id, out var existing)

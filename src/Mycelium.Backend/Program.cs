@@ -535,54 +535,53 @@ api.MapPost("/discovery/refresh", async (DiscoveryEngine engine) =>
     .WithName("RefreshDiscoveryQueue");
 
 // Rate an artist or (when album is supplied) a missing album. verdict = "up" (Liked) | "down" (Disliked).
+// The body of this used to live here; it moved to DiscoveryRatingService when the batch route below
+// arrived, so that both spell a verdict — and, more to the point, the Plex mood tag it adds and the
+// opposite one it strips — exactly the same way. See that type for why a second copy would have been
+// the dangerous kind of duplication: a divergence in the *stripping* fails nothing and shows up months
+// later as a smart playlist matching music the user rejected.
 api.MapPost("/discovery/rate", async (
         string artist, string? album, string? albumArt, string verdict, bool? upgrade,
-        HttpContext http, DiscoveryEngine engine, ArtistFollowUpService followUps,
-        CollectionService collections) =>
+        HttpContext http, DiscoveryRatingService ratings) =>
     {
-        var status = verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
-            ? DiscoveryStatus.Liked
-            : DiscoveryStatus.Disliked;
-        var userId = http.User.GetSubject()!;
-        if (string.IsNullOrEmpty(album))
-        {
-            // Record the verdict — that's what the UI is waiting on — and leave the frontier expansion
-            // and the Plex write to the follow-up worker, so a thumb never blocks on the source APIs.
-            var depth = await engine.RecordArtistVerdict(userId, artist, status);
-            // The queued Plex write mirrors the verdict as a per-user mood tag ("<username>_liked"/
-            // "_disliked"), which a music smart playlist can filter on via "Artist Mood". Stamp the new
-            // verdict and strip the opposite so the latest rating is the only tag left (a like→dislike
-            // flip drops "_liked").
-            var username = http.User.FindFirst("preferred_username")?.Value;
-            var tag = ArtistTag.For(username, status);
-            var opposite = status == DiscoveryStatus.Liked ? DiscoveryStatus.Disliked : DiscoveryStatus.Liked;
-            var oppositeTag = tag != null ? ArtistTag.For(username, opposite) : null;
-            followUps.QueueVerdictFollowUp(
-                userId, artist, status, depth,
-                addTag: tag,
-                removeTags: oppositeTag != null ? new[] { oppositeTag } : Array.Empty<string>());
-        }
-        else if (upgrade == true)
-        {
-            // A thumbs-down on an upgrade card means "keep the copy we have", not "I dislike this
-            // album" — the user owns it and presumably likes it. Routed to its own verdict store so
-            // it never lands on their Ratings page as a rejection. See DiscoveryEngine.RateUpgrade.
-            await engine.RateUpgrade(userId, artist, album, albumArt, status);
-        }
-        else
-        {
-            await engine.RateAlbum(userId, artist, album, albumArt, status);
-            // A collection has no act that could carry the verdict — "Various Artists" liked would
-            // claim every compilation in the library — so an umbrella-credited album is stamped on the
-            // album itself, reachable from a smart playlist as "Album Mood". A no-op for every other
-            // album, whose artist already carries it. Queued, like the artist write.
-            collections.QueueTagWrite(
-                http.User.FindFirst("preferred_username")?.Value, artist, album, status);
-        }
+        await ratings.RateOne(
+            http.User.GetSubject()!,
+            http.User.FindFirst("preferred_username")?.Value,
+            new DiscoveryRateItem(artist, album, albumArt, verdict, upgrade));
         return Results.NoContent();
     })
     .RequireAuthorization()
     .WithName("RateCandidate");
+
+// The same verdict, a playlist at a time. Exists for the migration client, which queues a whole
+// playlist's worth of albums at once — 15–40 of them across as many artists — and until now paid a
+// request per item plus its own client-side throttle for the privilege.
+//
+// A JSON body rather than query parameters, because a batch cannot go in a query string; the item
+// shape is field-for-field the single route's parameters, so nothing has to be re-derived to move
+// between the two. Answers 200 with a *per-item* verdict rather than one pass/fail: partial failure is
+// the expected outcome, not an exception, and a caller told only "some of that didn't work" would have
+// to re-read its ratings to find out which. Over the cap is a 400, never a silent truncation — a client
+// told "OK" about 50 of the 60 albums it sent would wait forever on the other ten. Same auth as the
+// single route: this is the same act, in bulk.
+api.MapPost("/discovery/rate/batch", async (
+        DiscoveryRateBatchRequest body, HttpContext http, DiscoveryRatingService ratings) =>
+    {
+        try
+        {
+            return Results.Ok(await ratings.RateMany(
+                http.User.GetSubject()!,
+                http.User.FindFirst("preferred_username")?.Value,
+                body.Items ?? Array.Empty<DiscoveryRateItem>()));
+        }
+        catch (ArgumentException ex)
+        {
+            // Over the cap. Same shape the tag-edit and playlist routes answer a bad request with.
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    })
+    .RequireAuthorization()
+    .WithName("RateCandidateBatch");
 
 // Ad-hoc seed: add an artist that no one in the library recommends yet (so it never surfaces in the
 // feed) straight from a source search. Pins the user's *chosen* candidate by id (honouring their
@@ -799,6 +798,36 @@ api.MapPost("/collections/rate", async (
     .RequireAuthorization()
     .WithName("RateCollection");
 
+// The same thumb, a playlist at a time — the collections twin of /discovery/rate/batch, and there for
+// the same client: a migration script naming 15–40 records at once instead of one request per album.
+//
+// A JSON body because a batch can't go in a query string. The per-item answer matters more here than on
+// the discovery batch: every item costs a Deezer /album/{id} lookup, and an id Deezer won't resolve
+// right now is an ordinary outcome — so an item that failed says so and names why, beside the ones that
+// went in, each carrying the same row the single route returns. The 404 the single route answers an
+// unknown id with becomes a per-item error, since one unresolvable album must not decide the status
+// code for the other twenty-nine. Over the cap is a 400 rather than a truncation, as above.
+//
+// CollectionService.RateMany explains the pacing: sequential, on top of the rolling rate-limit window
+// DeezerApi already puts every call in the process through.
+api.MapPost("/collections/rate/batch", async (
+        CollectionRateBatchRequest body, HttpContext http, CollectionService collections) =>
+    {
+        try
+        {
+            return Results.Ok(await collections.RateMany(
+                http.User.GetSubject()!,
+                http.User.FindFirst("preferred_username")?.Value,
+                body.Items ?? Array.Empty<CollectionRateItem>()));
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    })
+    .RequireAuthorization()
+    .WithName("RateCollectionBatch");
+
 // --- API tokens for unattended automation ---
 // Long-lived credentials that authenticate as an existing user, so the seeding and playlist-
 // acquisition scripts stop needing a session cookie copied out of devtools every time the old one
@@ -1004,13 +1033,51 @@ devSim.MapGet("/warm", (SimilarityGraphWarmer warmer) =>
 // persisted with a status (pending → sent → in-library). Reconciles on read so it's always current.
 // Auth-gated, but not scoped to the caller — this is the library maintainer's unified queue.
 //
+// `ids` (comma-separated Deezer album ids) narrows the answer to those albums. Optional: without it
+// this is the whole active queue, which is what the Download page reads. It exists because "shared" is
+// the problem for anything that isn't that page — a migration client that queued thirty albums wants
+// to know where those thirty stand, and pulling several hundred rows to keep thirty of them costs more
+// the healthier the queue is. The ids are also the only handle such a client has: it queued by Deezer
+// album id and got no purchase id back. Pushed down to a Mongo query rather than filtered here, the
+// way the catalog resolves a set of artists.
+//
+// Capped at the same number as a rating batch, deliberately — a client that just submitted a batch has
+// to be able to ask about all of it in one request, or it is back in the per-item loop the batch
+// replaced. Unparseable ids are dropped rather than failing the request; an `ids` that parses to
+// nothing at all is answered as the empty list it asked for, not as the whole queue.
+//
 // `includeCompleted=true` keeps the rows that have landed in the library instead of dropping them, so
 // each carries the `inLibraryAt` stamp that says the acquisition finished and when. This is the half of
 // the answer a polling client is actually waiting for: without it, success and "removed from the queue
-// because nobody wants it any more" are the same observation — the row is simply gone. The Download
-// page leaves it off, because that list must not fill up with every record ever acquired.
-api.MapGet("/purchases", async (PurchaseService purchases, bool? includeCompleted) =>
-        Results.Ok(await purchases.GetActive(includeCompleted == true)))
+// because nobody wants it any more" are the same observation — the row is simply gone. Meant to be
+// paired with `ids`, where the result stays bounded by what the client asked about; the Download page
+// leaves it off, because that list must not fill up with every record ever acquired.
+api.MapGet("/purchases", async (PurchaseService purchases, string? ids, bool? includeCompleted) =>
+    {
+        var completed = includeCompleted == true;
+        if (ids is null)
+        {
+            return Results.Ok(await purchases.GetActive(includeCompleted: completed));
+        }
+
+        var wanted = ids
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(id => long.TryParse(id, out var parsed) ? (long?)parsed : null)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+
+        if (wanted.Length > BatchLimits.MaxItems)
+        {
+            return Results.BadRequest(new
+            {
+                error = $"An ids filter is capped at {BatchLimits.MaxItems} ids; got {wanted.Length}.",
+            });
+        }
+
+        return Results.Ok(await purchases.GetActive(wanted, completed));
+    })
     .RequireAuthorization()
     .WithName("GetPurchases");
 
@@ -1308,6 +1375,20 @@ internal record PlexTokenLinkRequest(string? Token, string? Label);
 /// would have to be escaped into a query param and unescaped back out for no gain.
 /// </summary>
 internal record ManualAddRequest(string? Url);
+
+/// <summary>
+/// Body of a batch of discovery verdicts. A POST body rather than query parameters for the reason the
+/// pasted-link routes have one: a batch has no query-string spelling at all. Wrapped in an object with
+/// an <c>items</c> field rather than being a bare array, so the request can grow a sibling field later
+/// without breaking every client — a top-level array has nowhere to put one.
+/// </summary>
+internal record DiscoveryRateBatchRequest(DiscoveryRateItem[]? Items);
+
+/// <summary>
+/// Body of a batch of collection verdicts. Same shape and same reasoning as
+/// <see cref="DiscoveryRateBatchRequest"/>, over Deezer album ids.
+/// </summary>
+internal record CollectionRateBatchRequest(CollectionRateItem[]? Items);
 
 /// <summary>
 /// Body of a token mint. A POST body rather than query parameters to match the other mutating

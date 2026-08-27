@@ -181,6 +181,24 @@ public interface IPurchaseRepo
     Task<PurchaseItem[]> GetAll();
 
     /// <summary>
+    /// Just the rows carrying one of <paramref name="deezerAlbumIds"/>, newest request first — the
+    /// same order and shape <see cref="GetAll"/> returns, so a caller can narrow the list without
+    /// changing how it reads the result.
+    ///
+    /// <para>A query rather than a filter over <see cref="GetAll"/> because the queue is <em>shared</em>:
+    /// an automation client that queued thirty albums has no interest in the other few hundred rows on
+    /// the maintainer's list, and polling for them by pulling the whole collection and discarding most
+    /// of it costs more the healthier the queue is. The ids are the only handle such a client has — it
+    /// queues by Deezer album id and gets no purchase id back — so that is what this keys on.</para>
+    ///
+    /// <para>An empty collection returns no rows rather than everything: "tell me about these ids" with
+    /// an empty set asks for nothing, and answering it with the entire queue would be the one reading
+    /// no caller could have meant. Rows with no Deezer id (artist rows, and albums whose id was never
+    /// learned) can never match.</para>
+    /// </summary>
+    Task<PurchaseItem[]> GetByDeezerAlbumIds(IReadOnlyCollection<long> deezerAlbumIds);
+
+    /// <summary>
     /// Inserts the item as <see cref="PurchaseStatus.Pending"/> if absent (stamping RequestedAt), or
     /// refreshes its display fields (image/score/sources) without touching status — so a reconcile
     /// re-run never demotes a Sent/InLibrary row back to Pending or resets its age.

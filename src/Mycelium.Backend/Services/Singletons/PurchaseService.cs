@@ -76,21 +76,32 @@ public class PurchaseService
     /// The active acquisition list — everything except items already in the library (so pending, sent
     /// and failed all show), newest first. Reconciles first so the page is always current.
     ///
+    /// <para><paramref name="deezerAlbumIds"/> narrows the answer to those albums, for a caller that
+    /// queued a known set and only wants to know where <em>those</em> stand. Null is the unfiltered
+    /// list, which is what the Download page asks for. The reconcile still runs whole either way: it is
+    /// what makes any row's status true, and a pass scoped to a handful of ids would report them
+    /// against a queue nothing else had refreshed.</para>
+    ///
     /// <para>The status filter is applied here rather than in the store because it isn't a property of
     /// the row so much as of this view — <see cref="Reconcile"/> and the drainer both want the
-    /// <see cref="PurchaseStatus.InLibrary"/> rows the page hides.</para>
+    /// <see cref="PurchaseStatus.InLibrary"/> rows the page hides. The ids are different: they select
+    /// which documents are wanted at all, so they go to the store as a query.</para>
     ///
     /// <para><paramref name="includeCompleted"/> lifts that status filter, so the arrived rows come back
     /// too — carrying <see cref="PurchaseItem.InLibraryAt"/>, which is the only place the app states
-    /// that an acquisition finished. That is precisely the answer a polling client is waiting for: on
-    /// the active list, an acquisition finishing and a row being dropped because nobody wants it any
-    /// more are the same observation. Off by default, because the page this method was written for must
-    /// not accumulate every record ever acquired.</para>
+    /// that an acquisition finished. The two options are meant to be used together: a client that
+    /// queued a set and is polling for it wants "these ids, landed ones included", because the answer
+    /// it is waiting for is precisely the one the active list drops. Off by default, because the page
+    /// this method was written for must not accumulate every record ever acquired.</para>
     /// </summary>
-    public async Task<PurchaseItem[]> GetActive(bool includeCompleted = false)
+    public async Task<PurchaseItem[]> GetActive(
+        IReadOnlyCollection<long>? deezerAlbumIds = null, bool includeCompleted = false)
     {
         await Reconcile();
-        return (await _purchases.GetAll())
+        var rows = deezerAlbumIds is null
+            ? await _purchases.GetAll()
+            : await _purchases.GetByDeezerAlbumIds(deezerAlbumIds);
+        return rows
             .Where(p => includeCompleted || p.Status != PurchaseStatus.InLibrary)
             .ToArray();
     }

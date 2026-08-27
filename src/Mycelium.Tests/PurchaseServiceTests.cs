@@ -311,6 +311,93 @@ public class PurchaseServiceTests
         item.DeezerAlbumId.Should().Be(12345);
     }
 
+    // --- The ids filter ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Seeds three liked albums with Deezer ids, plus a liked artist row (which has no id at all), and
+    /// returns the whole active list. The queue is shared, so this stands in for the maintainer's list
+    /// that a client asking about its own albums has to see past.
+    /// </summary>
+    private async Task SeedQueue()
+    {
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
+            new AlbumRating(new ArtistKey("Milo"), new AlbumKey("Nostrum Grocers"), "art", DiscoveryStatus.Liked),
+            new AlbumRating(new ArtistKey("Autechre"), new AlbumKey("Amber"), "art", DiscoveryStatus.Liked),
+        });
+        _queue.GetAllLiked().Returns(new[]
+        {
+            new DiscoveryCandidate(new ArtistKey("Phoebe Bridgers"), null, 3, Array.Empty<string>(), 1),
+        });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", 11),
+            new MissingAlbum(new ArtistKey("Milo"), new AlbumKey("Nostrum Grocers"), "art", 22),
+            new MissingAlbum(new ArtistKey("Autechre"), new AlbumKey("Amber"), "art", 33),
+        });
+        await _sut.Reconcile();
+    }
+
+    /// <summary>
+    /// The point of the filter. A client that queued two albums asks about those two and gets those
+    /// two — not the rest of the shared queue, which it has no interest in and which only grows.
+    /// </summary>
+    [Fact]
+    public async Task The_ids_filter_returns_only_the_albums_asked_about()
+    {
+        await SeedQueue();
+
+        var active = await _sut.GetActive(new long[] { 11, 33 });
+
+        active.Select(p => p.DeezerAlbumId).Should().BeEquivalentTo(new long?[] { 11, 33 });
+        // The artist row has no Deezer id, so it can never match — which is right: the filter is asked
+        // in ids, and an artist has none to be asked about by.
+        active.Should().OnlyContain(p => p.Kind == FeedKind.MissingAlbum);
+    }
+
+    /// <summary>
+    /// Without ids nothing changes: the whole active queue, artist rows included. This is what the
+    /// Download page reads, and it must not have been narrowed by the filter's arrival.
+    /// </summary>
+    [Fact]
+    public async Task No_ids_still_returns_the_whole_active_queue()
+    {
+        await SeedQueue();
+
+        var active = await _sut.GetActive();
+
+        active.Should().HaveCount(4);
+        active.Should().Contain(p => p.Kind == FeedKind.RecommendedArtist && p.DeezerAlbumId == null);
+    }
+
+    /// <summary>
+    /// An id nothing on the queue carries is simply absent from the answer rather than an error: the
+    /// caller is polling, and "not on the list yet" is a normal state on the way to "landed".
+    /// </summary>
+    [Fact]
+    public async Task An_unknown_id_is_absent_rather_than_an_error()
+    {
+        await SeedQueue();
+
+        var active = await _sut.GetActive(new long[] { 11, 9999 });
+
+        active.Should().ContainSingle().Which.DeezerAlbumId.Should().Be(11);
+    }
+
+    /// <summary>
+    /// Asking about no ids is answered with nothing, not with everything. "Tell me about these" with an
+    /// empty set requests nothing, and the whole shared queue is the one reading no caller could mean —
+    /// it is also the reading that would quietly turn a filtered poll into a full one.
+    /// </summary>
+    [Fact]
+    public async Task An_empty_ids_filter_returns_nothing_rather_than_everything()
+    {
+        await SeedQueue();
+
+        (await _sut.GetActive(Array.Empty<long>())).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Failed_items_stay_on_the_active_list_for_retry()
     {
@@ -697,6 +784,47 @@ public class PurchaseServiceTests
         var row = completed.Should().ContainSingle().Subject;
         row.Status.Should().Be(PurchaseStatus.InLibrary);
         row.InLibraryAt.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// The two narrowings compose, which is the shape an automation client actually asks for: "these
+    /// ids, landed ones included". Either alone answers the wrong question — ids alone drops the very
+    /// arrival it is waiting for, completed alone hands back the whole shared queue.
+    /// </summary>
+    [Fact]
+    public async Task Asking_by_id_for_completed_rows_returns_that_albums_arrival()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        DeezerAlbum(111, "Someone Elses Record", "Big Thief");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+        await _sut.AddManual("https://www.deezer.com/en/album/111", "someone-else");
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
+        });
+
+        var mine = await _sut.GetActive(new long[] { 225323002 }, includeCompleted: true);
+
+        var row = mine.Should().ContainSingle().Subject;
+        row.DeezerAlbumId.Should().Be(225323002);
+        row.InLibraryAt.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// The default is unchanged, because the Download page reads it: an arrived row must not come back
+    /// just because the caller narrowed by id.
+    /// </summary>
+    [Fact]
+    public async Task Asking_by_id_still_hides_arrived_rows_by_default()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
+        });
+
+        (await _sut.GetActive(new long[] { 225323002 })).Should().BeEmpty();
     }
 
     [Fact]

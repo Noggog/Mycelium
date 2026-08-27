@@ -152,6 +152,12 @@ export async function getRatings(): Promise<RatedItem[]> {
 
 // The shared "to buy" list: liked non-owned artists + liked albums not yet acquired, with a
 // persisted status (pending → sent → in-library). In-library items have dropped off.
+//
+// Deliberately takes no arguments, though /api/purchases now accepts an `?ids=` filter. This function
+// is handed to react-query as a queryFn, which calls it with a query context — so a parameter here
+// isn't merely unused, it silently changes what the first argument means and breaks the call site's
+// types. The filter exists for the automation client, which doesn't go through this module; nothing in
+// the SPA has a set of ids to narrow by.
 export async function getPurchases(): Promise<PurchaseItem[]> {
   const res = await fetch('/api/purchases')
   if (!res.ok) {
