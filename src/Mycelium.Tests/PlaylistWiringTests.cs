@@ -71,6 +71,10 @@ public class PlaylistWiringTests : IDisposable
     // registration would surface as a silently untagged album rather than a failed request.
     [InlineData(typeof(IAlbumTagFollowUp))]
     [InlineData(typeof(IAlbumTagger))]
+    // ...and the artist-side twin, which carries the mood for an ordinary album. Same failure mode: an
+    // unregistered seam here means an album rated through /api/collections/rate is silently untagged.
+    [InlineData(typeof(IArtistTagFollowUp))]
+    [InlineData(typeof(IArtistTagger))]
     // ...and the arrival repair that stamps a verdict once the download lands.
     [InlineData(typeof(AlbumTagBackfill))]
     public void Collection_services_resolve(Type service)
@@ -88,6 +92,28 @@ public class PlaylistWiringTests : IDisposable
     public void The_album_tag_seam_is_the_running_worker()
     {
         _container.Resolve<IAlbumTagFollowUp>()
+            .Should().BeSameAs(_container.Resolve<ArtistFollowUpService>());
+    }
+
+    /// <summary>The artist-side seam has the same requirement, for the same reason.</summary>
+    [Fact]
+    public void The_artist_tag_seam_is_the_running_worker()
+    {
+        _container.Resolve<IArtistTagFollowUp>()
+            .Should().BeSameAs(_container.Resolve<ArtistFollowUpService>());
+    }
+
+    /// <summary>
+    /// The same requirement stated directly, and the reason anything may take the worker by concrete
+    /// type at all: the registration is single-instance, so every injection site is handed the copy the
+    /// host actually started. A transient registration would hand one of them a second worker whose
+    /// channel nothing drains, and the verdicts written through it would be accepted and then never
+    /// reach Plex.
+    /// </summary>
+    [Fact]
+    public void The_follow_up_worker_is_a_single_shared_instance()
+    {
+        _container.Resolve<ArtistFollowUpService>()
             .Should().BeSameAs(_container.Resolve<ArtistFollowUpService>());
     }
 

@@ -16,6 +16,19 @@ public interface IAlbumTagFollowUp
 }
 
 /// <summary>
+/// The seam for handing the worker an <em>artist's</em> Plex tag write on its own — the tag half of
+/// <see cref="IVerdictFollowUp"/> without the graph half. Kept apart from it because the two answer
+/// different questions: this one exists for a verdict cast on a <em>record</em>, which has to reach
+/// Plex without also seeding the recommendation frontier from an act nobody thumbed. Extracted for
+/// the same testability reason as <see cref="IAlbumTagFollowUp"/>.
+/// </summary>
+public interface IArtistTagFollowUp
+{
+    /// <inheritdoc cref="ArtistFollowUpService.QueueArtistTagWrite"/>
+    void QueueArtistTagWrite(string artist, string? addTag, IReadOnlyCollection<string> removeTags);
+}
+
+/// <summary>
 /// The after-the-click worker. Rating, seeding or re-pointing an artist has two halves: recording the
 /// user's decision (a couple of Mongo writes) and the graph work that decision implies — re-ingesting
 /// similarity edges from the rate-limited source APIs, re-expanding the recommendation frontier, and
@@ -34,7 +47,7 @@ public interface IAlbumTagFollowUp
 /// by design — the daily replenisher re-expands every liked artist and <see cref="ArtistTagBackfill"/>
 /// re-stamps missing Plex tags, so a dropped item is repaired on the next pass rather than lost.</para>
 /// </summary>
-public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp
+public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp, IArtistTagFollowUp
 {
     /// <summary>One deferred unit of work, with a description for the log line if it fails.</summary>
     private record WorkItem(string Description, Func<Task> Run);
@@ -104,6 +117,32 @@ public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp
         Enqueue($"album tag write for \"{album}\" ({artist})", () =>
             // Best-effort by contract (PlexAlbumTagger never throws).
             _albumTagger.SetTags(artist, album, addTag, removeTags));
+    }
+
+    /// <summary>
+    /// Queues an artist's Plex mood write with no graph half at all — <see cref="QueueVerdictFollowUp"/>
+    /// minus the <see cref="IVerdictFollowUp.ApplyVerdictFollowUp"/> call. For a verdict cast on a
+    /// <em>record</em>, where the tag is the whole of what the user meant: a thumb on one album is not a
+    /// thumb on the act, so expanding the frontier from it would grow recommendations out of an artist
+    /// nobody rated, and pruning on a thumbs-down would tear out candidates a genuine artist like had
+    /// seeded.
+    ///
+    /// <para>Runs on the same single consumer in submission order, so a quick like → clear on the same
+    /// record can't land backwards.</para>
+    /// </summary>
+    public void QueueArtistTagWrite(
+        string artist, string? addTag, IReadOnlyCollection<string> removeTags)
+    {
+        if (addTag == null && removeTags.Count == 0)
+        {
+            return;
+        }
+
+        Enqueue($"artist tag write for {artist}", () =>
+            // Best-effort by contract (PlexArtistTagger never throws) — and the act may not be in Plex
+            // at all, since a verdict on a record we haven't acquired yet names an artist the library
+            // has never heard of. ArtistTagBackfill re-stamps it if it later arrives.
+            _tagger.SetTags(artist, addTag, removeTags));
     }
 
     /// <summary>

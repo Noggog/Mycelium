@@ -86,7 +86,18 @@ public record PurchaseItem(
     // reconcile refreshing the row's display fields, must not take the credit off the person who
     // actually asked for the record. Null on rows nobody pressed anything for — an album queued and
     // downloaded automatically off a like — and on every row written before this existed.
-    string? AddedBy = null);
+    string? AddedBy = null,
+    // When the reconcile first saw this record present in the library — the explicit terminal marker.
+    // <see cref="Status"/> already reads InLibrary by then, but only a caller that knows the enum's
+    // ordering can tell that one value apart from the five non-terminal ones; success was otherwise
+    // something an API client had to infer, either from the row vanishing off the active list or from
+    // asking Plex itself. A timestamp states it, and states when.
+    //
+    // Written by the transition, not by the upsert: a reconcile refreshing display fields has nothing
+    // to say about when the album landed. Null on every row that hasn't arrived, and on every row
+    // written before this existed — an old InLibrary row is finished without being able to say when,
+    // and backdating it to the request or send time would be inventing a fact.
+    DateTimeOffset? InLibraryAt = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -177,8 +188,9 @@ public interface IPurchaseRepo
     Task Upsert(PurchaseItem item);
 
     /// <summary>
-    /// Sets a row's status (stamping SentAt when moving to <see cref="PurchaseStatus.Sent"/>).
-    /// Returns false if the id is unknown.
+    /// Sets a row's status (stamping SentAt when moving to <see cref="PurchaseStatus.Sent"/>, and
+    /// InLibraryAt when moving to <see cref="PurchaseStatus.InLibrary"/>). Returns false if the id is
+    /// unknown.
     /// </summary>
     /// <summary>
     /// Moves a row to <paramref name="status"/>, recording <paramref name="failure"/> alongside it.

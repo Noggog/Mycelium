@@ -715,7 +715,8 @@ api.MapDelete("/discovery/rate", async (
         {
             await engine.ClearAlbumRating(userId, artist, album);
             // Undo the album mood a collection's verdict wrote. We don't know which of the two it was,
-            // so strip both — the user holds at most one. No-op for a non-umbrella album.
+            // so strip both — the user holds at most one. No-op for a non-umbrella album, whose artist
+            // mood is the user's own verdict on the act and isn't this endpoint's to clear.
             collections.QueueTagWrite(
                 http.User.FindFirst("preferred_username")?.Value, artist, album, status: null);
         }
@@ -781,8 +782,10 @@ api.MapPost("/collections/resolve", async (
     .WithName("ResolveCollection");
 
 // Thumb a collection by its Deezer album id. Writes the global missing-album row (which is what
-// carries the id through the purchase reconcile to the downloader), the per-user verdict, and — for an
-// umbrella-credited record — queues the album mood tag.
+// carries the id through the purchase reconcile to the downloader), the per-user verdict, and queues
+// the mood tag — on the album for an umbrella-credited record, on the artist for anything else. This
+// is the only id-keyed way to queue an album, so it is also how an ordinary release gets rated by an
+// API client; the artist tag is what keeps that from writing nothing to Plex at all.
 api.MapPost("/collections/rate", async (
         long id, string verdict, HttpContext http, CollectionService collections) =>
     {
@@ -1000,8 +1003,14 @@ devSim.MapGet("/warm", (SimilarityGraphWarmer warmer) =>
 // The shared "to buy" list: every user's liked non-owned artists + liked albums not yet acquired,
 // persisted with a status (pending → sent → in-library). Reconciles on read so it's always current.
 // Auth-gated, but not scoped to the caller — this is the library maintainer's unified queue.
-api.MapGet("/purchases", async (PurchaseService purchases) =>
-        Results.Ok(await purchases.GetActive()))
+//
+// `includeCompleted=true` keeps the rows that have landed in the library instead of dropping them, so
+// each carries the `inLibraryAt` stamp that says the acquisition finished and when. This is the half of
+// the answer a polling client is actually waiting for: without it, success and "removed from the queue
+// because nobody wants it any more" are the same observation — the row is simply gone. The Download
+// page leaves it off, because that list must not fill up with every record ever acquired.
+api.MapGet("/purchases", async (PurchaseService purchases, bool? includeCompleted) =>
+        Results.Ok(await purchases.GetActive(includeCompleted == true)))
     .RequireAuthorization()
     .WithName("GetPurchases");
 

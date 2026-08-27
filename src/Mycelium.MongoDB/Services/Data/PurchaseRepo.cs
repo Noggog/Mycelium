@@ -22,6 +22,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldStatus = "status";
     private const string FieldRequestedAt = "requestedAt";
     private const string FieldSentAt = "sentAt";
+    private const string FieldInLibraryAt = "inLibraryAt";
     private const string FieldDeezerAlbumId = "deezerAlbumId";
     private const string FieldAlbumArtist = "albumArtist";
     private const string FieldFailure = "failure";
@@ -139,6 +140,15 @@ public class PurchaseRepo : IPurchaseRepo
             update = update.Set(FieldSentAt, DateTimeOffset.UtcNow.UtcDateTime);
         }
 
+        // The terminal stamp, written the same way SentAt is: on the transition, by whoever makes it.
+        // Set rather than SetOnInsert-style first-wins because a row can genuinely arrive twice — an
+        // upgrade sends a closed-out album back to Pending to be re-fetched — and the stamp should then
+        // name the arrival of the copy that is actually on the shelf, not a copy that was replaced.
+        if (status == PurchaseStatus.InLibrary)
+        {
+            update = update.Set(FieldInLibraryAt, DateTimeOffset.UtcNow.UtcDateTime);
+        }
+
         // Only ever written, never cleared: a backend that couldn't report what it got shouldn't
         // erase what an earlier attempt did report.
         if (acquired is not null)
@@ -170,6 +180,9 @@ public class PurchaseRepo : IPurchaseRepo
         DateTimeOffset? sentAt = doc.TryGetValue(FieldSentAt, out var sa) && sa.IsValidDateTime
             ? (DateTimeOffset)sa.ToUniversalTime()
             : null;
+        DateTimeOffset? inLibraryAt = doc.TryGetValue(FieldInLibraryAt, out var la) && la.IsValidDateTime
+            ? (DateTimeOffset)la.ToUniversalTime()
+            : null;
         long? deezerAlbumId = doc.TryGetValue(FieldDeezerAlbumId, out var da) && da.IsNumeric
             ? da.ToInt64()
             : null;
@@ -193,6 +206,10 @@ public class PurchaseRepo : IPurchaseRepo
             AudioQualityTier.Parse(StrN(FieldOwnedQuality)),
             // Absent on every row written before the "added by" credit existed, and on anything that
             // downloaded without a person pressing for it.
-            StrN(FieldAddedBy));
+            StrN(FieldAddedBy),
+            // Absent until the row closes out, and on every InLibrary row that closed out before this
+            // field existed — which reads as "finished, arrival time unknown" rather than "unfinished",
+            // since Status is still what says the row is done.
+            inLibraryAt);
     }
 }

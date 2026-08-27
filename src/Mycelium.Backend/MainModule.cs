@@ -98,7 +98,8 @@ public class MainModule : Autofac.Module
         // singleton hosted service, so the endpoints that enqueue and the loop that drains are the
         // same instance — and, like it, registered by hand: Services.Background isn't assembly-scanned.
         builder.RegisterType<ArtistFollowUpService>()
-            .AsSelf().As<IHostedService>().As<IAlbumTagFollowUp>().SingleInstance();
+            .AsSelf().As<IHostedService>()
+            .As<IAlbumTagFollowUp>().As<IArtistTagFollowUp>().SingleInstance();
         // Replacing the ARL from the Download page. The Services.Download namespace isn't part of the
         // assembly scan below (which covers Services.Singletons), so these are registered by hand like
         // the two above.

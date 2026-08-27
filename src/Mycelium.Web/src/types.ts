@@ -339,6 +339,13 @@ export interface PurchaseItem {
   // album lands in the library, at which point it becomes the album's permanent "<user>_added" mood in
   // Plex. Null when nothing was pressed (an album downloaded automatically off a like).
   addedBy: string | null
+  // ISO timestamp of when the reconcile first saw the record in the library — the row saying it is
+  // finished, rather than a caller having to read that off the status enum. Null until it lands, and
+  // on rows that closed out before this was recorded. Always null for this app: the Download page asks
+  // for the active list, which drops arrived rows. It is set only for a caller that passes
+  // `includeCompleted=true` — an automation client polling the ids it queued, which needs to see the
+  // acquisition finish rather than watch the row disappear.
+  inLibraryAt: string | null
 }
 
 // Mirror ManualAddResult / ManualAddOutcome (IPurchaseRepo.cs) — the answer to pasting a Deezer

@@ -47,6 +47,7 @@ public class CollectionService
     private readonly IAlbumMatchOverrideRepo _overrides;
     private readonly IPlexApi _plex;
     private readonly IAlbumTagFollowUp _followUps;
+    private readonly IArtistTagFollowUp _artistFollowUps;
     private readonly ILogger<CollectionService> _logger;
 
     public CollectionService(
@@ -57,6 +58,7 @@ public class CollectionService
         IAlbumMatchOverrideRepo overrides,
         IPlexApi plex,
         IAlbumTagFollowUp followUps,
+        IArtistTagFollowUp artistFollowUps,
         ILogger<CollectionService> logger)
     {
         _deezer = deezer;
@@ -66,6 +68,7 @@ public class CollectionService
         _overrides = overrides;
         _plex = plex;
         _followUps = followUps;
+        _artistFollowUps = artistFollowUps;
         _logger = logger;
     }
 
@@ -227,6 +230,12 @@ public class CollectionService
     /// per-user verdict. The Plex tag is queued rather than awaited, exactly as an artist verdict is:
     /// it costs a catalog read and up to two Plex round trips, and the click has no reason to wait for
     /// them.</para>
+    ///
+    /// <para>Which item that tag lands on depends on the credit — the album for a compilation, the
+    /// artist for an ordinary release, and the second only on a <em>like</em>. That artist write is
+    /// unique to this path and is what keeps an album acquired by id from leaving nothing at all in
+    /// Plex; <see cref="QueueArtistMoodWrite"/> has the reasoning, including why a dislike leaves the
+    /// act alone and why the rating endpoints the UI drives never do this at all.</para>
     /// </summary>
     public async Task<CollectionItem?> Rate(
         string userId, string? username, long deezerAlbumId, DiscoveryStatus status)
@@ -248,6 +257,9 @@ public class CollectionService
 
         await _albumRatings.Rate(userId, artist, title, album.BestCoverUrl, status);
         QueueTagWrite(username, artist, title, status);
+        // ...and, for a liked ordinary release, the artist's mood — which nothing else on this path
+        // would ever write. See QueueArtistMoodWrite; this is the only call site, deliberately.
+        QueueArtistMoodWrite(username, artist, status);
 
         _logger.LogInformation(
             "{Verdict} collection \"{Album}\" ({Artist}, Deezer {Id})", status, title, artist, deezerAlbumId);
@@ -261,6 +273,11 @@ public class CollectionService
     /// album is umbrella-credited: an ordinary album's verdict is already carried by its artist, and
     /// stamping the record as well would put single albums by disliked acts into "My Library".
     ///
+    /// <para>Called from the <em>rating</em> endpoints, where the user is working from a page that also
+    /// lets them rate the act directly, so the artist's mood is theirs to set and must not be moved out
+    /// from under them by a verdict on one record. <see cref="Rate"/> is the exception and explains
+    /// itself; see <see cref="QueueArtistMoodWrite"/>.</para>
+    ///
     /// <para><paramref name="status"/> null is a cleared verdict — strip whichever tag was set (we
     /// don't know which, and the user holds at most one).</para>
     /// </summary>
@@ -271,23 +288,101 @@ public class CollectionService
             return;
         }
 
+        if (VerdictTags(username, status) is not { } tags)
+        {
+            return;
+        }
+
+        _followUps.QueueAlbumTagWrite(artist, album, tags.Add, tags.Remove);
+    }
+
+    /// <summary>
+    /// Gives an ordinary album's <em>artist</em> a Plex mood when a like would otherwise leave the
+    /// record with no trace in the library at all.
+    ///
+    /// <para><b>The gap.</b> <c>POST /api/collections/rate?id=</c> is the only id-keyed way to rate an
+    /// album, which makes it the one external automation uses. On an ordinary,
+    /// non-umbrella record it writes the per-user verdict and stops: the album gets no mood, because an
+    /// ordinary release must not carry one, and the artist gets no mood, because nothing rated the
+    /// artist. <see cref="ArtistTagBackfill"/> cannot repair it either — it re-stamps from <em>artist</em>
+    /// ratings, and a thumb on a record leaves none. Nothing about the record reaches Plex at all, which
+    /// is the same permanent-gap shape <see cref="PurchaseService.AddManual"/> documents.</para>
+    ///
+    /// <para><b>Likes only.</b> A dislike is not the same case turned around. The gap above is about a
+    /// record being <em>acquired</em> with nothing to show for it in Plex, and a thumbs-down acquires
+    /// nothing — there is no gap for it to close. What it would cost is real: stamping it would strip
+    /// the "&lt;user&gt;_liked" off a band the user likes on the strength of one bad record, dropping
+    /// the whole act out of a "My Library" playlist. That is the destructive move this path exists to
+    /// avoid, and automation is exactly where nobody would notice it happen. So a dislike — and a
+    /// cleared or snoozed verdict — leaves the act alone.</para>
+    ///
+    /// <para><b>Why only here.</b> This deliberately does <em>not</em> hang off
+    /// <see cref="QueueTagWrite"/>, which the two <c>/api/discovery/rate</c> paths also call. Those back
+    /// a UI that rates artists directly, so the act's mood is the user's own verdict and a thumb on one
+    /// record is not allowed to move it in either direction.</para>
+    ///
+    /// <para><b>Tag only.</b> Queued through <see cref="IArtistTagFollowUp"/> rather than
+    /// <see cref="ArtistFollowUpService.QueueVerdictFollowUp"/>, which would also run
+    /// <see cref="IVerdictFollowUp.ApplyVerdictFollowUp"/> and grow the recommendation frontier from the
+    /// act. No artist verdict is recorded anywhere: a thumbs-up on one album is not a thumbs-up on the
+    /// artist, and it must not surface on the user's Ratings page as one.</para>
+    /// </summary>
+    private void QueueArtistMoodWrite(string? username, string artist, DiscoveryStatus status)
+    {
+        if (status != DiscoveryStatus.Liked)
+        {
+            return; // see "Likes only" above — a dislike closes no gap and would cost the act its mood
+        }
+
+        if (UmbrellaArtist.Is(artist))
+        {
+            // The record carries the verdict for a compilation, and "Various Artists" liked would claim
+            // every other one filed under the same placeholder.
+            return;
+        }
+
+        if (VerdictTags(username, status) is not { } tags)
+        {
+            return;
+        }
+
+        // One-way by construction, and worth knowing before you go looking for the other half: nothing
+        // on this path ever takes the tag off again. A dislike returns above, and the clear
+        // (DELETE /api/discovery/rate) is deliberately hands-off for an ordinary album — so there is no
+        // id-keyed way out. It comes off when the user rates the *act* in the UI, which overwrites it
+        // through the ordinary verdict path, or via the dev panel's PlexTagMaintenance.ReapplyFromRatings.
+        // That asymmetry is the point rather than an oversight: the tag means "someone went and got a
+        // record by this artist", which stays true, and an actual verdict on the act outranks it.
+        //
+        // The strip is still passed, so the invariant that a user holds at most one verdict tag on an
+        // item survives: liking a record by an act previously marked disliked replaces the tag instead
+        // of leaving both on it.
+        _artistFollowUps.QueueArtistTagWrite(artist, tags.Add, tags.Remove);
+    }
+
+    /// <summary>
+    /// The tag to stamp and the tags to strip for one verdict, or null when there is no usable username
+    /// to prefix them with. Shared by both mood paths so "latest verdict wins" means the same thing on a
+    /// record as on an act — the new tag on, the opposite one off.
+    ///
+    /// <para>A snooze is a deferred decision, not a verdict, and is treated as a clear: nothing added,
+    /// both stripped. Same as the artist path, which never tags one.</para>
+    /// </summary>
+    private static (string? Add, string[] Remove)? VerdictTags(string? username, DiscoveryStatus? status)
+    {
         var liked = ArtistTag.For(username, DiscoveryStatus.Liked);
         var disliked = ArtistTag.For(username, DiscoveryStatus.Disliked);
         if (liked is null || disliked is null)
         {
-            return; // no usable username to prefix the tag with
+            return null; // no usable username to prefix the tag with
         }
 
-        var (add, remove) = status switch
+        return status switch
         {
             DiscoveryStatus.Liked => (liked, new[] { disliked }),
             DiscoveryStatus.Disliked => (disliked, new[] { liked }),
-            // A snooze is a deferred decision, not a verdict — treat it like a clear, same as the
-            // artist path does by never tagging one.
             _ => (null, new[] { liked, disliked }),
         };
-
-        _followUps.QueueAlbumTagWrite(artist, album, add, remove);
     }
 
     /// <summary>

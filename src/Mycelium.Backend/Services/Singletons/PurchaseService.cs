@@ -12,9 +12,10 @@ namespace Mycelium.Backend.Services.Singletons;
 /// recomputed away.
 ///
 /// <see cref="Reconcile"/> is the single sync point: it folds the current liked-but-unowned set into
-/// the store, closes out anything that has since arrived in the library (→ InLibrary), and drops
-/// pending rows no one wants any more (already-ordered rows are kept — they're in flight). It runs
-/// after each catalog/album sync and on each read of the list.
+/// the store, closes out anything that has since arrived in the library (→ InLibrary, stamping
+/// <see cref="PurchaseItem.InLibraryAt"/> so the row states its own completion rather than leaving a
+/// caller to infer it), and drops pending rows no one wants any more (already-ordered rows are kept —
+/// they're in flight). It runs after each catalog/album sync and on each read of the list.
 /// </summary>
 public class PurchaseService
 {
@@ -74,12 +75,23 @@ public class PurchaseService
     /// <summary>
     /// The active acquisition list — everything except items already in the library (so pending, sent
     /// and failed all show), newest first. Reconciles first so the page is always current.
+    ///
+    /// <para>The status filter is applied here rather than in the store because it isn't a property of
+    /// the row so much as of this view — <see cref="Reconcile"/> and the drainer both want the
+    /// <see cref="PurchaseStatus.InLibrary"/> rows the page hides.</para>
+    ///
+    /// <para><paramref name="includeCompleted"/> lifts that status filter, so the arrived rows come back
+    /// too — carrying <see cref="PurchaseItem.InLibraryAt"/>, which is the only place the app states
+    /// that an acquisition finished. That is precisely the answer a polling client is waiting for: on
+    /// the active list, an acquisition finishing and a row being dropped because nobody wants it any
+    /// more are the same observation. Off by default, because the page this method was written for must
+    /// not accumulate every record ever acquired.</para>
     /// </summary>
-    public async Task<PurchaseItem[]> GetActive()
+    public async Task<PurchaseItem[]> GetActive(bool includeCompleted = false)
     {
         await Reconcile();
         return (await _purchases.GetAll())
-            .Where(p => p.Status != PurchaseStatus.InLibrary)
+            .Where(p => includeCompleted || p.Status != PurchaseStatus.InLibrary)
             .ToArray();
     }
 
@@ -412,6 +424,9 @@ public class PurchaseService
                     // and only here: this branch runs once per row, on the transition into the library.
                     await StampAddedBy(
                         row, MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist));
+                    // This is the moment the acquisition is actually finished, and the guard above is
+                    // what makes it the *first* such moment — so the InLibraryAt the repo stamps
+                    // alongside the status is the arrival time, not the time of a later re-reconcile.
                     await _purchases.SetStatus(row.Id, PurchaseStatus.InLibrary);
                 }
                 continue;

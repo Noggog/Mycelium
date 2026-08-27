@@ -36,6 +36,10 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 // Insert-only in Mongo (SetOnInsert), so an upsert can neither claim the credit nor
                 // take it away from whoever already holds it.
                 AddedBy = existing.AddedBy,
+                // Written by the status transition, never by an upsert — same reason as
+                // AcquiredQuality: the Mongo update simply doesn't name the field, so the stored
+                // arrival time survives a reconcile that re-upserts the row's display fields.
+                InLibraryAt = existing.InLibraryAt,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;
@@ -65,6 +69,10 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
         {
             Status = status,
             SentAt = status == PurchaseStatus.Sent ? DateTimeOffset.UtcNow : item.SentAt,
+            // Mirrors the Mongo repo: stamped on the transition into the library, and re-stamped if the
+            // row ever arrives again (an upgrade sends a closed-out album back to be re-fetched), so it
+            // names the arrival of the copy actually on the shelf.
+            InLibraryAt = status == PurchaseStatus.InLibrary ? DateTimeOffset.UtcNow : item.InLibraryAt,
             // Mirrors the Mongo repo: the reason is only meaningful on a Failed row, and any other
             // transition clears it so a retry doesn't inherit the last explanation.
             Failure = status == PurchaseStatus.Failed ? failure : DownloadFailure.None,

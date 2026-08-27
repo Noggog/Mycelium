@@ -110,4 +110,40 @@ public class ArtistFollowUpServiceTests
         await _tagger.DidNotReceive().SetTags(
             Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
     }
+
+    /// <summary>
+    /// The whole reason the tag-only seam exists. An album verdict has to reach the artist's mood in
+    /// Plex, and must stop there: run the graph half as well and a thumb on one record would expand the
+    /// recommendation frontier from an act nobody rated.
+    /// </summary>
+    [Fact]
+    public async Task An_artist_tag_write_never_touches_the_frontier()
+    {
+        var sut = Sut();
+        var tagged = false;
+        _tagger.When(t => t.SetTags("Big Thief", "noggog_liked", Arg.Any<IReadOnlyCollection<string>>()))
+            .Do(_ => tagged = true);
+
+        sut.QueueArtistTagWrite("Big Thief", "noggog_liked", new[] { "noggog_disliked" });
+
+        await Drain(sut, () => tagged);
+        _engine.ReceivedCalls().Should().BeEmpty();
+    }
+
+    /// <summary>Nothing to add and nothing to strip is not work — it's a Plex round trip for nothing.</summary>
+    [Fact]
+    public async Task An_artist_tag_write_with_nothing_to_say_is_not_queued()
+    {
+        var sut = Sut();
+
+        sut.QueueArtistTagWrite("Big Thief", addTag: null, removeTags: Array.Empty<string>());
+        // Something the drain can actually wait on, queued behind it: if the empty write had been
+        // enqueued it would have run first, and the tagger would have been called.
+        sut.QueueIdentityRefresh(User, "The Postal Service");
+
+        await Drain(sut, () => _engine.ReceivedCalls()
+            .Any(c => c.GetMethodInfo().Name == nameof(IVerdictFollowUp.Rebuild)));
+        await _tagger.DidNotReceive().SetTags(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+    }
 }

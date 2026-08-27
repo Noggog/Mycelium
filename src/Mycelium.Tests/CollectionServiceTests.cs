@@ -15,8 +15,16 @@ namespace Mycelium.Tests;
 /// Collections are the app's one path to a record no discography lists. Everything worth asserting
 /// here is about what a thumb <em>writes</em>: the global row that carries the Deezer id to the
 /// downloader (without it a liked compilation sits on the buy list for ever with nothing to fetch),
-/// the per-user verdict, and the album mood — which must be stamped for an umbrella credit and, just
-/// as importantly, must not be for an ordinary album whose artist already carries one.
+/// the per-user verdict, and the mood.
+///
+/// <para>The mood is where the care is. Through <see cref="CollectionService.Rate"/> — the id-keyed
+/// path external automation uses — it lands on the <em>album</em> for an umbrella credit and, on a
+/// <em>like</em> only, on the <em>artist</em> for anything else, so a record acquired there is never
+/// left with nothing written to Plex at all. A dislike acquires nothing, so it repairs nothing and
+/// leaves the act alone. Through <see cref="CollectionService.QueueTagWrite"/>, which the UI's rating
+/// endpoints call, an ordinary album writes nothing at all: the act's mood is the user's own verdict
+/// and a thumb on one record must not move it. Neither path ever records an artist <em>verdict</em> —
+/// liking one album is not liking the act.</para>
 /// </summary>
 public class CollectionServiceTests
 {
@@ -32,12 +40,13 @@ public class CollectionServiceTests
     private readonly IAlbumMatchOverrideRepo _overrides = Substitute.For<IAlbumMatchOverrideRepo>();
     private readonly IPlexApi _plex = Substitute.For<IPlexApi>();
     private readonly IAlbumTagFollowUp _followUps = Substitute.For<IAlbumTagFollowUp>();
+    private readonly IArtistTagFollowUp _artistFollowUps = Substitute.For<IArtistTagFollowUp>();
     private readonly CollectionService _sut;
 
     public CollectionServiceTests()
     {
         _sut = new CollectionService(
-            _deezer, _missing, _ratings, _catalog, _overrides, _plex, _followUps,
+            _deezer, _missing, _ratings, _catalog, _overrides, _plex, _followUps, _artistFollowUps,
             NullLogger<CollectionService>.Instance);
 
         _ratings.GetRated(User).Returns(Array.Empty<AlbumRating>());
@@ -128,9 +137,24 @@ public class CollectionServiceTests
     }
 
     /// <summary>
-    /// The line the whole design turns on. An ordinary album's verdict is already carried by its
-    /// artist; stamping the record too would put single albums by acts the user thumbed <em>down</em>
-    /// into a "My Library" playlist.
+    /// The umbrella act itself must stay clean. "Various Artists" liked would claim every compilation
+    /// in the library at once — which is exactly why a collection's verdict goes on the record.
+    /// </summary>
+    [Fact]
+    public async Task Liking_a_collection_leaves_the_umbrella_act_untagged()
+    {
+        _deezer.GetAlbum(246803).Returns(Album(246803, "The Breakfast Club", "Various Artists"));
+
+        await _sut.Rate(User, Username, 246803, DiscoveryStatus.Liked);
+
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+    }
+
+    /// <summary>
+    /// The line the whole design turns on. An ordinary album's mood belongs on its artist; stamping the
+    /// record too would put single albums by acts the user thumbed <em>down</em> into a "My Library"
+    /// playlist.
     /// </summary>
     [Fact]
     public async Task Liking_an_ordinary_album_does_not_touch_the_album_mood()
@@ -143,6 +167,65 @@ public class CollectionServiceTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
     }
 
+    /// <summary>
+    /// The gap this closes. /api/collections/rate is the only id-keyed way to queue an album, so it is
+    /// how an API client rates an ordinary release — and this used to write nothing to Plex at all.
+    /// Nothing could repair it either: ArtistTagBackfill re-stamps from <em>artist</em> ratings, and a
+    /// thumb on a record leaves none.
+    /// </summary>
+    [Fact]
+    public async Task Liking_an_ordinary_album_tags_its_artist_and_strips_the_opposite()
+    {
+        _deezer.GetAlbum(999).Returns(Album(999, "Dragon New Warm Mountain", "Big Thief"));
+
+        await _sut.Rate(User, Username, 999, DiscoveryStatus.Liked);
+
+        _artistFollowUps.Received(1).QueueArtistTagWrite(
+            "Big Thief", Liked,
+            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Disliked })));
+    }
+
+    /// <summary>
+    /// The other side of the gap, and the reason it is a like and not a verdict that writes the mood.
+    /// A thumbs-down acquires nothing, so there is nothing missing from Plex for it to repair — while
+    /// stamping it would strip the "&lt;username&gt;_liked" off a band the user likes on the strength
+    /// of one bad record, dropping the whole act out of a "My Library" playlist. Automation is exactly
+    /// where that would go unnoticed, which is why this endpoint of all of them must not do it.
+    /// </summary>
+    [Fact]
+    public async Task Disliking_an_ordinary_album_leaves_its_artists_mood_alone()
+    {
+        _deezer.GetAlbum(999).Returns(Album(999, "Dragon New Warm Mountain", "Big Thief"));
+
+        await _sut.Rate(User, Username, 999, DiscoveryStatus.Disliked);
+
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        // The album verdict itself is still recorded — this is about the Plex mood, nothing else.
+        await _ratings.Received(1).Rate(
+            User, "Big Thief", "Dragon New Warm Mountain", Arg.Any<string?>(), DiscoveryStatus.Disliked);
+    }
+
+    /// <summary>
+    /// The constraint the tag-only seam exists for. A thumb on one record says nothing about the act,
+    /// so the only verdict written is the album's: recording an artist one would grow the recommendation
+    /// frontier out of someone nobody rated, and put them on the user's Ratings page claiming a thumb
+    /// they never gave. Asserted as "the artist seam is asked for a tag and nothing else" — the tag
+    /// write is all it can do, which is precisely why the verdict seam isn't the one being used.
+    /// </summary>
+    [Fact]
+    public async Task Liking_an_ordinary_album_rates_the_album_alone()
+    {
+        _deezer.GetAlbum(999).Returns(Album(999, "Dragon New Warm Mountain", "Big Thief"));
+
+        await _sut.Rate(User, Username, 999, DiscoveryStatus.Liked);
+
+        await _ratings.Received(1).Rate(
+            User, "Big Thief", "Dragon New Warm Mountain", Arg.Any<string?>(), DiscoveryStatus.Liked);
+        _artistFollowUps.ReceivedCalls().Should().ContainSingle()
+            .Which.GetMethodInfo().Name.Should().Be(nameof(IArtistTagFollowUp.QueueArtistTagWrite));
+    }
+
     [Fact]
     public async Task Clearing_a_verdict_strips_both_tags()
     {
@@ -151,6 +234,73 @@ public class CollectionServiceTests
         _followUps.Received(1).QueueAlbumTagWrite(
             "Various Artists", "The Breakfast Club", null,
             Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Liked, Disliked })));
+    }
+
+    // --- The discovery-rate path, which must not touch an artist's mood ---------------------------
+    //
+    // QueueTagWrite is what /api/discovery/rate (and the clear beside it) calls. Those back a UI that
+    // rates artists directly, so the act's mood is the user's own and a verdict on one record is not
+    // allowed to move it. Only CollectionService.Rate — the id-keyed path above — does that.
+
+    /// <summary>
+    /// The regression this boundary exists to prevent, pinned. Thumbing down one album by a band the
+    /// user likes must leave their "&lt;username&gt;_liked" exactly where it is: stripping it would drop
+    /// the whole band out of a "My Library" playlist over one bad record, and nothing would put it back
+    /// — ArtistTagBackfill only re-stamps artists as they <em>arrive</em> in the library.
+    /// </summary>
+    [Fact]
+    public void Disliking_one_album_through_the_discovery_path_leaves_the_artists_mood_alone()
+    {
+        _sut.QueueTagWrite(Username, "Big Thief", "Dragon New Warm Mountain", DiscoveryStatus.Disliked);
+
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+    }
+
+    /// <summary>The like direction is refused for the same reason: it isn't this path's tag to write.</summary>
+    [Fact]
+    public void Liking_one_album_through_the_discovery_path_leaves_the_artists_mood_alone()
+    {
+        _sut.QueueTagWrite(Username, "Big Thief", "Dragon New Warm Mountain", DiscoveryStatus.Liked);
+
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        _followUps.DidNotReceive().QueueAlbumTagWrite(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+    }
+
+    /// <summary>
+    /// Clearing an ordinary album's verdict is the same boundary from the other side. The artist's mood
+    /// belongs to their own verdict, so there is nothing here to undo.
+    /// </summary>
+    [Fact]
+    public void Clearing_an_ordinary_albums_verdict_writes_no_tag()
+    {
+        _sut.QueueTagWrite(Username, "Big Thief", "Dragon New Warm Mountain", status: null);
+
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        _followUps.DidNotReceive().QueueAlbumTagWrite(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+    }
+
+    /// <summary>
+    /// Both moods need a username to prefix the tag with. Without one there is nothing to write, and
+    /// queuing a write with nothing to add or remove would cost a Plex round trip for nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_verdict_with_no_usable_username_queues_no_tag_at_all()
+    {
+        _deezer.GetAlbum(999).Returns(Album(999, "Dragon New Warm Mountain", "Big Thief"));
+        _deezer.GetAlbum(246803).Returns(Album(246803, "The Breakfast Club", "Various Artists"));
+
+        await _sut.Rate(User, username: null, 999, DiscoveryStatus.Liked);
+        await _sut.Rate(User, username: null, 246803, DiscoveryStatus.Liked);
+
+        _artistFollowUps.DidNotReceive().QueueArtistTagWrite(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        _followUps.DidNotReceive().QueueAlbumTagWrite(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
     }
 
     /// <summary>A snooze is a deferred decision, not a verdict — the artist path never tags one either.</summary>

@@ -579,6 +579,126 @@ public class PurchaseServiceTests
             Arg.Is<IReadOnlyCollection<string>>(r => r.Count == 0));
     }
 
+    // --- The terminal marker -----------------------------------------------------------------------
+
+    /// <summary>
+    /// The row saying it is finished, rather than a caller inferring it. Status flips to InLibrary at
+    /// the same moment, but a client polling the list only has an enum to read — and every other value
+    /// in it is non-terminal.
+    /// </summary>
+    [Fact]
+    public async Task An_album_that_arrives_is_stamped_with_when_it_landed()
+    {
+        var before = DateTimeOffset.UtcNow;
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.GetActive();
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Big Thief"] = new(StringComparer.OrdinalIgnoreCase) { ["Capacity"] = null },
+        });
+        await _sut.GetActive();
+
+        var row = _purchases.Items.Should().ContainSingle().Subject;
+        row.Status.Should().Be(PurchaseStatus.InLibrary);
+        row.InLibraryAt.Should().NotBeNull().And.BeOnOrAfter(before);
+    }
+
+    /// <summary>
+    /// The other half of the contract: an unfinished row must not carry the stamp, or it says nothing.
+    /// Sent is the case that matters — downloaded, but not yet scanned into the library, which is
+    /// exactly the state a caller would otherwise mistake for done.
+    /// </summary>
+    [Fact]
+    public async Task A_row_that_has_not_arrived_carries_no_stamp()
+    {
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.GetActive();
+        await _purchases.SetStatus(PurchaseKey.ForAlbum("Big Thief", "Capacity"), PurchaseStatus.Sent);
+
+        var active = await _sut.GetActive();
+
+        var row = active.Should().ContainSingle().Subject;
+        row.Status.Should().Be(PurchaseStatus.Sent);
+        row.SentAt.Should().NotBeNull();
+        row.InLibraryAt.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The stamp names the arrival, not the most recent reconcile. GetActive reconciles on every read
+    /// of the page and an InLibrary row stays in the store for ever, so a stamp rewritten each pass
+    /// would report "landed just now" indefinitely.
+    /// </summary>
+    [Fact]
+    public async Task The_arrival_stamp_is_not_rewritten_by_the_reconciles_that_follow()
+    {
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Big Thief"), new AlbumKey("Capacity"), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.GetActive();
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Big Thief"] = new(StringComparer.OrdinalIgnoreCase) { ["Capacity"] = null },
+        });
+        await _sut.GetActive();
+        var landed = _purchases.Items.Single().InLibraryAt;
+
+        await _sut.GetActive();
+        await _sut.GetActive();
+
+        _purchases.Items.Single().InLibraryAt.Should().Be(landed);
+    }
+
+    /// <summary>
+    /// A manual row has no rating behind it, so it closes out purely on the library seeing the record —
+    /// which is the case the marker was asked for: a script pastes a link and polls for the answer.
+    /// </summary>
+    [Fact]
+    public async Task A_hand_added_album_is_stamped_when_the_library_finally_has_it()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+        _purchases.Items.Should().ContainSingle().Which.InLibraryAt.Should().BeNull();
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
+        });
+        await _sut.GetActive();
+
+        _purchases.Items.Should().ContainSingle().Which.InLibraryAt.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// The stamp is only worth writing if something can read it, and the active list is exactly the
+    /// view that drops the rows carrying it. Without this the caller sees the row vanish — which looks
+    /// identical to the row being pruned because nobody wants the album any more.
+    /// </summary>
+    [Fact]
+    public async Task An_arrived_row_comes_back_only_when_completed_ones_are_asked_for()
+    {
+        DeezerAlbum(225323002, "Cluster Flies", "Various Artists");
+        await _sut.AddManual("https://www.deezer.com/en/album/225323002", "noggog");
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Various Artists"] = new(StringComparer.OrdinalIgnoreCase) { ["Cluster Flies"] = null },
+        });
+
+        (await _sut.GetActive()).Should().BeEmpty();
+
+        var completed = await _sut.GetActive(includeCompleted: true);
+        var row = completed.Should().ContainSingle().Subject;
+        row.Status.Should().Be(PurchaseStatus.InLibrary);
+        row.InLibraryAt.Should().NotBeNull();
+    }
+
     [Fact]
     public async Task Added_credit_is_written_once_not_on_every_later_reconcile()
     {
