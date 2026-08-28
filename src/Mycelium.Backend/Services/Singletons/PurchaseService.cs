@@ -258,15 +258,19 @@ public class PurchaseService
     /// </summary>
     public async Task Reconcile()
     {
+        // Folded, like every other artist comparison here: an act Plex spells with a U+2010 hyphen
+        // is the same act Deezer spells with U+002D, and reading it as absent re-queues its catalogue.
         var owned = (await _library.GetAllArtistMetadata())
             .Select(a => a.ArtistKey.ArtistName)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(ArtistNameComparer.Instance);
         // Normalize the owned album titles up front so typography / whitespace / zero-width
         // differences between Plex and Deezer can't keep an already-owned album stuck in the queue.
         // This is the same canonical match the missing-album diff uses, so the two agree.
         // Kept alongside the normalized map: the landing check below has to hand the merge it records
         // the library's own spelling of the title, which normalizing throws away.
-        var libraryAlbums = await _catalog.GetOwnedAlbums();
+        // Re-keyed here rather than trusted from the caller: the landing check below does its own
+        // TryGetValue against this map, so it must fold artist names whatever comparer it arrived with.
+        var libraryAlbums = ByArtistKey(await _catalog.GetOwnedAlbums());
         var ownedAlbums = NormalizeOwned(libraryAlbums);
         // User-asserted merges (near-miss titles the normalizer can't collapse): an album carrying an
         // override key is treated as owned, so it leaves the queue and stays gone across reconciles.
@@ -495,10 +499,40 @@ public class PurchaseService
     /// diff uses, so the two agree. Where several library titles collapse to one record key the better
     /// copy wins: owning a record twice, once losslessly, is not owning a lossy one.
     /// </summary>
+    /// <summary>
+    /// The owned map re-keyed on the folded artist name (<see cref="ArtistNameComparer"/>), titles left
+    /// in the library's own spelling. The artist is the <em>first</em> gate of every ownership check, so
+    /// an unfolded key short-circuits the title comparison before it runs — which is how a record we
+    /// owned could read as a gap purely because Plex wrote "Ellis&#x2010;Bextor" and Deezer wrote
+    /// "Ellis-Bextor". Acts that fold together are merged, never overwritten.
+    /// </summary>
+    private static Dictionary<string, Dictionary<string, AudioQuality?>> ByArtistKey(
+        Dictionary<string, Dictionary<string, AudioQuality?>> owned)
+    {
+        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(ArtistNameComparer.Instance);
+        foreach (var (artist, albums) in owned)
+        {
+            if (!result.TryGetValue(artist, out var merged))
+            {
+                result[artist] = merged = new Dictionary<string, AudioQuality?>(StringComparer.OrdinalIgnoreCase);
+            }
+            foreach (var (title, quality) in albums)
+            {
+                if (!merged.TryGetValue(title, out var had) || quality > had)
+                {
+                    merged[title] = quality;
+                }
+            }
+        }
+        return result;
+    }
+
     private static Dictionary<string, Dictionary<string, AudioQuality?>> NormalizeOwned(
         Dictionary<string, Dictionary<string, AudioQuality?>> owned)
     {
-        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase);
+        // ArtistNameComparer, not OrdinalIgnoreCase: this rebuilds the dictionary, and a plain
+        // case-insensitive comparer here would silently undo the artist fold the catalog applied.
+        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(ArtistNameComparer.Instance);
         foreach (var (artist, albums) in owned)
         {
             var byTitle = new Dictionary<string, AudioQuality?>(StringComparer.Ordinal);
@@ -510,7 +544,22 @@ public class PurchaseService
                     byTitle[key] = quality;
                 }
             }
-            result[artist] = byTitle;
+            // Merge rather than overwrite, for the same reason the catalog does: two acts can fold
+            // to one key, and the better copy of a shared title wins.
+            if (result.TryGetValue(artist, out var alreadyKeyed))
+            {
+                foreach (var (key, quality) in byTitle)
+                {
+                    if (!alreadyKeyed.TryGetValue(key, out var had) || quality > had)
+                    {
+                        alreadyKeyed[key] = quality;
+                    }
+                }
+            }
+            else
+            {
+                result[artist] = byTitle;
+            }
         }
         return result;
     }

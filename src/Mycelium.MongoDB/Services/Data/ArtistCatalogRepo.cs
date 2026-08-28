@@ -197,7 +197,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
                     .Include(FieldName).Include(FieldAlbums).Include(FieldAlbumQuality),
             });
 
-        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase);
+        // Keyed through the typography fold (see ArtistNameComparer), so a caller asking with Deezer's
+        // spelling finds what Plex filed under its own. This is the single place that decides it for
+        // every consumer of the owned map — reconcile, the missing-album diff, the discography.
+        var result = new Dictionary<string, Dictionary<string, AudioQuality?>>(ArtistNameComparer.Instance);
         foreach (var doc in await cursor.ToListAsync())
         {
             var name = doc.TryGetValue(FieldName, out var n) && !n.IsBsonNull ? n.AsString : doc["_id"].AsString;
@@ -227,7 +230,23 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
                     albums[title] = qualities.TryGetValue(title, out var quality) ? quality : null;
                 }
             }
-            result[name] = albums;
+            // Two acts whose names differ only in typography now share a key. Merge rather than
+            // overwrite: dropping one act's albums for its near-twin would be a worse bug than the
+            // one this fold fixes. Better copy wins where both hold the same title.
+            if (result.TryGetValue(name, out var existingAlbums))
+            {
+                foreach (var (title, quality) in albums)
+                {
+                    if (!existingAlbums.TryGetValue(title, out var had) || quality > had)
+                    {
+                        existingAlbums[title] = quality;
+                    }
+                }
+            }
+            else
+            {
+                result[name] = albums;
+            }
         }
 
         return result;

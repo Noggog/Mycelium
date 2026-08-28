@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Mycelium.Backend.Services.Singletons;
+using Mycelium.Interfaces;
 using Xunit;
 
 namespace Mycelium.Tests;
@@ -358,5 +359,56 @@ public class AlbumTitleMatcherTests
     public void A_title_that_is_only_an_article_survives()
     {
         AlbumTitleMatcher.NormalizeRecord("The").Should().Be("the");
+    }
+
+    // --- artist axis -------------------------------------------------------------------------
+
+    [Theory]
+    // The case that started this: visually identical, never equal.
+    [InlineData("Sophie Ellis-Bextor", "Sophie Ellis\u2010Bextor")]       // U+002D vs U+2010 HYPHEN
+    [InlineData("Anne-Marie", "Anne\u2011Marie")]                          // U+2011 non-breaking hyphen
+    [InlineData("Jay-Z", "Jay\u2212Z")]                                    // U+2212 minus sign
+    [InlineData("Keston Cobblers' Club", "Keston Cobblers\u2019 Club")]    // curly apostrophe
+    [InlineData("Florence + the Machine", "florence + THE machine")]      // case only
+    [InlineData("Simon & Garfunkel", "Simon and Garfunkel")]              // ampersand convention
+    [InlineData(" Boards  of   Canada ", "Boards of Canada")]             // whitespace
+    public void Artist_spellings_that_differ_only_in_typography_are_one_act(string a, string b)
+    {
+        AlbumTitleMatcher.NormalizeArtist(a).Should().Be(AlbumTitleMatcher.NormalizeArtist(b));
+        ArtistNameComparer.Instance.Equals(a, b).Should().BeTrue();
+        ArtistNameComparer.Instance.GetHashCode(a).Should().Be(ArtistNameComparer.Instance.GetHashCode(b));
+    }
+
+    [Theory]
+    // Artist names get the fold and nothing else. Unlike an album pressing, no source lists one act
+    // under both spellings, so trimming articles or qualifiers here would merge real, distinct acts.
+    [InlineData("The Band", "Band")]
+    [InlineData("Yes", "The Yes")]
+    [InlineData("Thao", "Thao and the Get Down Stay Down")]
+    [InlineData("Eliza", "Eliza Doolittle")]
+    public void Artist_normalisation_does_not_trim_anything_beyond_typography(string a, string b)
+    {
+        AlbumTitleMatcher.NormalizeArtist(a).Should().NotBe(AlbumTitleMatcher.NormalizeArtist(b));
+        ArtistNameComparer.Instance.Equals(a, b).Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_merge_recorded_under_one_hyphen_is_honoured_under_the_other()
+    {
+        // Override keys are built from stored strings on one side and live ones on the other, so the
+        // artist half has to fold too — otherwise a merge the user recorded by hand silently stops
+        // applying the next time the diff runs.
+        AlbumOverrideKey.For("Sophie Ellis\u2010Bextor", "Read My Lips (Deluxe Version)")
+            .Should().Be(AlbumOverrideKey.For("Sophie Ellis-Bextor", "Read My Lips"));
+    }
+
+    [Fact]
+    public void The_edition_trim_and_the_artist_fold_compose()
+    {
+        // The whole bug in one assertion: the title half always worked, the artist half never did,
+        // and ownership needs both to agree at once.
+        AlbumTitleMatcher.NormalizeRecord("Read My Lips (Deluxe Version)").Should().Be("read my lips");
+        AlbumTitleMatcher.NormalizeArtist("Sophie Ellis\u2010Bextor")
+            .Should().Be(AlbumTitleMatcher.NormalizeArtist("Sophie Ellis-Bextor"));
     }
 }

@@ -215,6 +215,88 @@ public class PurchaseServiceTests
     }
 
     [Fact]
+    public async Task A_sent_album_closes_out_when_plex_spells_the_artist_with_a_different_hyphen()
+    {
+        // The real case, 2026-08-27: Plex files Sophie Ellis-Bextor with U+2010 HYPHEN, Deezer writes
+        // U+002D HYPHEN-MINUS. The two are indistinguishable on screen, which is why this went unspotted
+        // for so long and kept being read as an album-title problem.
+        //
+        // It is not: the artist is looked up FIRST, so an unfolded name short-circuits the title
+        // comparison before the (perfectly working) edition trim ever runs. The row sat in Sent, the
+        // Download page offered "Match Existing Album", and a human had to click it.
+        const string deezerArtist = "Sophie Ellis-Bextor";          // U+002D
+        const string plexArtist = "Sophie Ellis\u2010Bextor";       // U+2010
+        const string deezerTitle = "Read My Lips (Deluxe Version)";
+
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey(deezerArtist), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        await _purchases.SetStatus(PurchaseKey.ForAlbum(deezerArtist, deezerTitle), PurchaseStatus.Sent);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [plexArtist] = new(StringComparer.OrdinalIgnoreCase) { ["Read My Lips"] = null },
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Should().BeEmpty();
+        _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+        // Nothing to record: the fold makes the two spellings one act, so the diff already agrees.
+        // A merge override here would mean we had papered over the mismatch instead of fixing it.
+        _overrides.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_sent_album_closes_out_when_plex_spells_the_artist_with_a_curly_apostrophe()
+    {
+        // Same shape, the other spelling both sources disagree on. 17 acts in the real library carry
+        // a curly apostrophe where Deezer writes a straight one.
+        const string deezerArtist = "Keston Cobblers' Club";
+        const string plexArtist = "Keston Cobblers\u2019 Club";
+
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey(deezerArtist), new AlbumKey("Almost Home"), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        await _purchases.SetStatus(PurchaseKey.ForAlbum(deezerArtist, "Almost Home"), PurchaseStatus.Sent);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [plexArtist] = new(StringComparer.OrdinalIgnoreCase) { ["Almost Home"] = null },
+        });
+
+        (await _sut.GetActive()).Should().BeEmpty();
+        _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+    }
+
+    [Fact]
+    public async Task Two_acts_that_fold_together_keep_both_their_albums()
+    {
+        // The one way this fold could make matching worse: if the owned map overwrote one act with its
+        // near-twin, albums would vanish and read as gaps. Both spellings' albums have to survive.
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey("Sophie Ellis-Bextor"), new AlbumKey("Trip the Light Fantastic"), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        await _purchases.SetStatus(
+            PurchaseKey.ForAlbum("Sophie Ellis-Bextor", "Trip the Light Fantastic"), PurchaseStatus.Sent);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Sophie Ellis\u2010Bextor"] = new(StringComparer.OrdinalIgnoreCase) { ["Read My Lips"] = null },
+            ["Sophie Ellis-Bextor"] = new(StringComparer.OrdinalIgnoreCase) { ["Trip the Light Fantastic"] = null },
+        });
+
+        (await _sut.GetActive()).Should().BeEmpty();
+        _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+    }
+
+    [Fact]
     public async Task Owning_the_plain_release_closes_out_a_want_for_the_edition()
     {
         // The library holds one copy of a record, under whatever title Plex gave it, and that copy is

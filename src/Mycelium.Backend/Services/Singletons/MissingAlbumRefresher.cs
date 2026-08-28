@@ -292,7 +292,7 @@ public class MissingAlbumRefresher
         // album-artist lookup share the work. Presence answers "do we own it"; the value answers "is
         // what we have good enough", which is a separate question the diff asks second.
         var normalizedOwned = new Dictionary<string, Dictionary<string, AudioQuality?>>(
-            StringComparer.OrdinalIgnoreCase);
+            ArtistNameComparer.Instance);
         Dictionary<string, AudioQuality?> OwnedTitlesFor(string artistName)
         {
             if (normalizedOwned.TryGetValue(artistName, out var cached))

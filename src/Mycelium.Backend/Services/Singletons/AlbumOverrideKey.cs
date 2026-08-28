@@ -15,5 +15,5 @@ namespace Mycelium.Backend.Services.Singletons;
 public static class AlbumOverrideKey
 {
     public static string For(string artist, string? title) =>
-        $"{artist.ToLowerInvariant()} {AlbumTitleMatcher.NormalizeRecord(title)}";
+        $"{AlbumTitleMatcher.NormalizeArtist(artist)} {AlbumTitleMatcher.NormalizeRecord(title)}";
 }

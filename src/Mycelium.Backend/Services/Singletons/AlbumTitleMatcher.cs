@@ -1,5 +1,5 @@
-using System.Text;
 using System.Text.RegularExpressions;
+using Mycelium.Interfaces;
 
 namespace Mycelium.Backend.Services.Singletons;
 
@@ -66,69 +66,23 @@ public static partial class AlbumTitleMatcher
         StripLeadingArticle(StripReleaseQualifiers(Normalize(title)));
 
     /// <summary>
-    /// Trimmed, lower-cased, with curly quotes/apostrophes and en/em dashes folded to ASCII,
-    /// zero-width characters stripped, ampersands spelled out as "and", and internal whitespace
-    /// collapsed — so a title that differs only in typography (Plex's "Don't" vs. Deezer's "Don't")
-    /// or in the ampersand convention (Plex's "Radiance &amp; Submission" vs. Deezer's "Radiance and
-    /// Submission") still matches.
+    /// The shared typography fold — see <see cref="TypographyFold"/>. Kept as a private alias so the
+    /// title rules below read unchanged, while artist names go through the very same fold via
+    /// <see cref="NormalizeArtist"/> and <see cref="ArtistNameComparer"/>.
     /// </summary>
-    private static string FoldTypography(string? title)
-    {
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            return string.Empty;
-        }
+    private static string FoldTypography(string? title) => TypographyFold.Apply(title);
 
-        var sb = new StringBuilder(title.Length);
-        // A separator is owed before the next character we emit. Starts false so leading whitespace
-        // is dropped, and is never flushed at the end so trailing whitespace is too.
-        var pendingSpace = false;
-        foreach (var ch in title)
-        {
-            switch (ch)
-            {
-                // Zero-width and BOM characters: drop entirely (often pasted/copied invisibly).
-                case '​' or '‌' or '‍' or '﻿':
-                    continue;
-            }
-
-            var c = ch switch
-            {
-                '‘' or '’' or 'ʼ' or '′' => '\'', // curly/modifier apostrophes, prime
-                '“' or '”' => '"',                          // curly double quotes
-                '–' or '—' => '-',                          // en/em dash
-                _ => char.ToLowerInvariant(ch),
-            };
-
-            if (char.IsWhiteSpace(c))
-            {
-                pendingSpace = sb.Length > 0;
-                continue;
-            }
-
-            if (c is '&' or '＆')
-            {
-                // Spelled out and space-padded on both sides, so "R&B", "R & B" and "R and B" all
-                // land on the same form regardless of which side of the swap each source wrote.
-                if (sb.Length > 0)
-                {
-                    sb.Append(' ');
-                }
-                sb.Append("and");
-                pendingSpace = true;
-                continue;
-            }
-
-            if (pendingSpace)
-            {
-                sb.Append(' ');
-                pendingSpace = false;
-            }
-            sb.Append(c);
-        }
-
-        return sb.ToString();
-    }
+    /// <summary>
+    /// Canonical form for an <em>artist</em> name: the typography fold and nothing else. No qualifier
+    /// or article stripping — an act called "The Band" is not the act called "Band", and unlike an
+    /// album pressing no source lists one act under both spellings.
+    ///
+    /// <para>This exists because ownership asks the artist question <em>first</em>: every check does
+    /// <c>owned.TryGetValue(artist)</c> before it ever compares a title, so an unfolded artist name
+    /// short-circuits the whole match. The album axis has been folded since the beginning; this is the
+    /// other half.</para>
+    /// </summary>
+    public static string NormalizeArtist(string? name) => TypographyFold.Apply(name);
 
     /// <summary>
     /// Drops featured-artist credits — "(feat. Sia)", "[ft. Kendrick Lamar]", "(featuring Nate Dogg)" —
