@@ -182,61 +182,81 @@ public class SmartPlaylistService
     /// <summary>
     /// Gathers everything a survey needs in one pass: the library section, the user's existing smart
     /// playlists with their rules, the stock definitions, and the tag vocabularies both sides reference.
+    ///
+    /// <para><b>This is the page's whole latency budget</b>, so the reads are overlapped and
+    /// deduplicated rather than run in a line. The playlist listing costs one request per playlist and
+    /// dominates; nothing else here depends on it, so it runs alongside the tag lookups and the user
+    /// read. The tag vocabularies are memoised per survey because the same one is wanted repeatedly —
+    /// "mood" at artist type answers the liked tag, the recommended tag, and the id-to-name map every
+    /// comparison needs, which was three identical requests before.</para>
     /// </summary>
     private async Task<SurveyContext> LoadContext(
         string subject, PlexLink link, string? username, int freshMonths)
     {
         var section = (await _plexApi.ResolveLibrary()).Key;
-        var existing = await _playlists.GetSmartAudioPlaylists(link.ServerToken);
 
-        // Only used to build "open it in Plex" links, so a server that won't say who it is costs the
-        // links, not the survey.
-        var machineId = await MachineIdentifier();
+        // One fetch per (field, type) for the life of this survey, whoever asks for it.
+        var vocabularies = new Dictionary<(string Field, int Type), Task<IReadOnlyList<PlexTagEntry>>>();
+        Task<IReadOnlyList<PlexTagEntry>> Vocabulary(string field, int type)
+        {
+            if (!vocabularies.TryGetValue((field, type), out var pending))
+            {
+                pending = _playlists.GetSectionTags(section, field, type);
+                vocabularies[(field, type)] = pending;
+            }
+            return pending;
+        }
 
         // The same tag the thumbs write, derived the same way, so the rule can't drift from the tagger.
-        // Looked up twice because Plex keys its tag vocabularies per metadata type: the identical name
+        // Looked up in two vocabularies because Plex keys them per metadata type: the identical name
         // has one id on artists and a different one on albums, and a "My Library" playlist has to match
         // both — the artist tag for ordinary likes, the album tag for collections, which have no act to
         // carry one.
         var likedTag = ArtistTag.For(username, DiscoveryStatus.Liked);
-        var likedArtistTagId = likedTag is null
-            ? null
-            : await FindTagId(section, "mood", likedTag, PlexSmartFilter.ArtistType);
-        var likedAlbumTagId = likedTag is null
-            ? null
-            : await FindTagId(section, "mood", likedTag, PlexSmartFilter.AlbumType);
-
         // The marker the discovery sweep writes onto owned-but-unrated artists the user's likes point
         // at, which the Frontier rule unions with the likes. Artists only — the sweep never puts it on
         // an album — so there is no album-vocabulary lookup to match the pair above.
         var recommendedTag = ArtistTag.Recommended(username);
-        var recommendedArtistTagId = recommendedTag is null
-            ? null
-            : await FindTagId(section, "mood", recommendedTag, PlexSmartFilter.ArtistType);
+
+        // Everything below is independent of everything else, so it all goes out at once and the page
+        // waits for the slowest rather than for the sum.
+        var existingTask = _playlists.GetSmartAudioPlaylists(link.ServerToken);
+        // Only used to build "open it in Plex" links, so a server that won't say who it is costs the
+        // links, not the survey.
+        var machineIdTask = MachineIdentifier();
+        var halfStarsTask = HalfStars(subject);
+        var likedArtistTask = FindTagId(Vocabulary("mood", PlexSmartFilter.ArtistType), likedTag);
+        var likedAlbumTask = FindTagId(Vocabulary("mood", PlexSmartFilter.AlbumType), likedTag);
+        var recommendedArtistTask = FindTagId(Vocabulary("mood", PlexSmartFilter.ArtistType), recommendedTag);
+
+        var existing = await existingTask;
 
         var options = new StockPlaylistOptions(
-            likedArtistTagId,
-            likedAlbumTagId,
-            recommendedArtistTagId,
+            await likedArtistTask,
+            await likedAlbumTask,
+            await recommendedArtistTask,
             freshMonths,
-            await HalfStars(subject));
+            await halfStarsTask);
         var definitions = SmartPlaylistCatalog.Build(options);
 
-        // Only the tag vocabularies actually referenced get fetched — one request each, and typically
-        // just "mood".
+        // Only the tag vocabularies actually referenced get mapped back to names — typically just
+        // "mood", which the lookups above have already fetched.
         var trees = definitions.Select(d => d.Filter?.Rules)
             .Concat(existing.Select(p => p.TryGetFilter(out _, out var f) ? f.Rules : null));
+        var referenced = PlexTagFields.Referenced(trees).ToArray();
+        var fetched = await Task.WhenAll(referenced.Select(r => Vocabulary(r.Leaf, r.Type)));
+
         var maps = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (field, leaf, type) in PlexTagFields.Referenced(trees))
+        for (var i = 0; i < referenced.Length; i++)
         {
-            var tags = await _playlists.GetSectionTags(section, leaf, type);
-            maps[field] = tags
+            maps[referenced[i].Field] = fetched[i]
                 .GroupBy(t => t.Key, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.First().Title, StringComparer.Ordinal);
         }
 
         return new SurveyContext(
-            link.ServerToken, link.Username, section, machineId, options, definitions, existing, maps);
+            link.ServerToken, link.Username, section, await machineIdTask, options, definitions,
+            existing, maps);
     }
 
     /// <summary>
@@ -261,9 +281,20 @@ public class SmartPlaylistService
         }
     }
 
-    private async Task<string?> FindTagId(int section, string field, string tagName, int type)
+    /// <summary>
+    /// The id of <paramref name="tagName"/> in an already-requested vocabulary, or null when the tag
+    /// doesn't exist there yet — or when there is no tag to look for, which is the case for a user
+    /// whose name doesn't reduce to a usable prefix.
+    /// </summary>
+    private static async Task<string?> FindTagId(
+        Task<IReadOnlyList<PlexTagEntry>> vocabulary, string? tagName)
     {
-        var tags = await _playlists.GetSectionTags(section, field, type);
+        if (tagName is null)
+        {
+            return null;
+        }
+
+        var tags = await vocabulary;
         return tags.FirstOrDefault(t => string.Equals(t.Title, tagName, StringComparison.OrdinalIgnoreCase))?.Key;
     }
 

@@ -66,11 +66,11 @@ public static class SmartPlaylistCatalog
     public const string DeepFrontierId = "frontier-deep";
 
     /// <summary>
-    /// The rating scale assumed for a user who has never said. Half stars, because that is what these
-    /// playlists have always generated: flipping the default would silently rewrite the rules of every
-    /// Frontier already created.
+    /// The rating scale assumed for a user who has never said. Whole stars: it is what every Plex
+    /// client can set, so it is the safe guess — half stars are opt-in per app (Plexamp and the mobile
+    /// apps have them, Plex for the web doesn't) and so are opt-in here too.
     /// </summary>
-    public const bool DefaultHalfStars = true;
+    public const bool DefaultHalfStars = false;
 
     /// <summary>The "not played in the last N months" windows the picker offers for Fresh variants.</summary>
     public static readonly int[] FreshWindows = { 1, 3, 6, 12 };

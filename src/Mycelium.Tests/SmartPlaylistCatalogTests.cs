@@ -205,7 +205,7 @@ public class SmartPlaylistCatalogTests
     public void Frontier_also_admits_the_album_mood_a_liked_collection_carries()
     {
         var filter = SmartPlaylistCatalog
-            .Build(new StockPlaylistOptions(LikedArtist, LikedAlbum, RecommendedArtist))
+            .Build(new StockPlaylistOptions(LikedArtist, LikedAlbum, RecommendedArtist, HalfStars: true))
             .Single(d => d.Id == SmartPlaylistCatalog.FrontierId).Filter!;
 
         PlexFilterSerializer.Serialize(filter).Should().Be(
@@ -268,15 +268,15 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// A user who has never answered gets the half-star rules, which is what this app has always
-    /// generated. Flipping that default would silently rewrite every Frontier already created.
+    /// A user who has never answered gets the whole-star rules — the scale every Plex client can
+    /// actually set. Half stars are opt-in per app, so they are opt-in here too.
     /// </summary>
     [Fact]
-    public void The_default_scale_is_the_one_these_playlists_have_always_used()
+    public void The_default_scale_is_whole_stars()
     {
-        SmartPlaylistCatalog.DefaultHalfStars.Should().BeTrue();
+        SmartPlaylistCatalog.DefaultHalfStars.Should().BeFalse();
 
-        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: true))
+        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: false))
             .Should().Be(PlexFilterSerializer.Serialize(
                 SmartPlaylistCatalog.Build(new StockPlaylistOptions())
                     .Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter!));

@@ -3278,11 +3278,14 @@ a.playlist-badge.is-link:hover {
   margin-top: 0;
 }
 
+/* Flush to the section's right edge — the key is a reference column, not body copy, so it reads as
+   something set apart from the choice rather than as a second paragraph. */
 .playlist-scale-key {
   margin: 0;
   display: grid;
   gap: 0.3rem;
   font-size: 0.85rem;
+  justify-self: end;
 }
 
 /* Each rung is its own row: the rating in a fixed column so the stars line up, the meaning beside it. */
@@ -3303,6 +3306,12 @@ a.playlist-badge.is-link:hover {
 .playlist-scale-key dd {
   margin: 0;
   color: var(--text-dim);
+}
+
+/* Rows the survey is currently re-reading: still legible, visibly not the final answer. */
+.playlist-rows.is-stale {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
 }
 
 /* The rating slider takes the row's spare width, with its current tier pinned to the right so the

@@ -9,6 +9,7 @@ import {
   getStockPlaylists,
   setRatingScale,
   updateStockPlaylist,
+  type PlaylistSurvey,
   type StockPlaylist,
 } from '../api/playlists'
 
@@ -223,17 +224,45 @@ function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
   }
 }
 
-function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; freshMonths: number }) {
+// Every survey in the cache — there is one per fresh window the user has looked at, and a write
+// affects all of them.
+const SURVEYS = { queryKey: ['stock-playlists'] } as const
+
+// A survey read costs one Plex request per playlist the user owns, so it is the slow thing on this
+// page and must never sit between an action and its result. Both writers below patch the cache with
+// what the server already told them and let the refetch land whenever it lands.
+function usePatchSurvey() {
   const queryClient = useQueryClient()
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['stock-playlists'] })
+
+  return (patch: (survey: PlaylistSurvey) => PlaylistSurvey) => {
+    queryClient.setQueriesData<PlaylistSurvey>(SURVEYS, (survey) =>
+      survey ? patch(survey) : survey,
+    )
+    // Reconciles anything the patch couldn't know — in the background, deliberately not awaited:
+    // returning this promise from onSuccess would keep the mutation "pending" for the whole refetch,
+    // which is what made the controls feel stuck.
+    void queryClient.invalidateQueries(SURVEYS)
+  }
+}
+
+function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; freshMonths: number }) {
+  const patchSurvey = usePatchSurvey()
+
+  // The server answers with the row's new state, so it goes straight into the cache: the badge flips
+  // the moment Plex confirms, without waiting to re-read every playlist on the server.
+  const applyResult = (updated: StockPlaylist) =>
+    patchSurvey((survey) => ({
+      ...survey,
+      playlists: survey.playlists.map((p) => (p.id === updated.id ? updated : p)),
+    }))
 
   const create = useMutation({
     mutationFn: () => createStockPlaylist(playlist.id, freshMonths),
-    onSuccess: refresh,
+    onSuccess: applyResult,
   })
   const update = useMutation({
     mutationFn: () => updateStockPlaylist(playlist.id, freshMonths),
-    onSuccess: refresh,
+    onSuccess: applyResult,
   })
   const busy = create.isPending || update.isPending
   const error = (create.error ?? update.error) as Error | undefined
@@ -252,13 +281,13 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
       <div className="playlist-actions">
         {playlist.state === 'NotCreated' && (
           <button onClick={() => create.mutate()} disabled={busy}>
-            {create.isPending ? 'Creating…' : 'Create'}
+            {create.isPending ? <><Spinner /> Creating…</> : 'Create'}
           </button>
         )}
         {playlist.state === 'Differs' && (
           // Destructive: it rewrites the rules of a playlist the user made themselves.
           <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
-            {update.isPending ? 'Replacing…' : 'Replace'}
+            {update.isPending ? <><Spinner /> Replacing…</> : 'Replace'}
           </button>
         )}
       </div>
@@ -297,14 +326,15 @@ const WHOLE_STAR_KEY: [string, string][] = [
 // capability — Plexamp offers it, Plex Web can only set whole stars — and no server or account
 // setting exposes which one someone actually uses. It matters because the lowest score a user can
 // give is the one that means "never play again", and Frontier has to leave that music alone.
-function RatingScale({ halfStars }: { halfStars: boolean }) {
-  const queryClient = useQueryClient()
+function RatingScale({ halfStars, busy }: { halfStars: boolean; busy: boolean }) {
+  const patchSurvey = usePatchSurvey()
 
-  // Invalidates the survey rather than just the checkbox: the Frontier rules change with the answer,
-  // so every row's "do you already have this?" verdict has to be recomputed.
+  // The answer is the user's own — the server stores it, it doesn't decide it — so the checkbox and
+  // the key beside it flip as soon as the write lands. What the answer *implies* (which tiers exist,
+  // which Frontier copies still match) takes a full survey, and that arrives in its own time.
   const save = useMutation({
     mutationFn: (next: boolean) => setRatingScale(next),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stock-playlists'] }),
+    onSuccess: (_result, next) => patchSurvey((survey) => ({ ...survey, halfStars: next })),
   })
 
   return (
@@ -323,6 +353,11 @@ function RatingScale({ halfStars }: { halfStars: boolean }) {
           Rate in half stars
         </label>
 
+        {(save.isPending || busy) && (
+          <p className="dev-status disc-sub-busy">
+            <Spinner /> {save.isPending ? 'Saving…' : 'Rechecking your playlists…'}
+          </p>
+        )}
         {save.isError && <p className="error">{(save.error as Error).message}</p>}
       </div>
 
@@ -390,16 +425,18 @@ function StockPlaylists() {
 
   return (
     <>
-      <RatingScale halfStars={survey.data?.halfStars ?? true} />
+      <RatingScale halfStars={survey.data?.halfStars ?? false} busy={survey.isFetching} />
 
       <div className="dev-tool">
         <h2>Starter playlists</h2>
-        {['my-library', 'frontier', 'frontier-deep']
-          .map((id) => byId.get(id))
-          .filter((p): p is StockPlaylist => p !== undefined)
-          .map((playlist) => (
-            <PlaylistRow key={playlist.id} playlist={playlist} freshMonths={freshMonths} />
-          ))}
+        <div className={survey.isFetching ? 'playlist-rows is-stale' : 'playlist-rows'}>
+          {['my-library', 'frontier', 'frontier-deep']
+            .map((id) => byId.get(id))
+            .filter((p): p is StockPlaylist => p !== undefined)
+            .map((playlist) => (
+              <PlaylistRow key={playlist.id} playlist={playlist} freshMonths={freshMonths} />
+            ))}
+        </div>
       </div>
 
       <div className="dev-tool">
@@ -439,11 +476,13 @@ function StockPlaylists() {
           </select>
         </div>
 
-        {picked ? (
-          <PlaylistRow playlist={picked} freshMonths={freshMonths} />
-        ) : (
-          <p className="dev-status">Nothing to offer at that rating.</p>
-        )}
+        <div className={survey.isFetching ? 'playlist-rows is-stale' : 'playlist-rows'}>
+          {picked ? (
+            <PlaylistRow playlist={picked} freshMonths={freshMonths} />
+          ) : (
+            <p className="dev-status">Nothing to offer at that rating.</p>
+          )}
+        </div>
       </div>
     </>
   )

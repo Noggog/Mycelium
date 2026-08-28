@@ -220,7 +220,7 @@ public class SmartPlaylistServiceTests
         var survey = await Survey();
 
         survey.HalfStars.Should().Be(SmartPlaylistCatalog.DefaultHalfStars);
-        survey.Playlists.Should().Contain(p => p.Id == "stars-3_5");
+        survey.Playlists.Should().Contain(p => p.Id == "stars-4");
     }
 
     /// <summary>Whole stars means the half tiers aren't on offer at all.</summary>

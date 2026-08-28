@@ -37,6 +37,14 @@ public class PlexPlaylistApi : IPlexPlaylistApi
         _logger = logger;
     }
 
+    /// <summary>
+    /// How many playlist reads run at once. The listing costs one read per playlist and someone with a
+    /// well-tended library has dozens, which is a visible wait when they run one at a time. Six is
+    /// enough to hide nearly all of the latency while staying polite to what is usually a home server
+    /// on domestic hardware — this is a page load, not a batch job.
+    /// </summary>
+    private const int PlaylistReadConcurrency = 6;
+
     public async Task<PlexPlaylist[]> GetSmartAudioPlaylists(string token)
     {
         // smart=1 narrows the listing server-side, so the per-playlist reads below are only spent on
@@ -48,24 +56,21 @@ public class PlexPlaylistApi : IPlexPlaylistApi
             return Array.Empty<PlexPlaylist>();
         }
 
-        var playlists = new List<PlexPlaylist>(metadata.Count);
-        foreach (var entry in metadata.OfType<JObject>())
-        {
-            var ratingKey = entry["ratingKey"]?.ToString();
-            if (ratingKey is null)
-            {
-                continue;
-            }
+        var keys = metadata.OfType<JObject>()
+            .Select(entry => entry["ratingKey"]?.ToString())
+            .Where(key => key is not null)
+            .ToArray();
 
-            // The listing never carries `content`, whatever it's asked for, so the rules cost a read each.
-            var full = await ReadPlaylist(token, ratingKey);
-            if (full is not null)
-            {
-                playlists.Add(full);
-            }
-        }
+        // The listing never carries `content`, whatever it's asked for, so the rules cost a read each.
+        // Results land in a fixed slot rather than being appended, so concurrency doesn't shuffle the
+        // order the server gave — callers compare against it and a stable order keeps logs readable.
+        var read = new PlexPlaylist?[keys.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, keys.Length),
+            new ParallelOptions { MaxDegreeOfParallelism = PlaylistReadConcurrency },
+            async (i, _) => read[i] = await ReadPlaylist(token, keys[i]!));
 
-        return playlists.ToArray();
+        return read.OfType<PlexPlaylist>().ToArray();
     }
 
     public async Task<PlexPlaylist> CreateSmartPlaylist(
