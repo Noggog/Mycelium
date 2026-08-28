@@ -40,6 +40,7 @@ public record PlaylistSurvey(
     bool Linked,
     string? PlexUsername,
     int FreshMonths,
+    bool HalfStars,
     IReadOnlyList<StockPlaylistStatus> Playlists);
 
 /// <summary>
@@ -59,17 +60,20 @@ public class SmartPlaylistService
     private readonly IPlexLinkRepo _links;
     private readonly IPlexPlaylistApi _playlists;
     private readonly IPlexApi _plexApi;
+    private readonly IUserRepo _users;
     private readonly ILogger<SmartPlaylistService> _logger;
 
     public SmartPlaylistService(
         IPlexLinkRepo links,
         IPlexPlaylistApi playlists,
         IPlexApi plexApi,
+        IUserRepo users,
         ILogger<SmartPlaylistService> logger)
     {
         _links = links;
         _playlists = playlists;
         _plexApi = plexApi;
+        _users = users;
         _logger = logger;
     }
 
@@ -81,15 +85,22 @@ public class SmartPlaylistService
         var link = await _links.Get(subject);
         if (link is null)
         {
+            // No account to survey — but the rating scale is the user's own answer, not the Plex
+            // link's, so report it anyway rather than making the page guess before they connect.
             return new PlaylistSurvey(
-                Linked: false, PlexUsername: null, freshMonths, Array.Empty<StockPlaylistStatus>());
+                Linked: false,
+                PlexUsername: null,
+                freshMonths,
+                HalfStars: await HalfStars(subject),
+                Array.Empty<StockPlaylistStatus>());
         }
 
-        var context = await LoadContext(link, username, freshMonths);
+        var context = await LoadContext(subject, link, username, freshMonths);
         return new PlaylistSurvey(
             Linked: true,
             PlexUsername: link.Username,
             FreshMonths: freshMonths,
+            HalfStars: context.Options.HalfStars,
             Playlists: context.Definitions.Select(context.Evaluate).ToArray());
     }
 
@@ -161,7 +172,7 @@ public class SmartPlaylistService
         var link = await _links.Get(subject)
                    ?? throw new InvalidOperationException("No Plex account is linked to this user.");
 
-        var context = await LoadContext(link, username, freshMonths);
+        var context = await LoadContext(subject, link, username, freshMonths);
         var definition = context.Definitions.FirstOrDefault(d => d.Id == definitionId)
                          ?? throw new ArgumentException($"Unknown playlist '{definitionId}'.", nameof(definitionId));
 
@@ -172,7 +183,8 @@ public class SmartPlaylistService
     /// Gathers everything a survey needs in one pass: the library section, the user's existing smart
     /// playlists with their rules, the stock definitions, and the tag vocabularies both sides reference.
     /// </summary>
-    private async Task<SurveyContext> LoadContext(PlexLink link, string? username, int freshMonths)
+    private async Task<SurveyContext> LoadContext(
+        string subject, PlexLink link, string? username, int freshMonths)
     {
         var section = (await _plexApi.ResolveLibrary()).Key;
         var existing = await _playlists.GetSmartAudioPlaylists(link.ServerToken);
@@ -202,8 +214,13 @@ public class SmartPlaylistService
             ? null
             : await FindTagId(section, "mood", recommendedTag, PlexSmartFilter.ArtistType);
 
-        var definitions = SmartPlaylistCatalog.Build(
-            likedArtistTagId, likedAlbumTagId, recommendedArtistTagId, freshMonths);
+        var options = new StockPlaylistOptions(
+            likedArtistTagId,
+            likedAlbumTagId,
+            recommendedArtistTagId,
+            freshMonths,
+            await HalfStars(subject));
+        var definitions = SmartPlaylistCatalog.Build(options);
 
         // Only the tag vocabularies actually referenced get fetched — one request each, and typically
         // just "mood".
@@ -219,8 +236,16 @@ public class SmartPlaylistService
         }
 
         return new SurveyContext(
-            link.ServerToken, link.Username, section, machineId, definitions, existing, maps);
+            link.ServerToken, link.Username, section, machineId, options, definitions, existing, maps);
     }
+
+    /// <summary>
+    /// Whether this user rates in half stars. Plex can't be asked — half-star support is a per-client
+    /// capability, not a setting — so this is the answer they gave on the Playlists page, falling back
+    /// to the catalog default while they haven't given one.
+    /// </summary>
+    private async Task<bool> HalfStars(string subject) =>
+        (await _users.Get(subject))?.HalfStarRatings ?? SmartPlaylistCatalog.DefaultHalfStars;
 
     /// <summary>The server id the deep links are built from, or null when Plex can't be reached.</summary>
     private async Task<string?> MachineIdentifier()
@@ -248,6 +273,7 @@ public class SmartPlaylistService
         string PlexUsername,
         int SectionKey,
         string? MachineId,
+        StockPlaylistOptions Options,
         IReadOnlyList<StockPlaylistDefinition> Definitions,
         IReadOnlyList<PlexPlaylist> Existing,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> TagNames)

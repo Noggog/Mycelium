@@ -1333,6 +1333,27 @@ playlists.MapPost("/stock/{id}", async (
     })
     .WithName("CreateStockPlaylist");
 
+// How this user rates in Plex. Plex itself can't be asked — half-star support is a per-client
+// capability (Plexamp has it, Plex Web doesn't), exposed by no server or account setting — so the
+// user tells us, and the generated rules put their "never play again" floor in the right place.
+// A null clears the answer, returning them to the catalog default.
+playlists.MapPut("/rating-scale", async (
+        RatingScaleRequest body, HttpContext http, IUserRepo users) =>
+    {
+        var subject = http.User.GetSubject()!;
+        if (await users.Get(subject) is null)
+        {
+            return Results.BadRequest(new { error = "No such user" });
+        }
+
+        await users.SetHalfStarRatings(subject, body.HalfStars);
+        return Results.Ok(new
+        {
+            halfStars = body.HalfStars ?? SmartPlaylistCatalog.DefaultHalfStars,
+        });
+    })
+    .WithName("SetRatingScale");
+
 // Rewrites the rules of a playlist that holds one of our names but selects something else.
 playlists.MapPut("/stock/{id}", async (
         string id, HttpContext http, SmartPlaylistService service, int? freshMonths) =>
@@ -1368,6 +1389,12 @@ app.Run();
 /// a URL — where it would be logged by the request logger, proxies, and browser history alike.
 /// </summary>
 internal record ArlUpdateRequest(string? Arl);
+
+/// <summary>
+/// Body of the rating-scale update: whether the user rates in half stars. Null means "I never said",
+/// which restores the catalog default rather than asserting whole stars.
+/// </summary>
+internal record RatingScaleRequest(bool? HalfStars);
 
 /// <summary>
 /// Body of a Plex token paste. Same reasoning as <see cref="ArlUpdateRequest"/>: a credential in a

@@ -7,6 +7,7 @@ import {
   createStockPlaylist,
   FRESH_WINDOWS,
   getStockPlaylists,
+  setRatingScale,
   updateStockPlaylist,
   type StockPlaylist,
 } from '../api/playlists'
@@ -173,9 +174,6 @@ function PlexConnection() {
 
 // ---- The stock playlists ----------------------------------------------------------------------
 
-const STAR_TIERS = [3, 4, 5] as const
-type Variant = 'raw' | 'fresh'
-
 // Both "matched" states name a playlist that exists in Plex, so the badge opens it. Without a link
 // — an unreachable server can't be asked for its id — the same text renders as plain text rather
 // than as an anchor that goes nowhere.
@@ -225,19 +223,7 @@ function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
   }
 }
 
-function PlaylistRow({
-  playlist,
-  freshMonths,
-  selectable,
-  selected,
-  onToggle,
-}: {
-  playlist: StockPlaylist
-  freshMonths: number
-  selectable?: boolean
-  selected?: boolean
-  onToggle?: () => void
-}) {
+function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; freshMonths: number }) {
   const queryClient = useQueryClient()
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['stock-playlists'] })
 
@@ -255,11 +241,6 @@ function PlaylistRow({
   return (
     <div className="playlist-row">
       <div className="playlist-row-main">
-        {selectable && (
-          <label className="playlist-pick">
-            <input type="checkbox" checked={selected} onChange={onToggle} />
-          </label>
-        )}
         <div className="playlist-text">
           <div className="playlist-title">{playlist.title}</div>
           <div className="playlist-desc">{playlist.description}</div>
@@ -287,11 +268,55 @@ function PlaylistRow({
   )
 }
 
-function StockPlaylists() {
+// How this user rates in Plex. There is no way to ask Plex: half-star support is a per-client
+// capability — Plexamp offers it, Plex Web can only set whole stars — and no server or account
+// setting exposes which one someone actually uses. It matters because the lowest score a user can
+// give is the one that means "never play again", and Frontier has to leave that music alone.
+function RatingScale({ halfStars }: { halfStars: boolean }) {
   const queryClient = useQueryClient()
+
+  // Invalidates the survey rather than just the checkbox: the Frontier rules change with the answer,
+  // so every row's "do you already have this?" verdict has to be recomputed.
+  const save = useMutation({
+    mutationFn: (next: boolean) => setRatingScale(next),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stock-playlists'] }),
+  })
+
+  return (
+    <div className="dev-tool">
+      <h2>Rating scale</h2>
+      <p>
+        Plex can't tell us how you rate — half stars are a per-app setting, on in Plexamp and the
+        mobile apps, unavailable in Plex for the web — so it's worth saying. The playlists treat your
+        lowest possible rating as “never play again”, and skip it.
+      </p>
+
+      <div className="controls playlist-picker">
+        <label className="playlist-check">
+          <input
+            type="checkbox"
+            checked={halfStars}
+            disabled={save.isPending}
+            onChange={(e) => save.mutate(e.target.checked)}
+          />
+          I rate in half stars (0.5★ steps)
+        </label>
+      </div>
+
+      <p className="dev-status">
+        {halfStars ? '0.5★' : '1★'} means never play again. Changing this rewrites what Frontier and
+        Deep Frontier select, so copies you've already created will show as “name taken” until you
+        replace them.
+      </p>
+      {save.isError && <p className="error">{(save.error as Error).message}</p>}
+    </div>
+  )
+}
+
+function StockPlaylists() {
   const [freshMonths, setFreshMonths] = useState(3)
-  const [tiers, setTiers] = useState<number[]>([3, 4, 5])
-  const [variants, setVariants] = useState<Variant[]>(['raw'])
+  const [tierIndex, setTierIndex] = useState<number | null>(null)
+  const [fresh, setFresh] = useState(false)
 
   const survey = useQuery({
     queryKey: ['stock-playlists', freshMonths],
@@ -304,29 +329,16 @@ function StockPlaylists() {
     return map
   }, [survey.data])
 
-  // The tier rows the picker currently selects, in a stable order.
-  const picked = useMemo(() => {
-    const ids: string[] = []
-    for (const stars of STAR_TIERS) {
-      if (!tiers.includes(stars)) continue
-      if (variants.includes('raw')) ids.push(`stars-${stars}`)
-      if (variants.includes('fresh')) ids.push(`stars-${stars}-fresh`)
-    }
-    return ids.map((id) => byId.get(id)).filter((p): p is StockPlaylist => p !== undefined)
-  }, [tiers, variants, byId])
-
-  const missing = picked.filter((p) => p.state === 'NotCreated')
-
-  // Created one at a time rather than in parallel: this is someone's home server, and a half-finished
-  // batch is easier to reason about than four simultaneous failures.
-  const createAll = useMutation({
-    mutationFn: async () => {
-      for (const playlist of missing) {
-        await createStockPlaylist(playlist.id, freshMonths)
-      }
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stock-playlists'] }),
-  })
+  // The tiers on offer, ascending, as the server generated them — every half step for a half-star
+  // user, every whole star otherwise. Taken from the survey rather than rebuilt here, so the id
+  // format ("stars-4", "stars-3_5") stays the server's business alone.
+  const tiers = useMemo(
+    () =>
+      (survey.data?.playlists ?? []).filter(
+        (p) => p.id.startsWith('stars-') && !p.id.endsWith('-fresh'),
+      ),
+    [survey.data],
+  )
 
   if (survey.isLoading) {
     return (
@@ -344,11 +356,17 @@ function StockPlaylists() {
     )
   }
 
-  const toggle = <T,>(list: T[], value: T, set: (next: T[]) => void) =>
-    set(list.includes(value) ? list.filter((v) => v !== value) : [...list, value])
+  // Default to 4★+, the tier most people mean by "the good stuff", but hold the *index* so switching
+  // rating scale doesn't leave the slider pointing at a tier that no longer exists.
+  const defaultIndex = Math.max(0, tiers.findIndex((t) => t.title.startsWith('4★')))
+  const index = Math.min(tierIndex ?? defaultIndex, tiers.length - 1)
+  const tier = tiers[index]
+  const picked = tier ? byId.get(fresh ? `${tier.id}-fresh` : tier.id) : undefined
 
   return (
     <>
+      <RatingScale halfStars={survey.data?.halfStars ?? true} />
+
       <div className="dev-tool">
         <h2>Starter playlists</h2>
         {['my-library', 'frontier', 'frontier-deep']
@@ -361,44 +379,31 @@ function StockPlaylists() {
 
       <div className="dev-tool">
         <h2>By star rating</h2>
-        <p>Only play things not heard recently.</p>
+        <p>One playlist of everything at or above the rating you pick.</p>
 
-        <div className="controls playlist-picker">
-          <span className="playlist-picker-label">Tiers</span>
-          {STAR_TIERS.map((stars) => (
-            <label key={stars} className="playlist-check">
-              <input
-                type="checkbox"
-                checked={tiers.includes(stars)}
-                onChange={() => toggle(tiers, stars, setTiers)}
-              />
-              {stars}★+
-            </label>
-          ))}
+        <div className="controls playlist-picker playlist-slider">
+          <span className="playlist-picker-label">Rating</span>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, tiers.length - 1)}
+            step={1}
+            value={index}
+            onChange={(e) => setTierIndex(Number(e.target.value))}
+            aria-label="Minimum star rating"
+          />
+          <span className="playlist-slider-value">{tier?.title ?? '—'}</span>
         </div>
 
         <div className="controls playlist-picker">
-          <span className="playlist-picker-label">Variants</span>
           <label className="playlist-check">
-            <input
-              type="checkbox"
-              checked={variants.includes('raw')}
-              onChange={() => toggle(variants, 'raw' as Variant, setVariants)}
-            />
-            Raw
-          </label>
-          <label className="playlist-check">
-            <input
-              type="checkbox"
-              checked={variants.includes('fresh')}
-              onChange={() => toggle(variants, 'fresh' as Variant, setVariants)}
-            />
-            Fresh
+            <input type="checkbox" checked={fresh} onChange={() => setFresh(!fresh)} />
+            Skip anything played recently
           </label>
           <select
             value={freshMonths}
             onChange={(e) => setFreshMonths(Number(e.target.value))}
-            disabled={!variants.includes('fresh')}
+            disabled={!fresh}
             aria-label="Fresh window"
           >
             {FRESH_WINDOWS.map((months) => (
@@ -409,28 +414,10 @@ function StockPlaylists() {
           </select>
         </div>
 
-        {picked.length === 0 ? (
-          <p className="dev-status">Pick a tier and a variant.</p>
+        {picked ? (
+          <PlaylistRow playlist={picked} freshMonths={freshMonths} />
         ) : (
-          <>
-            {picked.map((playlist) => (
-              <PlaylistRow key={playlist.id} playlist={playlist} freshMonths={freshMonths} />
-            ))}
-
-            <div className="controls">
-              <button
-                onClick={() => createAll.mutate()}
-                disabled={missing.length === 0 || createAll.isPending}
-              >
-                {createAll.isPending
-                  ? 'Creating…'
-                  : missing.length === 0
-                    ? 'All set'
-                    : `Create ${missing.length}`}
-              </button>
-            </div>
-            {createAll.isError && <p className="error">{(createAll.error as Error).message}</p>}
-          </>
+          <p className="dev-status">Nothing to offer at that rating.</p>
         )}
       </div>
     </>

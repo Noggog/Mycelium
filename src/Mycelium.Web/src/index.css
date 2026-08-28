@@ -3169,12 +3169,6 @@ a.detail-chip.via:hover {
   margin-top: 0.3rem;
 }
 
-.playlist-pick {
-  display: flex;
-  align-items: center;
-  padding-top: 0.15rem;
-}
-
 /* Status reads at a glance: created, drifted, missing, or not yet possible. */
 .playlist-badge {
   flex: 0 0 auto;
@@ -3240,7 +3234,7 @@ a.playlist-badge.is-link:hover {
 }
 
 /* The picker rows sit left-aligned rather than centred like the shared .controls default, so the
-   "Tiers" / "Variants" labels line up under each other. */
+   row labels line up under each other. */
 .controls.playlist-picker {
   justify-content: flex-start;
   gap: 1rem;
@@ -3263,6 +3257,23 @@ a.playlist-badge.is-link:hover {
   gap: 0.35rem;
   color: var(--text);
   cursor: pointer;
+}
+
+/* The rating slider takes the row's spare width, with its current tier pinned to the right so the
+   label doesn't jump around as the thumb moves. */
+.playlist-slider input[type='range'] {
+  flex: 1 1 auto;
+  max-width: 22rem;
+  accent-color: var(--cyan);
+  cursor: pointer;
+}
+
+.playlist-slider-value {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--cyan);
+  min-width: 4.5rem;
 }
 
 .controls select {

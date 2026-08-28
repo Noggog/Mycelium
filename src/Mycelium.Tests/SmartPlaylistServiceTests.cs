@@ -26,13 +26,14 @@ public class SmartPlaylistServiceTests
 
     private readonly IPlexLinkRepo _links = Substitute.For<IPlexLinkRepo>();
     private readonly IPlexApi _plexApi = Substitute.For<IPlexApi>();
+    private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly FakePlaylistApi _playlists = new();
     private readonly SmartPlaylistService _sut;
 
     public SmartPlaylistServiceTests()
     {
         _sut = new SmartPlaylistService(
-            _links, _playlists, _plexApi, NullLogger<SmartPlaylistService>.Instance);
+            _links, _playlists, _plexApi, _users, NullLogger<SmartPlaylistService>.Instance);
 
         _plexApi.ResolveLibrary().Returns(new PlexLibrary { Key = Section, Title = "Music", Type = "artist" });
         Linked();
@@ -45,6 +46,12 @@ public class SmartPlaylistServiceTests
         };
     }
 
+    /// <summary>Stores the user's answer about how they rate; absent means they never answered.</summary>
+    private void RatesInHalfStars(bool? halfStars) =>
+        _users.Get(Subject).Returns(new AppUser(
+            Subject, Username, null, Username, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch,
+            HalfStarRatings: halfStars));
+
     private void Linked() =>
         _links.Get(Subject).Returns(new PlexLink(
             Subject, "acct-1", "Noggog", "n@example.com", "user-token", DateTimeOffset.UnixEpoch));
@@ -54,10 +61,17 @@ public class SmartPlaylistServiceTests
     private static async Task<StockPlaylistStatus> Row(Task<PlaylistSurvey> survey, string id) =>
         (await survey).Playlists.Single(p => p.Id == id);
 
+    /// <summary>The stock definition by id, built the way the service will build it.</summary>
+    private static StockPlaylistDefinition Definition(
+        string definitionId, int freshMonths = 3, bool halfStars = SmartPlaylistCatalog.DefaultHalfStars) =>
+        SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(LikedTagId, FreshMonths: freshMonths, HalfStars: halfStars))
+            .Single(d => d.Id == definitionId);
+
     /// <summary>Puts a playlist on the fake server with the rules the named stock definition generates.</summary>
     private void ServerHas(string title, string definitionId, int freshMonths = 3, int leafCount = 100)
     {
-        var filter = SmartPlaylistCatalog.Build(LikedTagId, null, null, freshMonths).Single(d => d.Id == definitionId).Filter!;
+        var filter = Definition(definitionId, freshMonths).Filter!;
         _playlists.Add(title, Section, filter, leafCount);
     }
 
@@ -122,7 +136,7 @@ public class SmartPlaylistServiceTests
     [Fact]
     public async Task A_playlist_plex_has_reflattened_still_matches()
     {
-        var fresh = SmartPlaylistCatalog.Build(LikedTagId, null, null, 3).Single(d => d.Id == "stars-4-fresh").Filter!;
+        var fresh = Definition("stars-4-fresh").Filter!;
         var redundantlyNested = fresh with
         {
             Rules = PlexGroup.All(PlexGroup.All(((PlexGroup)fresh.Rules!).Children.ToArray())),
@@ -138,7 +152,7 @@ public class SmartPlaylistServiceTests
     [Fact]
     public async Task Rule_order_does_not_affect_recognition()
     {
-        var fresh = SmartPlaylistCatalog.Build(LikedTagId, null, null, 3).Single(d => d.Id == "stars-4-fresh").Filter!;
+        var fresh = Definition("stars-4-fresh").Filter!;
         var reversed = fresh with
         {
             Rules = PlexGroup.All(((PlexGroup)fresh.Rules!).Children.Reverse().ToArray()),
@@ -168,11 +182,65 @@ public class SmartPlaylistServiceTests
         (await Row(Survey(freshMonths: 6), "stars-4-fresh")).State.Should().Be(StockPlaylistState.Exists);
     }
 
+    /// <summary>
+    /// The rating scale is part of what a playlist <em>means</em>. A Frontier built for a half-star
+    /// user puts the "never play again" floor at 0.5★; the same playlist read back after that user
+    /// says they rate in whole stars selects a different set of tracks, and the page must say so
+    /// rather than reporting a match it no longer has.
+    /// </summary>
+    [Fact]
+    public async Task Changing_the_rating_scale_makes_an_existing_frontier_stop_matching()
+    {
+        RatesInHalfStars(true);
+        _playlists.Add(
+            "Frontier",
+            Section,
+            Definition(SmartPlaylistCatalog.FrontierId, halfStars: true).Filter!,
+            leafCount: 900);
+
+        (await Row(Survey(), SmartPlaylistCatalog.FrontierId)).State
+            .Should().Be(StockPlaylistState.Exists);
+
+        RatesInHalfStars(false);
+
+        // Same name, different rules — which is the "offer to rewrite it" case, not a second copy.
+        (await Row(Survey(), SmartPlaylistCatalog.FrontierId)).State
+            .Should().Be(StockPlaylistState.Differs);
+    }
+
+    /// <summary>
+    /// A user who has never answered gets the default scale, not a crash or an empty survey — the
+    /// question is new, and every existing account is in exactly this state.
+    /// </summary>
+    [Fact]
+    public async Task A_user_who_has_never_answered_gets_the_default_scale()
+    {
+        _users.Get(Subject).Returns((AppUser?)null);
+
+        var survey = await Survey();
+
+        survey.HalfStars.Should().Be(SmartPlaylistCatalog.DefaultHalfStars);
+        survey.Playlists.Should().Contain(p => p.Id == "stars-3_5");
+    }
+
+    /// <summary>Whole stars means the half tiers aren't on offer at all.</summary>
+    [Fact]
+    public async Task Whole_star_users_are_not_offered_half_tiers()
+    {
+        RatesInHalfStars(false);
+
+        var survey = await Survey();
+
+        survey.HalfStars.Should().BeFalse();
+        survey.Playlists.Should().Contain(p => p.Id == "stars-4")
+            .And.NotContain(p => p.Id == "stars-3_5");
+    }
+
     /// <summary>A playlist in another library section isn't this library's playlist.</summary>
     [Fact]
     public async Task A_matching_playlist_over_a_different_section_is_not_a_match()
     {
-        var filter = SmartPlaylistCatalog.Build(LikedTagId, null, null, 3).Single(d => d.Id == "stars-4").Filter!;
+        var filter = Definition("stars-4").Filter!;
         _playlists.Add("other library", sectionKey: 4, filter);
 
         (await Row(Survey(), "stars-4")).State.Should().Be(StockPlaylistState.NotCreated);

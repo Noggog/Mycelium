@@ -11,6 +11,14 @@ namespace Mycelium.Interfaces;
 /// it has never been set for this user, in which case the deployment default applies; it is set from
 /// the dev panel and deliberately never touched by <see cref="IUserRepo.UpsertOnLogin"/>, or every
 /// login would undo it.</para>
+///
+/// <para><paramref name="HalfStarRatings"/> is the other: whether this user rates in half stars.
+/// Plex offers no way to ask — half-star support is a per-client capability (Plexamp can, Plex Web
+/// can't) rather than an account or server setting — but the generated smart playlists need to know,
+/// because a whole-star user's "never play again" level is 1★ where a half-star user's is 0.5★. Null
+/// means never set, in which case <c>SmartPlaylistCatalog.DefaultHalfStars</c> applies. Like
+/// <paramref name="MaxQuality"/> it is untouched by <see cref="IUserRepo.UpsertOnLogin"/>, or every
+/// login would undo the user's answer.</para>
 /// </summary>
 public record AppUser(
     string Subject,
@@ -19,4 +27,5 @@ public record AppUser(
     string? DisplayName,
     DateTimeOffset FirstSeenAt,
     DateTimeOffset LastLoginAt,
-    AudioQuality? MaxQuality = null);
+    AudioQuality? MaxQuality = null,
+    bool? HalfStarRatings = null);

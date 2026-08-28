@@ -20,8 +20,10 @@ public class SmartPlaylistCatalogTests
         string id,
         string? likedTagId = LikedArtist,
         string? recommendedTagId = null,
-        int freshMonths = 3) =>
-        SmartPlaylistCatalog.Build(likedTagId, null, recommendedTagId, freshMonths)
+        int freshMonths = 3,
+        bool halfStars = true) =>
+        SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(likedTagId, null, recommendedTagId, freshMonths, halfStars))
             .Single(d => d.Id == id).Filter!;
 
     [Theory]
@@ -31,10 +33,49 @@ public class SmartPlaylistCatalogTests
     [InlineData(5, "9")]
     public void Star_tiers_land_on_the_half_step_below_the_tier(int stars, string expected)
     {
-        SmartPlaylistCatalog.RatingAtLeast(stars).Should().Be(expected);
+        SmartPlaylistCatalog.Above(stars * 2).Should().Be(expected);
 
         Filter($"stars-{stars}").Rules
             .Should().Be(new PlexCondition("track.userRating", PlexOp.GreaterThan, expected));
+    }
+
+    /// <summary>
+    /// The half tiers sit on the odd rating values between the whole ones — 3.5★ is a rating of 7, so
+    /// its rule is "greater than 6". Half-step ids take an underscore so they stay clean URL segments.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "stars-0_5", "0.5★+", "0")]
+    [InlineData(7, "stars-3_5", "3.5★+", "6")]
+    [InlineData(9, "stars-4_5", "4.5★+", "8")]
+    public void Half_tiers_sit_between_the_whole_ones(
+        int ratingUnits, string id, string title, string threshold)
+    {
+        SmartPlaylistCatalog.TierId(ratingUnits).Should().Be(id);
+        SmartPlaylistCatalog.TierLabel(ratingUnits).Should().Be(title);
+
+        Filter(id).Rules
+            .Should().Be(new PlexCondition("track.userRating", PlexOp.GreaterThan, threshold));
+    }
+
+    /// <summary>
+    /// The scale decides which tiers exist, not what they mean: a whole-star user is offered five,
+    /// a half-star user ten, and the tiers they share are the identical definition — "4★ and up" is
+    /// <c>&gt;&gt; 7</c> however the user rates, because Plex compares on the 0–10 scale either way.
+    /// </summary>
+    [Fact]
+    public void Whole_star_users_are_offered_only_the_whole_tiers()
+    {
+        static string[] TierIds(bool halfStars) => SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(HalfStars: halfStars))
+            .Select(d => d.Id)
+            .Where(id => id.StartsWith("stars-") && !id.EndsWith("-fresh"))
+            .ToArray();
+
+        TierIds(halfStars: false).Should().Equal("stars-1", "stars-2", "stars-3", "stars-4", "stars-5");
+        TierIds(halfStars: true).Should().HaveCount(10).And.Contain("stars-3_5");
+
+        PlexFilterSerializer.Serialize(Filter("stars-4", halfStars: false))
+            .Should().Be(PlexFilterSerializer.Serialize(Filter("stars-4", halfStars: true)));
     }
 
     [Fact]
@@ -49,7 +90,8 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void The_fresh_window_is_reflected_in_the_title_so_two_windows_dont_collide()
     {
-        string Title(int months) => SmartPlaylistCatalog.Build(LikedArtist, null, null, months)
+        string Title(int months) => SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(LikedArtist, FreshMonths: months))
             .Single(d => d.Id == "stars-4-fresh").Title;
 
         Title(3).Should().Be("4★+ (Fresh 3mo)");
@@ -72,7 +114,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void My_library_also_matches_the_album_mood_a_collection_carries()
     {
-        var filter = SmartPlaylistCatalog.Build(LikedArtist, LikedAlbum, null, 3)
+        var filter = SmartPlaylistCatalog.Build(new StockPlaylistOptions(LikedArtist, LikedAlbum))
             .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId).Filter!;
 
         // No push/pop: the root group is the query itself, so its brackets are implicit — the same
@@ -91,7 +133,7 @@ public class SmartPlaylistCatalogTests
     public void My_library_stays_a_single_rule_when_only_one_tag_exists()
     {
         PlexFilterSerializer.Serialize(
-                SmartPlaylistCatalog.Build(null, LikedAlbum, null, 3)
+                SmartPlaylistCatalog.Build(new StockPlaylistOptions(null, LikedAlbum))
                     .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId).Filter!)
             .Should().Be("type=8&sort=titleSort&album.mood=812004");
     }
@@ -103,11 +145,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void My_library_is_unavailable_until_the_liked_tag_exists()
     {
-        var definition = SmartPlaylistCatalog.Build(
-                likedArtistMoodTagId: null,
-                likedAlbumMoodTagId: null,
-                recommendedArtistMoodTagId: null,
-                freshMonths: 3)
+        var definition = SmartPlaylistCatalog.Build(new StockPlaylistOptions())
             .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId);
 
         definition.Filter.Should().BeNull();
@@ -166,7 +204,8 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void Frontier_also_admits_the_album_mood_a_liked_collection_carries()
     {
-        var filter = SmartPlaylistCatalog.Build(LikedArtist, LikedAlbum, RecommendedArtist, 3)
+        var filter = SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(LikedArtist, LikedAlbum, RecommendedArtist))
             .Single(d => d.Id == SmartPlaylistCatalog.FrontierId).Filter!;
 
         PlexFilterSerializer.Serialize(filter).Should().Be(
@@ -192,7 +231,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void Frontier_is_unavailable_until_one_of_its_tags_exists()
     {
-        var definitions = SmartPlaylistCatalog.Build(null, null, null, 3);
+        var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions());
 
         var frontier = definitions.Single(d => d.Id == SmartPlaylistCatalog.FrontierId);
         frontier.Filter.Should().BeNull();
@@ -200,6 +239,47 @@ public class SmartPlaylistCatalogTests
 
         // Deep Frontier has no such dependency and stays on offer.
         definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// The rating scale moves exactly one number: the floor under which a rating means "never play
+    /// again". A whole-star user's worst score is 1★, so the rejected-but-never-played band widens to
+    /// take it in (<c>&lt;&lt; 3</c> rather than <c>&lt;&lt; 2</c>) and the undecided band above it
+    /// starts a step higher (<c>&gt;&gt; 2</c> rather than <c>&gt;&gt; 1</c>). Nothing else differs —
+    /// the staleness lane and the 2★+ clause are the same rules in both scales.
+    /// </summary>
+    [Fact]
+    public void Whole_star_users_get_a_one_star_reject_floor()
+    {
+        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: false))
+            .Should().Be(
+                "type=8&sort=titleSort"
+                + "&push=1"
+                + "&push=1&track.userRating%3E%3E=5&and=1&track.lastViewedAt%3C%3C=-1y&pop=1"
+                + "&or=1&track.lastViewedAt%3C%3C=-2y"
+                + "&pop=1"
+                + "&and=1"
+                + "&push=1"
+                + "&track.userRating=-1"
+                + "&or=1&push=1&track.userRating%3E%3E=2&and=1&track.viewCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
+                + "&or=1&track.userRating%3E%3E=3"
+                + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1&and=1&track.userRating%3C%3C=3&pop=1"
+                + "&pop=1");
+    }
+
+    /// <summary>
+    /// A user who has never answered gets the half-star rules, which is what this app has always
+    /// generated. Flipping that default would silently rewrite every Frontier already created.
+    /// </summary>
+    [Fact]
+    public void The_default_scale_is_the_one_these_playlists_have_always_used()
+    {
+        SmartPlaylistCatalog.DefaultHalfStars.Should().BeTrue();
+
+        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: true))
+            .Should().Be(PlexFilterSerializer.Serialize(
+                SmartPlaylistCatalog.Build(new StockPlaylistOptions())
+                    .Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter!));
     }
 
     /// <summary>
@@ -217,20 +297,30 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// The user's own tier playlists are the same idea at different thresholds, so none of them should
-    /// be mistaken for ours — this is the check that the survey won't tell someone they already have a
-    /// playlist they don't.
+    /// The user's own tier playlists are the same idea at neighbouring thresholds, and telling someone
+    /// they already have a playlist they don't is the worst thing this page can do. Every tier is
+    /// checked against every real playlist: a match is allowed only where the rules are literally the
+    /// same query — which two of the fixtures are, now that the half tiers exist. Iterating the
+    /// half-star tiers covers the whole-star ones too, since those are a subset.
     /// </summary>
     [Fact]
-    public void Existing_tier_playlists_at_other_thresholds_are_not_matches()
+    public void A_tier_matches_a_real_playlist_only_when_the_rules_are_identical()
     {
-        foreach (var stars in SmartPlaylistCatalog.StarTiers)
+        foreach (var ratingUnits in SmartPlaylistCatalog.Tiers(halfStars: true))
         {
-            var ours = Filter($"stars-{stars}");
+            var ours = Filter(SmartPlaylistCatalog.TierId(ratingUnits));
             foreach (var (title, query) in PlexSmartFilterFixtures.Real)
             {
-                PlexFilterCanonicalizer.AreEquivalent(ours, PlexFilterParser.Parse(query))
-                    .Should().BeFalse($"'{title}' is not the same rule set as our {stars}-star tier");
+                var theirs = PlexFilterParser.Parse(query);
+                var identical = PlexFilterSerializer.Serialize(theirs)
+                                == PlexFilterSerializer.Serialize(ours);
+
+                PlexFilterCanonicalizer.AreEquivalent(ours, theirs)
+                    .Should().Be(
+                        identical,
+                        "'{0}' should match our {1} tier only if it is the same rule set",
+                        title,
+                        SmartPlaylistCatalog.TierLabel(ratingUnits));
             }
         }
     }
@@ -242,14 +332,18 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void A_generated_playlist_read_back_still_matches_its_definition()
     {
-        foreach (var definition in SmartPlaylistCatalog
-                     .Build(LikedArtist, LikedAlbum, RecommendedArtist, 3)
-                     .Where(d => d.Filter is not null))
+        foreach (var halfStars in new[] { true, false })
         {
-            var roundTripped = PlexFilterParser.Parse(PlexFilterSerializer.Serialize(definition.Filter!));
+            var options = new StockPlaylistOptions(
+                LikedArtist, LikedAlbum, RecommendedArtist, HalfStars: halfStars);
 
-            PlexFilterCanonicalizer.AreEquivalent(definition.Filter!, roundTripped)
-                .Should().BeTrue($"{definition.Id} must recognise itself");
+            foreach (var definition in SmartPlaylistCatalog.Build(options).Where(d => d.Filter is not null))
+            {
+                var roundTripped = PlexFilterParser.Parse(PlexFilterSerializer.Serialize(definition.Filter!));
+
+                PlexFilterCanonicalizer.AreEquivalent(definition.Filter!, roundTripped)
+                    .Should().BeTrue($"{definition.Id} must recognise itself");
+            }
         }
     }
 }

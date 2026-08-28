@@ -96,11 +96,26 @@ export interface PlaylistSurvey {
   linked: boolean
   plexUsername: string | null
   freshMonths: number
+  // Whether the rules were generated for someone who rates in half stars — the user's own answer,
+  // falling back to the server's default while they haven't given one.
+  halfStars: boolean
   playlists: StockPlaylist[]
 }
 
 // The "not played in the last N months" windows the Fresh variants offer.
 export const FRESH_WINDOWS = [1, 3, 6, 12] as const
+
+// Records how the user rates in Plex, which decides where the generated rules put the "never play
+// again" floor. Plex itself can't be asked: half stars are a per-client capability (Plexamp has them,
+// Plex Web doesn't) exposed by no server or account setting.
+export async function setRatingScale(halfStars: boolean): Promise<void> {
+  const res = await fetch('/api/playlists/rating-scale', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ halfStars }),
+  })
+  if (!res.ok) return readError(res, `Couldn't save the rating scale: ${res.status} ${res.statusText}`)
+}
 
 async function readError(res: Response, fallback: string): Promise<never> {
   // The server returns { error } for the cases the user can act on (no linked account, unknown id).
