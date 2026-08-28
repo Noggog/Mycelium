@@ -3298,15 +3298,17 @@ a.playlist-badge.is-link:hover {
   align-items: baseline;
 }
 
+/* Both halves are pinned to row 1: placing the dt in column 2 moves grid's auto-placement cursor
+   past column 1, so a dd left to place itself would drop onto a second row. */
 .playlist-scale-key dt {
-  grid-column: 2;
+  grid-area: 1 / 2;
   font-family: 'Orbitron', sans-serif;
   font-weight: 600;
   color: var(--cyan);
 }
 
 .playlist-scale-key dd {
-  grid-column: 1;
+  grid-area: 1 / 1;
   margin: 0;
   text-align: right;
   color: var(--text-dim);
