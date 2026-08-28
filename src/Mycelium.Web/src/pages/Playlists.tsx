@@ -351,7 +351,7 @@ function StockPlaylists() {
     <>
       <div className="dev-tool">
         <h2>Starter playlists</h2>
-        {['my-library', 'frontier']
+        {['my-library', 'frontier', 'frontier-deep']
           .map((id) => byId.get(id))
           .filter((p): p is StockPlaylist => p !== undefined)
           .map((playlist) => (

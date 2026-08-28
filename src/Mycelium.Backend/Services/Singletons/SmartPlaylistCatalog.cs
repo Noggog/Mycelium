@@ -27,6 +27,7 @@ public static class SmartPlaylistCatalog
 {
     public const string MyLibraryId = "my-library";
     public const string FrontierId = "frontier";
+    public const string DeepFrontierId = "frontier-deep";
 
     /// <summary>The star tiers offered by the picker.</summary>
     public static readonly int[] StarTiers = { 3, 4, 5 };
@@ -54,15 +55,24 @@ public static class SmartPlaylistCatalog
     /// until the user likes their first collection — a compilation or soundtrack, which carries its
     /// verdict on the album because its umbrella credit is not an act anyone has taste about.
     /// </param>
+    /// <param name="recommendedArtistMoodTagId">
+    /// The tag id of this user's "&lt;username&gt;_recommended" <em>artist</em> mood — the marker the
+    /// discovery sweep puts on owned artists their liked artists point at — or null when no artist
+    /// carries it yet. Artist vocabulary only: the marker is never written to an album.
+    /// </param>
     /// <param name="freshMonths">The play-recency window for the Fresh variants.</param>
     /// </summary>
     public static IReadOnlyList<StockPlaylistDefinition> Build(
-        string? likedArtistMoodTagId, string? likedAlbumMoodTagId, int freshMonths)
+        string? likedArtistMoodTagId,
+        string? likedAlbumMoodTagId,
+        string? recommendedArtistMoodTagId,
+        int freshMonths)
     {
         var definitions = new List<StockPlaylistDefinition>
         {
             MyLibrary(likedArtistMoodTagId, likedAlbumMoodTagId),
-            Frontier(),
+            Frontier(likedArtistMoodTagId, likedAlbumMoodTagId, recommendedArtistMoodTagId),
+            DeepFrontier(),
         };
 
         foreach (var stars in StarTiers)
@@ -112,38 +122,97 @@ public static class SmartPlaylistCatalog
     }
 
     /// <summary>
-    /// The "find something you'd forgotten" playlist: things you either haven't heard in a long time, or
-    /// have barely played, weighted so that well-rated music has to age longer before it comes back
-    /// around than unrated or poorly-rated music does.
+    /// The staleness and worth-hearing halves shared by both Frontier variants — "things you either
+    /// haven't heard in a long time, or have barely played", weighted so that well-rated music has to
+    /// age longer before it comes back around than unrated or poorly-rated music does.
     ///
     /// <para>Reproduced from a hand-built playlist, minus its two library-specific exclusions (moods
-    /// tagged "interlude" and "delete"), which are personal housekeeping rather than part of the idea.</para>
+    /// tagged "interlude" and "delete"), which are personal housekeeping rather than part of the idea,
+    /// and with the one-year lane opened up to take in 3★ itself rather than starting above it.</para>
     /// </summary>
-    private static StockPlaylistDefinition Frontier() => new(
-        Id: FrontierId,
-        Title: "Frontier",
-        Description: "For when you want to experience new or forgotten music.",
-        Filter: Sorted(PlexGroup.All(
-            // Stale enough to be worth resurfacing. Rated tracks come back after a year; anything at all
-            // comes back after two.
-            PlexGroup.Any(
-                PlexGroup.All(
-                    new PlexCondition("track.userRating", PlexOp.GreaterThan, "6"),
-                    new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-1y")),
-                new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-2y")),
-            // ...and worth hearing: never rated, or rated in a band that says "undecided" rather than
-            // "rejected", or rated highly enough that age is the only reason it fell off.
-            PlexGroup.Any(
-                new PlexCondition("track.userRating", PlexOp.Is, "-1"),
-                PlexGroup.All(
-                    new PlexCondition("track.userRating", PlexOp.GreaterThan, "1"),
-                    new PlexCondition("track.viewCount", PlexOp.LessThan, "5"),
-                    new PlexCondition("track.userRating", PlexOp.LessThan, "4")),
-                new PlexCondition("track.userRating", PlexOp.GreaterThan, "3"),
-                PlexGroup.All(
-                    new PlexCondition("track.userRating", PlexOp.GreaterThan, "-1"),
-                    new PlexCondition("track.viewCount", PlexOp.LessThan, "1"),
-                    new PlexCondition("track.userRating", PlexOp.LessThan, "2"))))));
+    private static PlexFilter[] FrontierRules() => new PlexFilter[]
+    {
+        // Stale enough to be worth resurfacing. Anything rated 3★ or better comes back after a year;
+        // anything at all comes back after two.
+        PlexGroup.Any(
+            PlexGroup.All(
+                new PlexCondition("track.userRating", PlexOp.GreaterThan, RatingAtLeast(3)),
+                new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-1y")),
+            new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-2y")),
+        // ...and worth hearing: never rated, or rated in a band that says "undecided" rather than
+        // "rejected", or rated highly enough that age is the only reason it fell off.
+        PlexGroup.Any(
+            new PlexCondition("track.userRating", PlexOp.Is, "-1"),
+            PlexGroup.All(
+                new PlexCondition("track.userRating", PlexOp.GreaterThan, "1"),
+                new PlexCondition("track.viewCount", PlexOp.LessThan, "5"),
+                new PlexCondition("track.userRating", PlexOp.LessThan, "4")),
+            new PlexCondition("track.userRating", PlexOp.GreaterThan, "3"),
+            PlexGroup.All(
+                new PlexCondition("track.userRating", PlexOp.GreaterThan, "-1"),
+                new PlexCondition("track.viewCount", PlexOp.LessThan, "1"),
+                new PlexCondition("track.userRating", PlexOp.LessThan, "2"))),
+    };
+
+    /// <summary>
+    /// The "find something you'd forgotten" playlist, kept inside music this user has some claim on:
+    /// the shared <see cref="FrontierRules"/> plus a third rule narrowing the whole thing to acts they
+    /// thumbed up, or that the discovery sweep marked as recommended to them.
+    ///
+    /// <para><b>Why "recommended" belongs here.</b> The marker sits on owned artists the user hasn't
+    /// rated that their liked artists point at — precisely the unheard-but-vouched-for half of the
+    /// library. Without it this playlist could only ever resurface music the user already knows, which
+    /// is the opposite of a frontier.</para>
+    ///
+    /// <para>The liked <em>album</em> mood joins the same Any group for the reason it does in
+    /// <see cref="MyLibrary"/>: a compilation or soundtrack carries its like on the album because its
+    /// umbrella credit is not an act anyone has taste about, and leaving it out would silently exclude
+    /// exactly those records. Each of the three is optional — a tag has no id until something carries
+    /// it — and with none of them there is nothing to narrow by, which is what
+    /// <see cref="DeepFrontier"/> is for.</para>
+    /// </summary>
+    private static StockPlaylistDefinition Frontier(
+        string? likedArtistMoodTagId, string? likedAlbumMoodTagId, string? recommendedArtistMoodTagId)
+    {
+        var tags = new List<PlexFilter>();
+        if (likedArtistMoodTagId is not null)
+        {
+            tags.Add(new PlexCondition("artist.mood", PlexOp.Is, likedArtistMoodTagId));
+        }
+        if (recommendedArtistMoodTagId is not null)
+        {
+            tags.Add(new PlexCondition("artist.mood", PlexOp.Is, recommendedArtistMoodTagId));
+        }
+        if (likedAlbumMoodTagId is not null)
+        {
+            tags.Add(new PlexCondition("album.mood", PlexOp.Is, likedAlbumMoodTagId));
+        }
+
+        return new StockPlaylistDefinition(
+            Id: FrontierId,
+            Title: "Frontier",
+            Description: "New or forgotten music, from bands you like or that are recommended to you.",
+            // Flattened because a single surviving tag must be a bare condition, not a one-child
+            // bracket Plex's editor would drop on the user's next save.
+            Filter: tags.Count == 0
+                ? null
+                : Sorted(PlexGroup.Flatten(
+                    PlexGroup.All(FrontierRules().Append(PlexGroup.Any(tags.ToArray())).ToArray()))),
+            Unavailable: tags.Count == 0
+                ? "Thumb up an artist first."
+                : null);
+    }
+
+    /// <summary>
+    /// The same idea with no tag filter at all: the whole library, however you feel about it. This is
+    /// the original hand-built Frontier verbatim, and the one to reach for when the tagged variant has
+    /// been mined out.
+    /// </summary>
+    private static StockPlaylistDefinition DeepFrontier() => new(
+        Id: DeepFrontierId,
+        Title: "Deep Frontier",
+        Description: "New or forgotten music from anywhere in the library, liked or not.",
+        Filter: Sorted(PlexGroup.All(FrontierRules())));
 
     /// <summary>
     /// A star-rating tier over the whole library. The Fresh variant additionally drops anything played

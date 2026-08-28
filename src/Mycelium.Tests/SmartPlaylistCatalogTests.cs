@@ -12,8 +12,17 @@ namespace Mycelium.Tests;
 /// </summary>
 public class SmartPlaylistCatalogTests
 {
-    private static PlexSmartFilter Filter(string id, string? likedTagId = "749936", int freshMonths = 3) =>
-        SmartPlaylistCatalog.Build(likedTagId, likedAlbumMoodTagId: null, freshMonths: freshMonths).Single(d => d.Id == id).Filter!;
+    private const string LikedArtist = "749936";
+    private const string LikedAlbum = "812004";
+    private const string RecommendedArtist = "901122";
+
+    private static PlexSmartFilter Filter(
+        string id,
+        string? likedTagId = LikedArtist,
+        string? recommendedTagId = null,
+        int freshMonths = 3) =>
+        SmartPlaylistCatalog.Build(likedTagId, null, recommendedTagId, freshMonths)
+            .Single(d => d.Id == id).Filter!;
 
     [Theory]
     // 3 stars is a rating of 6, and Plex has no ">=", so the rule is "greater than 5".
@@ -40,7 +49,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void The_fresh_window_is_reflected_in_the_title_so_two_windows_dont_collide()
     {
-        string Title(int months) => SmartPlaylistCatalog.Build("749936", null, months)
+        string Title(int months) => SmartPlaylistCatalog.Build(LikedArtist, null, null, months)
             .Single(d => d.Id == "stars-4-fresh").Title;
 
         Title(3).Should().Be("4★+ (Fresh 3mo)");
@@ -63,7 +72,7 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void My_library_also_matches_the_album_mood_a_collection_carries()
     {
-        var filter = SmartPlaylistCatalog.Build("749936", "812004", 3)
+        var filter = SmartPlaylistCatalog.Build(LikedArtist, LikedAlbum, null, 3)
             .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId).Filter!;
 
         // No push/pop: the root group is the query itself, so its brackets are implicit — the same
@@ -82,7 +91,7 @@ public class SmartPlaylistCatalogTests
     public void My_library_stays_a_single_rule_when_only_one_tag_exists()
     {
         PlexFilterSerializer.Serialize(
-                SmartPlaylistCatalog.Build(null, "812004", 3)
+                SmartPlaylistCatalog.Build(null, LikedAlbum, null, 3)
                     .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId).Filter!)
             .Should().Be("type=8&sort=titleSort&album.mood=812004");
     }
@@ -94,7 +103,11 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void My_library_is_unavailable_until_the_liked_tag_exists()
     {
-        var definition = SmartPlaylistCatalog.Build(likedArtistMoodTagId: null, likedAlbumMoodTagId: null, freshMonths: 3)
+        var definition = SmartPlaylistCatalog.Build(
+                likedArtistMoodTagId: null,
+                likedAlbumMoodTagId: null,
+                recommendedArtistMoodTagId: null,
+                freshMonths: 3)
             .Single(d => d.Id == SmartPlaylistCatalog.MyLibraryId);
 
         definition.Filter.Should().BeNull();
@@ -102,25 +115,91 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// Frontier is a transcription of a playlist that already exists and works, so it is pinned to the
-    /// byte — with only the two library-specific mood exclusions ("interlude", "delete") dropped.
+    /// The staleness/worth-hearing rules both Frontier variants are built from. The one-year lane is
+    /// "3★ and up", which on Plex's strictly-greater operator is <c>&gt;&gt; 5</c> — one half-step below
+    /// the tier, so 3★ itself is in.
+    /// </summary>
+    private const string FrontierBody =
+        "&push=1"
+        + "&push=1&track.userRating%3E%3E=5&and=1&track.lastViewedAt%3C%3C=-1y&pop=1"
+        + "&or=1&track.lastViewedAt%3C%3C=-2y"
+        + "&pop=1"
+        + "&and=1"
+        + "&push=1"
+        + "&track.userRating=-1"
+        + "&or=1&push=1&track.userRating%3E%3E=1&and=1&track.viewCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
+        + "&or=1&track.userRating%3E%3E=3"
+        + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1&and=1&track.userRating%3C%3C=2&pop=1"
+        + "&pop=1";
+
+    /// <summary>
+    /// Deep Frontier is a transcription of a playlist that already exists and works, so it is pinned to
+    /// the byte — with the two library-specific mood exclusions ("interlude", "delete") dropped and the
+    /// one-year lane lowered to take in 3★ itself.
     /// </summary>
     [Fact]
-    public void Frontier_matches_the_playlist_it_was_transcribed_from()
+    public void Deep_frontier_is_the_hand_built_rules_with_the_one_year_lane_starting_at_three_stars()
     {
-        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.FrontierId)).Should().Be(
-            "type=8&sort=titleSort"
-            + "&push=1"
-            + "&push=1&track.userRating%3E%3E=6&and=1&track.lastViewedAt%3C%3C=-1y&pop=1"
-            + "&or=1&track.lastViewedAt%3C%3C=-2y"
-            + "&pop=1"
-            + "&and=1"
-            + "&push=1"
-            + "&track.userRating=-1"
-            + "&or=1&push=1&track.userRating%3E%3E=1&and=1&track.viewCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
-            + "&or=1&track.userRating%3E%3E=3"
-            + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1&and=1&track.userRating%3C%3C=2&pop=1"
-            + "&pop=1");
+        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId))
+            .Should().Be("type=8&sort=titleSort" + FrontierBody);
+    }
+
+    /// <summary>
+    /// The plain Frontier is the same body with one more <c>and</c>-ed term: the union of the tags that
+    /// say this is music the user has a claim on. Two ids of the same field is not a mistake — "liked"
+    /// and "recommended" are separate moods that happen to live in the same artist vocabulary.
+    /// </summary>
+    [Fact]
+    public void Frontier_narrows_the_same_rules_to_liked_and_recommended_artists()
+    {
+        PlexFilterSerializer.Serialize(
+                Filter(SmartPlaylistCatalog.FrontierId, recommendedTagId: RecommendedArtist))
+            .Should().Be(
+                "type=8&sort=titleSort" + FrontierBody
+                + "&and=1&push=1&artist.mood=749936&or=1&artist.mood=901122&pop=1");
+    }
+
+    /// <summary>
+    /// A liked collection carries its verdict on the album, for the same reason it does in My Library —
+    /// so it joins the same Any group rather than being silently excluded from the tagged variant.
+    /// </summary>
+    [Fact]
+    public void Frontier_also_admits_the_album_mood_a_liked_collection_carries()
+    {
+        var filter = SmartPlaylistCatalog.Build(LikedArtist, LikedAlbum, RecommendedArtist, 3)
+            .Single(d => d.Id == SmartPlaylistCatalog.FrontierId).Filter!;
+
+        PlexFilterSerializer.Serialize(filter).Should().Be(
+            "type=8&sort=titleSort" + FrontierBody
+            + "&and=1&push=1&artist.mood=749936&or=1&artist.mood=901122&or=1&album.mood=812004&pop=1");
+    }
+
+    /// <summary>
+    /// With only one tag on the server the narrowing term is a bare condition, not a one-child bracket:
+    /// Plex's editor flattens those on save, and the playlist would stop matching its definition.
+    /// </summary>
+    [Fact]
+    public void Frontier_stays_a_single_condition_when_only_one_tag_exists()
+    {
+        PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.FrontierId))
+            .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&artist.mood=749936");
+    }
+
+    /// <summary>
+    /// No tags on the server means nothing to narrow by, and a Frontier that silently widened to the
+    /// whole library would just be a second Deep Frontier under the wrong name.
+    /// </summary>
+    [Fact]
+    public void Frontier_is_unavailable_until_one_of_its_tags_exists()
+    {
+        var definitions = SmartPlaylistCatalog.Build(null, null, null, 3);
+
+        var frontier = definitions.Single(d => d.Id == SmartPlaylistCatalog.FrontierId);
+        frontier.Filter.Should().BeNull();
+        frontier.Unavailable.Should().NotBeNullOrWhiteSpace();
+
+        // Deep Frontier has no such dependency and stays on offer.
+        definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter.Should().NotBeNull();
     }
 
     /// <summary>
@@ -133,7 +212,7 @@ public class SmartPlaylistCatalogTests
     {
         var original = PlexFilterParser.Parse(PlexSmartFilterFixtures.Real.Single(p => p.Title == "Frontier").Query);
 
-        PlexFilterCanonicalizer.AreEquivalent(Filter(SmartPlaylistCatalog.FrontierId), original)
+        PlexFilterCanonicalizer.AreEquivalent(Filter(SmartPlaylistCatalog.DeepFrontierId), original)
             .Should().BeFalse();
     }
 
@@ -163,7 +242,9 @@ public class SmartPlaylistCatalogTests
     [Fact]
     public void A_generated_playlist_read_back_still_matches_its_definition()
     {
-        foreach (var definition in SmartPlaylistCatalog.Build("749936", null, 3).Where(d => d.Filter is not null))
+        foreach (var definition in SmartPlaylistCatalog
+                     .Build(LikedArtist, LikedAlbum, RecommendedArtist, 3)
+                     .Where(d => d.Filter is not null))
         {
             var roundTripped = PlexFilterParser.Parse(PlexFilterSerializer.Serialize(definition.Filter!));
 

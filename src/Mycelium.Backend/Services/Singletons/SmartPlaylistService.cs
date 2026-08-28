@@ -194,7 +194,16 @@ public class SmartPlaylistService
             ? null
             : await FindTagId(section, "mood", likedTag, PlexSmartFilter.AlbumType);
 
-        var definitions = SmartPlaylistCatalog.Build(likedArtistTagId, likedAlbumTagId, freshMonths);
+        // The marker the discovery sweep writes onto owned-but-unrated artists the user's likes point
+        // at, which the Frontier rule unions with the likes. Artists only — the sweep never puts it on
+        // an album — so there is no album-vocabulary lookup to match the pair above.
+        var recommendedTag = ArtistTag.Recommended(username);
+        var recommendedArtistTagId = recommendedTag is null
+            ? null
+            : await FindTagId(section, "mood", recommendedTag, PlexSmartFilter.ArtistType);
+
+        var definitions = SmartPlaylistCatalog.Build(
+            likedArtistTagId, likedAlbumTagId, recommendedArtistTagId, freshMonths);
 
         // Only the tag vocabularies actually referenced get fetched — one request each, and typically
         // just "mood".
