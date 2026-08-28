@@ -395,7 +395,9 @@ function RatingScale({ halfStars, busy }: { halfStars: boolean; busy: boolean })
 function StockPlaylists() {
   const [freshMonths, setFreshMonths] = useState(3)
   const [tierIndex, setTierIndex] = useState<number | null>(null)
-  const [fresh, setFresh] = useState(false)
+  // On by default at three months: an unqualified "5★+" is the same twenty songs every time, which
+  // is the thing people actually complain about once they've built one.
+  const [fresh, setFresh] = useState(true)
 
   const survey = useQuery({
     queryKey: ['stock-playlists', freshMonths],
@@ -480,7 +482,7 @@ function StockPlaylists() {
         <div className="controls playlist-picker">
           <label className="playlist-check">
             <input type="checkbox" checked={fresh} onChange={() => setFresh(!fresh)} />
-            Skip anything played recently
+            Skip anything played in the last
           </label>
           <select
             value={freshMonths}
@@ -490,7 +492,7 @@ function StockPlaylists() {
           >
             {FRESH_WINDOWS.map((months) => (
               <option key={months} value={months}>
-                not played in {months} month{months === 1 ? '' : 's'}
+                {months} month{months === 1 ? '' : 's'}
               </option>
             ))}
           </select>
