@@ -3288,24 +3288,34 @@ a.playlist-badge.is-link:hover {
   justify-self: end;
 }
 
-/* Each rung is its own row: the rating in a fixed column so the stars line up, the meaning beside it. */
+/* Each rung is its own row. The stars sit on the outside edge — this column is flush right, so the
+   ratings read down the margin and the meanings run up to meet them. Placed by column rather than by
+   source order, so the <dl> keeps its dt-then-dd pairing. */
 .playlist-scale-key > div {
   display: grid;
-  grid-template-columns: 2.6rem 1fr;
+  grid-template-columns: 1fr 3rem;
   gap: 0.6rem;
   align-items: baseline;
 }
 
 .playlist-scale-key dt {
+  grid-column: 2;
   font-family: 'Orbitron', sans-serif;
   font-weight: 600;
   color: var(--cyan);
-  text-align: right;
 }
 
 .playlist-scale-key dd {
+  grid-column: 1;
   margin: 0;
+  text-align: right;
   color: var(--text-dim);
+}
+
+/* A rung this user's scale can't reach: still listed, so the shape of the scale is visible and the
+   list doesn't resize under the checkbox, but dimmed and unlabelled — it means nothing to them. */
+.playlist-scale-key .is-unused dt {
+  opacity: 0.3;
 }
 
 /* Rows the survey is currently re-reading: still legible, visibly not the final answer. */

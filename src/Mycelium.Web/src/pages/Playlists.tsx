@@ -309,30 +309,34 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
   )
 }
 
-// What each rating means, so the scales aren't just a number of stars — this is the ladder the
-// playlists are built around, and seeing it is how someone decides which scale they want. The half
-// scale earns its extra rungs at the top ("I'd play it for others" is a different verdict from "I
-// like it"); the whole scale says the same thing in five.
-const HALF_STAR_KEY: [string, string][] = [
-  ['0.5', 'Hate. Never play again'],
-  ['1.0', 'Deciding whether to give another chance before blocking'],
-  ['1.5', "Boring. Maybe stop playing just out of drabness"],
-  ['2.0', 'Slightly interesting but questionable'],
-  ['2.5', 'Stuff to have on. Not too opinionated'],
-  ['3.0', 'Like it. Wouldn\'t really play for others'],
-  ['3.5', 'Like it, Would play for others'],
-  ['4.0', 'Love it, Would play for others'],
-  ['4.5', 'Extremely memorable favorite songs'],
-  ['5.0', 'Undeniable masterpieces'],
-]
+// Every rung the Plex scale has, always shown: which of them a user can actually set is the whole
+// point of the checkbox beside this, and greying out the halves says that far better than making
+// half the list disappear.
+const RUNGS = ['0.5', '1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0']
 
-const WHOLE_STAR_KEY: [string, string][] = [
-  ['1', 'Hate. Never play again'],
-  ['2', 'Meh'],
-  ['3', 'Like it. Wouldn\'t really play for others'],
-  ['4', 'Like it, Would play for others'],
-  ['5', 'Love it'],
-]
+// What each rating means — the ladder the playlists are built around, and how someone decides which
+// scale they want. Keyed by rung so the whole-star ladder lines up with the same rows; the rungs it
+// has no entry for are the ones that user can't set.
+const HALF_STAR_KEY: Record<string, string> = {
+  '0.5': 'Hate. Never play again',
+  '1.0': 'Deciding whether to give another chance before blocking',
+  '1.5': 'Boring. Maybe stop playing just out of drabness',
+  '2.0': 'Slightly interesting but questionable',
+  '2.5': 'Stuff to have on. Not too opinionated',
+  '3.0': "Like it. Wouldn't really play for others",
+  '3.5': 'Like it, Would play for others',
+  '4.0': 'Love it, Would play for others',
+  '4.5': 'Extremely memorable favorite songs',
+  '5.0': 'Undeniable masterpieces',
+}
+
+const WHOLE_STAR_KEY: Record<string, string> = {
+  '1.0': 'Hate. Never play again',
+  '2.0': 'Meh',
+  '3.0': "Like it. Wouldn't really play for others",
+  '4.0': 'Like it, Would play for others',
+  '5.0': 'Love it',
+}
 
 // How this user rates in Plex. There is no way to ask Plex: half-star support is a per-client
 // capability — Plexamp offers it, Plex Web can only set whole stars — and no server or account
@@ -374,12 +378,15 @@ function RatingScale({ halfStars, busy }: { halfStars: boolean; busy: boolean })
       </div>
 
       <dl className="playlist-scale-key">
-        {(halfStars ? HALF_STAR_KEY : WHOLE_STAR_KEY).map(([stars, meaning]) => (
-          <div key={stars}>
-            <dt>{stars}★</dt>
-            <dd>{meaning}</dd>
-          </div>
-        ))}
+        {RUNGS.map((rung) => {
+          const meaning = (halfStars ? HALF_STAR_KEY : WHOLE_STAR_KEY)[rung]
+          return (
+            <div key={rung} className={meaning ? undefined : 'is-unused'}>
+              <dt>{rung}★</dt>
+              <dd>{meaning ?? ''}</dd>
+            </div>
+          )
+        })}
       </dl>
     </div>
   )
@@ -454,7 +461,7 @@ function StockPlaylists() {
 
       <div className="dev-tool">
         <h2>By Star Rating</h2>
-        <p>Create star-based playlists to your liking</p>
+        <p>Create custom star-based playlists to your liking</p>
 
         <div className="controls playlist-picker playlist-slider">
           <span className="playlist-picker-label">Rating</span>
