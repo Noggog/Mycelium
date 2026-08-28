@@ -86,9 +86,10 @@ export interface ArtistLibraries {
 
 // Mirror ArtistTags (Artist.cs) — the editable Plex descriptor tags for one library artist, behind
 // the Browse readout's "Tags" tab. `present` is false for artists that aren't in the library (nothing
-// to tag). `moods` never includes the app's own mood tags — the "<user>_liked"/"_disliked" verdicts or
-// the permanent "<user>_added" credits: the backend strips both, and they're owned by the thumbs and by
-// the acquisition list, not by this editor.
+// to tag). `moods` never includes the app's own mood tags — the "<user>_liked"/"_disliked" verdicts,
+// the permanent "<user>_added" credits, or the "<user>_recommended" markers: the backend strips all
+// three, and they're owned by the thumbs, the acquisition list and the nightly sweep, not by this
+// editor.
 export interface ArtistTags {
   artist: ArtistKey
   present: boolean

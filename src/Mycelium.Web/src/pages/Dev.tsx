@@ -19,6 +19,7 @@ import {
   getUserQualities,
   reapplyPlexTags,
   rebuildPlexTags,
+  syncRecommendedTags,
   runQualitySweep,
   setUserQuality,
   startPlexServerTokenLink,
@@ -628,7 +629,14 @@ function PlexTagTools() {
     onError: (e) => setStatus((e as Error).message),
   })
 
-  const busy = clear.isPending || reapply.isPending || rebuild.isPending
+  const recommended = useMutation({
+    mutationFn: syncRecommendedTags,
+    onSuccess: (r) =>
+      setStatus(`Recommended markers: +${r.added}, -${r.removed}.`),
+    onError: (e) => setStatus((e as Error).message),
+  })
+
+  const busy = clear.isPending || reapply.isPending || rebuild.isPending || recommended.isPending
 
   return (
     <div className="dev-tool">
@@ -638,6 +646,12 @@ function PlexTagTools() {
         artists. Use these when the tags in Plex have drifted from the ratings here:{' '}
         <em>rebuild</em> is the full reset, <em>clear</em> just removes them, <em>reapply</em> just
         re-derives them. <code>&lt;username&gt;_added</code> album credits are never touched.
+      </p>
+      <p>
+        <code>&lt;username&gt;_recommended</code> is a separate marker, on artists the library already
+        has that your liked bands point at and you haven't thumbed yet. It's derived, so{' '}
+        <em>sync</em> both adds and removes it — the nightly catalog sync does the same pass, and this
+        just runs it now.
       </p>
 
       <div className="controls">
@@ -671,6 +685,15 @@ function PlexTagTools() {
           disabled={busy}
         >
           {rebuild.isPending ? 'Rebuilding…' : 'Rebuild'}
+        </button>
+        <button
+          onClick={() => {
+            setStatus(null)
+            recommended.mutate()
+          }}
+          disabled={busy}
+        >
+          {recommended.isPending ? 'Syncing…' : 'Sync recommended'}
         </button>
       </div>
 

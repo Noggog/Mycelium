@@ -346,6 +346,56 @@ public class DiscoveryEngineTests
         seed.Items.Single().Kind.Should().Be(FeedKind.SeedLibraryArtist);
     }
 
+    /// <summary>
+    /// The arrival case behind the "&lt;user&gt;_recommended" marker: an artist that was recommended to
+    /// this user while the library didn't have it, and has since shown up (somebody else bought it, or
+    /// it came in with a compilation). A <em>pending</em> queue row is not a decision, so the moment the
+    /// artist is owned it belongs to the recommended-library section — which is what gets it a marker at
+    /// the next sweep, with no queue cleanup needed first.
+    /// </summary>
+    [Fact]
+    public async Task An_artist_recommended_while_absent_joins_the_library_section_once_it_arrives()
+    {
+        // Still pending from the frontier walk — never thumbed, so never "decided"...
+        _queue.GetPending(User, Arg.Any<int>(), Arg.Any<int>()).Returns(new DiscoveryPage(
+            new[] { new DiscoveryCandidate(new ArtistKey("Big Thief"), null, 1, new[] { "boygenius" }, 1) },
+            0, 20, 1));
+        // ...and now present in Plex.
+        _library.GetAllArtistMetadata().Returns(new[]
+        {
+            new ArtistMetadata(new ArtistKey("Big Thief"), "bt-img"),
+        });
+        _queue.GetLikedArtistNames(User).Returns(new[] { "boygenius" });
+        Relates("boygenius", ("Big Thief", null, 1));
+
+        var names = await _sut.RecommendedLibraryArtistNames(User);
+
+        names.Should().Equal("Big Thief");
+    }
+
+    /// <summary>
+    /// The other half of that: an artist the user <em>liked</em> before it arrived is decided, so it
+    /// never enters the recommended section. Its arrival earns it "&lt;user&gt;_liked" from the tag
+    /// backfill, not a recommendation marker — the user is past being nudged about it.
+    /// </summary>
+    [Fact]
+    public async Task An_artist_liked_before_it_arrived_is_not_recommended_back_to_the_user()
+    {
+        _library.GetAllArtistMetadata().Returns(new[]
+        {
+            new ArtistMetadata(new ArtistKey("Big Thief"), null),
+        });
+        _queue.GetLikedArtistNames(User).Returns(new[] { "boygenius", "Big Thief" });
+        _queue.GetDecidedArtists(User)
+            .Returns(new HashSet<string>(new[] { "Big Thief" }, StringComparer.OrdinalIgnoreCase));
+        Relates("boygenius", ("Big Thief", null, 1));
+        Relates("Big Thief"); // now a frontier artist itself, with no stored edges of its own yet
+
+        var names = await _sut.RecommendedLibraryArtistNames(User);
+
+        names.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Library_sections_exclude_already_rated_owned_artists()
     {

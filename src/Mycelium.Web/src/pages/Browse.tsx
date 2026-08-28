@@ -430,9 +430,10 @@ function TagGroup({
 // The "Tags" tab: edit the descriptor tags the artist carries in Plex — genres, styles and moods —
 // the same fields Plex smart collections filter on. The app's own moods are stripped by the backend and
 // can't be added or removed here: the "<user>_liked"/"_disliked" verdicts are rating state owned by the
-// thumbs in the header (showing them would offer a second, desyncable way to change a rating), and the
+// thumbs in the header (showing them would offer a second, desyncable way to change a rating), the
 // permanent "<user>_added" credits are a record of who brought an album into the library, not something
-// to hand out by hand.
+// to hand out by hand, and the "<user>_recommended" markers are recomputed by the nightly sweep, which
+// would undo an edit made here anyway.
 function TagsTab({ artist }: { artist: string }) {
   const queryClient = useQueryClient()
 

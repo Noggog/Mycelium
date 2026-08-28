@@ -27,6 +27,7 @@ public class DiscoveryRatingServiceTests
     private const string Username = "noggog";
     private const string Liked = "noggog_liked";
     private const string Disliked = "noggog_disliked";
+    private const string Recommended = "noggog_recommended";
 
     private readonly IUserQueueRepo _queue = Substitute.For<IUserQueueRepo>();
     private readonly IRelatedArtistReader _related = Substitute.For<IRelatedArtistReader>();
@@ -153,6 +154,9 @@ public class DiscoveryRatingServiceTests
     /// strips "_disliked"; the opposite verdict does the reverse. If the batch path got the
     /// <em>stripping</em> wrong an artist would end up carrying both moods, nothing would fail, and the
     /// only symptom would be a "My Library" playlist quietly matching music the user had rejected.
+    ///
+    /// <para>The third tag stripped either way is the "_recommended" marker: a thumb is the user
+    /// deciding about a band their frontier had merely nominated, so the nomination retires with it.</para>
     /// </summary>
     [Fact]
     public async Task A_batched_artist_verdict_stamps_the_same_moods_the_single_route_does()
@@ -166,9 +170,51 @@ public class DiscoveryRatingServiceTests
         await Drain(() => _tagger.ReceivedCalls().Count() >= 2);
 
         await _tagger.Received(1).SetTags(
-            "Autechre", Liked, Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Disliked })));
+            "Autechre", Liked,
+            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Disliked, Recommended })));
         await _tagger.Received(1).SetTags(
-            "Coldplay", Disliked, Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Liked })));
+            "Coldplay", Disliked,
+            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Liked, Recommended })));
+    }
+
+    /// <summary>
+    /// A thumb on an owned artist the frontier had nominated takes the "&lt;user&gt;_recommended"
+    /// marker off it there and then. The nightly sweep would get to it eventually — the artist drops
+    /// out of the recommended section the moment it's rated — but "eventually" means a band the user
+    /// has just decided about keeps playing in their recommended playlist until 6am.
+    /// </summary>
+    [Theory]
+    [InlineData("up", Liked)]
+    [InlineData("down", Disliked)]
+    public async Task A_verdict_in_either_direction_retires_the_recommended_marker_immediately(
+        string verdict, string expectedTag)
+    {
+        // Both directions, because a thumbs-*down* is the case where leaving the marker behind would be
+        // most visible: a band the user has just rejected would keep turning up in the playlist that is
+        // supposed to be what their taste points at.
+        await _sut.RateOne(User, Username, Artist("Big Thief", verdict));
+
+        await Drain(() => _tagger.ReceivedCalls().Any());
+
+        await _tagger.Received(1).SetTags(
+            "Big Thief", expectedTag,
+            Arg.Is<IReadOnlyCollection<string>>(r => r.Contains(Recommended)));
+    }
+
+    /// <summary>
+    /// No usable username, no tags at all — not an empty-prefixed "_recommended" that would collide
+    /// across every anonymous caller. The verdict itself is still recorded.
+    /// </summary>
+    [Fact]
+    public async Task A_verdict_from_a_nameless_caller_writes_no_tags()
+    {
+        await _sut.RateOne(User, username: null, Artist("Big Thief"));
+
+        await Drain(() => _verdicts.ReceivedCalls().Any());
+
+        await _tagger.DidNotReceive().SetTags(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<string>>());
+        await _queue.Received(1).Rate(User, "Big Thief", DiscoveryStatus.Liked, Arg.Any<string?>());
     }
 
     /// <summary>

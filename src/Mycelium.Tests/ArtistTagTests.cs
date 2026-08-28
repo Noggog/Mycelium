@@ -114,5 +114,35 @@ public class ArtistTagTests
     {
         ArtistTag.IsVerdict(label).Should().BeFalse();
         ArtistTag.IsAdded(label).Should().BeFalse();
+        ArtistTag.IsRecommended(label).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Recommended_marker_gets_its_own_suffix_and_the_same_username_cleanup()
+    {
+        ArtistTag.Recommended("noggog").Should().Be("noggog_recommended");
+        ArtistTag.Recommended("Justin C. Swanson@gmail.com").Should().Be("justincswanson_recommended");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("@example.com")]
+    public void No_usable_username_yields_no_recommended_marker(string? username)
+    {
+        ArtistTag.Recommended(username).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_recommended_marker_is_ours_but_is_neither_a_verdict_nor_a_credit()
+    {
+        // It is derived state, not a decision: the sweep recomputes it wholesale, so the dev wipe has
+        // no business stripping it (IsVerdict) and it is not history anyone could lose (IsAdded). The
+        // tag editor still hides it, because hand-editing it would just be undone at the next pass.
+        var marker = ArtistTag.Recommended("noggog")!;
+        ArtistTag.IsRecommended(marker).Should().BeTrue();
+        ArtistTag.IsManaged(marker).Should().BeTrue();
+        ArtistTag.IsVerdict(marker).Should().BeFalse();
+        ArtistTag.IsAdded(marker).Should().BeFalse();
     }
 }

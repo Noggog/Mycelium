@@ -60,10 +60,16 @@ public class DiscoveryRatingService
             var tag = ArtistTag.For(username, status);
             var opposite = status == DiscoveryStatus.Liked ? DiscoveryStatus.Disliked : DiscoveryStatus.Liked;
             var oppositeTag = tag != null ? ArtistTag.For(username, opposite) : null;
+            // A thumb also retires the "<username>_recommended" marker, if the artist was carrying one:
+            // it means "your likes point here and you haven't decided yet", and this is the deciding.
+            // The nightly sweep (RecommendedArtistTagger) would drop it anyway, but a rated band should
+            // not sit in the user's recommended playlist until 6am — and the marker is only ever on
+            // artists already in Plex, so this costs nothing beyond the write we're doing regardless.
+            var recommendedTag = tag != null ? ArtistTag.Recommended(username) : null;
             _followUps.QueueVerdictFollowUp(
                 userId, item.Artist, status, depth,
                 addTag: tag,
-                removeTags: oppositeTag != null ? new[] { oppositeTag } : Array.Empty<string>());
+                removeTags: new[] { oppositeTag, recommendedTag }.OfType<string>().ToArray());
         }
         else if (item.Upgrade == true)
         {

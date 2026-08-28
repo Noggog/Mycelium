@@ -110,6 +110,16 @@ compilation or soundtrack, credited to an umbrella rather than an act — stamps
 **album** (type 9), since "Various Artists" is nothing anyone has taste about. The stock "My Library"
 smart playlist matches either.
 
+A third marker rides the same field: `<user>_recommended`, on artists the library **already has** that
+the user's liked bands point at and they haven't thumbed yet — the "Recommended" section of the
+discovery feed, made playable. It is derived rather than decided, so nothing writes it once and leaves
+it: the daily catalog sync recomputes each user's set and reconciles the tag both ways
+(`RecommendedArtistTagger`), and a thumb strips it inline, since deciding about a band is the end of
+recommending it. Only owned artists can carry it — the recommendation *queue* is by construction
+everything the library doesn't have, so there is no Plex item to tag and nothing to play if there were.
+Point a smart playlist at "Artist Mood" to hear it; the dev panel's **Sync recommended** button runs
+the pass on demand.
+
 The Playlists page is different: playlists, track ratings, play counts and last-played are all
 **per-Plex-account**. Building a "4 stars and up" playlist with the server token would file it in the
 owner's sidebar and filter it by the owner's ratings, for every user. So each app user links their own

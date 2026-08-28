@@ -29,6 +29,18 @@ public interface IVerdictFollowUp
 }
 
 /// <summary>
+/// The seam <see cref="RecommendedArtistTagger"/> reads through — "which artists that the library
+/// already has does this user's frontier point at, and haven't they thumbed yet". Implemented by
+/// <see cref="DiscoveryEngine"/>; extracted for the same reason as <see cref="IQueueReplenisher"/>, so
+/// the Plex-facing sweep is unit-testable without standing up the whole engine and its five repos.
+/// </summary>
+public interface IRecommendedLibraryArtists
+{
+    /// <inheritdoc cref="DiscoveryEngine.RecommendedLibraryArtistNames"/>
+    Task<IReadOnlyList<string>> RecommendedLibraryArtistNames(string userId);
+}
+
+/// <summary>
 /// The discovery loop. Surfaces three kinds of things to react to — new recommended artists, owned
 /// artists not yet rated, and albums missing from <em>liked</em> artists — and steers a per-user walk
 /// through the similarity graph by the user's verdicts.
@@ -40,7 +52,7 @@ public interface IVerdictFollowUp
 /// Recommendations never re-add an artist that's owned, already-decided, or the frontier itself, so
 /// the frontier only moves outward.
 /// </summary>
-public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
+public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommendedLibraryArtists
 {
     private readonly IUserQueueRepo _queue;
     private readonly IRelatedArtistReader _related;
@@ -111,6 +123,17 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp
         var headerKind = kinds.Count > 0 ? kinds[0] : FeedKind.RecommendedArtist;
         return new DiscoveryFeedPage(headerKind, pageItems, page, pageSize, mixed.Count);
     }
+
+    /// <summary>
+    /// Just the names behind the <see cref="FeedKind.RecommendedLibraryArtist"/> section — owned,
+    /// unrated artists at least one <em>liked</em> artist recommends. The same computation the feed
+    /// serves, without the paging, art or provenance a card needs: this exists for the Plex marker
+    /// sweep, whose only question is which names should carry "&lt;user&gt;_recommended".
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RecommendedLibraryArtistNames(string userId) =>
+        (await ItemsForKind(userId, FeedKind.RecommendedLibraryArtist))
+        .Select(i => i.Artist.ArtistName)
+        .ToArray();
 
     /// <summary>
     /// The full (unpaged) list of feed items for one category, with umbrella credits ("Various

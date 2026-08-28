@@ -26,7 +26,7 @@ public interface IArtistTagger
 }
 
 /// <summary>
-/// Builds the per-user tags this app writes into the library's Mood field. Two kinds, and the
+/// Builds the per-user tags this app writes into the library's Mood field. Three kinds, and the
 /// difference between them is what the tag <em>means</em>:
 ///
 /// <list type="bullet">
@@ -36,10 +36,15 @@ public interface IArtistTagger
 /// taste: this is the person who asked for the record and put it in the library. It is written once,
 /// when the download finally lands, and is never rewritten or removed — someone who later sours on a
 /// record still added it.</item>
+/// <item><b>Suggestion</b> — "&lt;username&gt;_recommended" (<see cref="Recommended"/>). Not a
+/// decision at all: it marks an artist the library already has that the user's <em>liked</em> artists
+/// point at, so "what should I put on next" is answerable from Plex. It is derived state — a periodic
+/// sweep (<c>RecommendedArtistTagger</c>) puts it on and takes it off as the frontier moves, and
+/// thumbing the artist either way retires it.</item>
 /// </list>
 ///
 /// <para>The username is trimmed of any email domain and reduced to [a-z0-9_] so the tag is clean and
-/// collision-resistant; both builders return null when there's no usable username (so the caller skips
+/// collision-resistant; every builder returns null when there's no usable username (so the caller skips
 /// tagging).</para>
 /// </summary>
 public static class ArtistTag
@@ -84,12 +89,31 @@ public static class ArtistTag
         label != null && label.EndsWith("_added", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Whether a tag is one this app owns, verdict or credit. This is the set the tag editor hides and
-    /// refuses to write: all of it is state the app maintains, and offering a second, desynced way to
-    /// change it would be a bug either way. Not the same set as <see cref="IsVerdict"/> — a wipe that
-    /// took the "_added" credits with it could never put them back.
+    /// The "your taste points here" marker — "&lt;username&gt;_recommended". Stamped on <em>owned</em>
+    /// artists the user hasn't thumbed yet that at least one of their liked artists recommends, so a
+    /// smart playlist can play the library the discovery feed is nudging them towards. Unlike a verdict
+    /// this is nobody's decision: it is recomputed wholesale by the sweep, which is also what removes it
+    /// once the artist is thumbed (a rated artist leaves that section of the feed).
     /// </summary>
-    public static bool IsManaged(string? label) => IsVerdict(label) || IsAdded(label);
+    public static string? Recommended(string? username)
+    {
+        var prefix = Sanitize(username);
+        return prefix.Length == 0 ? null : $"{prefix}_recommended";
+    }
+
+    /// <summary>Whether a tag is a suggestion marker — the "_recommended" suffix namespace.</summary>
+    public static bool IsRecommended(string? label) =>
+        label != null && label.EndsWith("_recommended", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a tag is one this app owns — verdict, credit or suggestion. This is the set the tag
+    /// editor hides and refuses to write: all of it is state the app maintains, and offering a second,
+    /// desynced way to change it would be a bug either way (a hand-added "_recommended" would simply be
+    /// swept off again at the next pass). Not the same set as <see cref="IsVerdict"/> — a wipe that took
+    /// the "_added" credits with it could never put them back.
+    /// </summary>
+    public static bool IsManaged(string? label) =>
+        IsVerdict(label) || IsAdded(label) || IsRecommended(label);
 
     private static string Sanitize(string? username)
     {

@@ -20,13 +20,15 @@ public class CatalogSyncService : BackgroundService
     private readonly PurchaseService _purchases;
     private readonly ArtistTagBackfill _tagBackfill;
     private readonly AlbumTagBackfill _albumTagBackfill;
+    private readonly RecommendedArtistTagger _recommendedTagger;
     private readonly JitterPolicy _jitter;
     private readonly DailySyncSchedule _schedule;
     private readonly ILogger<CatalogSyncService> _logger;
 
     public CatalogSyncService(
         CatalogRefresher refresher, PlexServerTokenService serverToken, PurchaseService purchases,
-        ArtistTagBackfill tagBackfill, AlbumTagBackfill albumTagBackfill, JitterPolicy jitter,
+        ArtistTagBackfill tagBackfill, AlbumTagBackfill albumTagBackfill,
+        RecommendedArtistTagger recommendedTagger, JitterPolicy jitter,
         DailySyncSchedule schedule, ILogger<CatalogSyncService> logger)
     {
         _refresher = refresher;
@@ -34,6 +36,7 @@ public class CatalogSyncService : BackgroundService
         _purchases = purchases;
         _tagBackfill = tagBackfill;
         _albumTagBackfill = albumTagBackfill;
+        _recommendedTagger = recommendedTagger;
         _jitter = jitter;
         _schedule = schedule;
         _logger = logger;
@@ -73,6 +76,11 @@ public class CatalogSyncService : BackgroundService
             // compilation arriving usually adds a record to an umbrella act the library already had —
             // so it re-checks the (small) set of rated collections against what is now owned.
             await _albumTagBackfill.Backfill();
+            // Last, because it reads the library listing this pass just refreshed and the verdicts the
+            // two backfills just settled: which owned artists the user's likes point at, marked in Plex
+            // as "<username>_recommended". A full reconcile rather than a top-up — the set moves with
+            // every like, and nothing else is in a position to take a stale marker back off.
+            await _recommendedTagger.Sync();
         }
         catch (PlexUnauthorizedException ex)
         {

@@ -38,6 +38,11 @@ export interface RebuildResult {
   applied: number
 }
 
+export interface RecommendedSyncResult {
+  added: number
+  removed: number
+}
+
 // Strip every verdict ("_liked"/"_disliked") tag from every artist — moods, plus the legacy
 // same-named collections — for a clean slate. The permanent "<user>_added" credits are left alone:
 // they're stamped on albums when an acquisition lands, and nothing could put them back.
@@ -65,6 +70,17 @@ export async function rebuildPlexTags(): Promise<RebuildResult> {
     throw new Error(`Failed to rebuild Plex tags: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as RebuildResult
+}
+
+// Recompute the "<username>_recommended" markers — owned artists the user's liked bands point at and
+// they haven't thumbed yet — instead of waiting for the nightly catalog sync to do it. Both adds and
+// removes, and only within its own tag namespace, so unlike the clear it isn't destructive.
+export async function syncRecommendedTags(): Promise<RecommendedSyncResult> {
+  const res = await fetch('/api/dev/plex-tags/recommended', { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to sync recommended tags: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as RecommendedSyncResult
 }
 
 export interface QualitySweepResult {

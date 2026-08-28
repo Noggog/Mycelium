@@ -903,6 +903,17 @@ dev.MapPost("/rebuild", async (PlexTagMaintenance maint) =>
     })
     .WithName("DevRebuildPlexTags");
 
+// Reconcile the "<username>_recommended" markers out of band, instead of waiting for the nightly
+// catalog sync to do it. Not destructive in the way /clear is — it both adds and removes, and only
+// within its own tag namespace — but it reads the whole library and writes across it, so it sits with
+// the rest of the tag maintenance rather than being offered to every signed-in user.
+dev.MapPost("/recommended", async (RecommendedArtistTagger tagger) =>
+    {
+        var result = await tagger.Sync();
+        return Results.Ok(new { added = result.Added, removed = result.Removed });
+    })
+    .WithName("DevSyncRecommendedTags");
+
 // --- Dev panel: the server's own Plex credential ---
 // The token every library read is made with. These endpoints mint it in place: the same plex.tv PIN
 // flow the per-user link uses, pointed at the server credential, with the result stored in Mongo and
