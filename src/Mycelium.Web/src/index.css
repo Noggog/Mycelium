@@ -596,23 +596,6 @@ code {
   color: var(--salmon-light);
 }
 
-/* The Playlists page's disclosure for the same token paste. */
-.playlist-token {
-  margin-top: 1rem;
-}
-.playlist-token > summary {
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: var(--text-dim);
-}
-.playlist-token > summary:hover {
-  color: var(--cyan);
-}
-.playlist-token input {
-  min-width: 18rem;
-  flex: 0 1 22rem;
-}
-
 /* Popup-blocked / timed-out notes from the Plex link attempt, sitting under the header controls. */
 .auth-note {
   position: absolute;
@@ -3356,8 +3339,8 @@ a.playlist-badge.is-link:hover {
   cursor: not-allowed;
 }
 
-/* The linked-account row and the waiting states: one compact line, not a full panel. There is nothing
-   to read here once you're connected — the name confirms which account, the button undoes it. */
+/* The "checking your Plex connection" line: one compact row rather than a full panel, so the page
+   doesn't lurch when it resolves and the playlists take its place. */
 .dev-tool.playlist-account {
   display: flex;
   align-items: center;
@@ -3366,14 +3349,6 @@ a.playlist-badge.is-link:hover {
   padding: 0.6rem 1rem;
   margin-bottom: 1rem;
 }
-.playlist-account-name {
-  color: var(--text-dim);
-  font-size: 0.9rem;
-}
-.playlist-account-name strong {
-  color: var(--text);
-}
-
 .playlist-footnote {
   max-width: 1000px;
   margin: 0 auto;

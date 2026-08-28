@@ -191,10 +191,10 @@ public static class SmartPlaylistCatalog
         return new StockPlaylistDefinition(
             Id: MyLibraryId,
             Title: "My Library",
-            Description: "Contains everything you've thumbed up in Mycelium",
+            Description: "Contains everything you've approved in Mycelium",
             Filter: rules.Count == 0 ? null : Sorted(PlexGroup.Flatten(PlexGroup.Any(rules.ToArray()))),
             Unavailable: rules.Count == 0
-                ? "Thumb up an artist first."
+                ? "Approve an artist first."
                 : null);
     }
 
@@ -282,7 +282,7 @@ public static class SmartPlaylistCatalog
         return new StockPlaylistDefinition(
             Id: FrontierId,
             Title: "Frontier",
-            Description: "New or forgotten music, from bands you like or that are recommended to you.",
+            Description: "New or forgotten music, from bands you approve of or that are recommended to you.",
             // Flattened because a single surviving tag must be a bare condition, not a one-child
             // bracket Plex's editor would drop on the user's next save.
             Filter: tags.Count == 0
@@ -290,7 +290,7 @@ public static class SmartPlaylistCatalog
                 : Sorted(PlexGroup.Flatten(PlexGroup.All(
                     FrontierRules(options.HalfStars).Append(PlexGroup.Any(tags.ToArray())).ToArray()))),
             Unavailable: tags.Count == 0
-                ? "Thumb up an artist first."
+                ? "Approve an artist first."
                 : null);
     }
 
@@ -302,7 +302,7 @@ public static class SmartPlaylistCatalog
     private static StockPlaylistDefinition DeepFrontier(StockPlaylistOptions options) => new(
         Id: DeepFrontierId,
         Title: "Deep Frontier",
-        Description: "New or forgotten music from anywhere in the library, liked or not.",
+        Description: "New or forgotten music from anywhere in the library, approved or not.",
         Filter: Sorted(PlexGroup.All(FrontierRules(options.HalfStars))));
 
     /// <summary>

@@ -44,17 +44,21 @@ export default function Playlists() {
   return (
     <section>
       <h1>Playlists</h1>
-      <PlexConnection />
+      <PlexGate />
     </section>
   )
 }
 
-// ---- Connecting the user's own Plex account ---------------------------------------------------
+// ---- The gate: a linked Plex account -----------------------------------------------------------
 
-function PlexConnection() {
+// Nothing on this page can be built without one, because playlists, star ratings and play history are
+// all per-account in Plex — built with the server's own token, a "4 stars and up" playlist would land
+// in the owner's sidebar and be filtered by the owner's ratings, for everyone.
+//
+// Connecting is not offered here: that lives in the account menu in the top right, on every page.
+// This only says when it's missing, so the page isn't a mystery.
+function PlexGate() {
   const plex = usePlexLink()
-  const [token, setToken] = useState('')
-  const [label, setLabel] = useState('')
 
   if (plex.isLoading) {
     return (
@@ -75,102 +79,16 @@ function PlexConnection() {
   if (!plex.status?.linked) {
     return (
       <div className="dev-tool">
-        <h2>Connect your Plex account</h2>
+        <h2>Connect Plex first</h2>
         <p>
-          Connect Plex to get a few useful smart playlists set up for you — like one holding only the
-          artists you've thumbed up, or your top-rated tracks you haven't heard in a while.
+          These playlists are built in your own Plex account, so it has to be connected before there
+          is anywhere to put them. Use <strong>Log into Plex</strong> in the account menu, top right.
         </p>
-
-        <div className="controls">
-          <button
-            onClick={() => plex.connect(`${window.location.origin}/playlists`)}
-            disabled={plex.starting || plex.waiting}
-          >
-            {plex.waiting ? 'Waiting for Plex…' : plex.starting ? 'Starting…' : 'Connect Plex'}
-          </button>
-          {plex.waiting && (
-            <button className="secondary" onClick={plex.cancel}>
-              Cancel
-            </button>
-          )}
-        </div>
-
-        {plex.waiting && !plex.fallbackUrl && (
-          <p className="dev-status">Approve in the tab that opened — this page will update.</p>
-        )}
-        {plex.fallbackUrl && (
-          <p className="dev-status">
-            Popup blocked —{' '}
-            <a href={plex.fallbackUrl} target="_blank" rel="noreferrer">
-              open the approval page
-            </a>
-            .
-          </p>
-        )}
-        {plex.problem && <p className="error">{plex.problem}</p>}
-
-        {/* The approval flow links whoever is signed in at app.plex.tv in this browser, which can't
-            reach a Plex Home / managed user — they have no session of their own. Pasting their token
-            names the account directly. Same control as the one in the header menu. */}
-        <details className="playlist-token">
-          <summary>Or paste a Plex token</summary>
-          <p className="dev-status">
-            For signing in as a Plex Home or managed user, who has no app.plex.tv session to approve
-            with. An account token is checked with plex.tv, and only the server-scoped token it hands
-            back is kept. A server access token is checked against the server instead — that proves
-            the token works, but the server reports the owner's identity whatever token asks, so it
-            can't say whose it is. Name it yourself in that case.
-          </p>
-          <form
-            className="controls"
-            onSubmit={async (e) => {
-              e.preventDefault()
-              if (await plex.linkWithToken(token, label)) {
-                setToken('')
-                setLabel('')
-              }
-            }}
-          >
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="X-Plex-Token"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="Plex token"
-            />
-            <input
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="Name (if Plex can't say)"
-              autoComplete="off"
-              aria-label="Account name"
-            />
-            <button type="submit" disabled={plex.linkingToken || token.trim() === ''}>
-              {plex.linkingToken ? 'Checking…' : 'Link token'}
-            </button>
-          </form>
-        </details>
       </div>
     )
   }
 
-  return (
-    <>
-      <div className="dev-tool playlist-account">
-        <span className="playlist-account-name">
-          Plex: <strong>{plex.status.username}</strong>
-        </span>
-        <button className="secondary" onClick={plex.disconnect} disabled={plex.disconnecting}>
-          {plex.disconnecting ? 'Disconnecting…' : 'Disconnect'}
-        </button>
-      </div>
-      {plex.disconnectError && <p className="error">{plex.disconnectError.message}</p>}
-      <StockPlaylists />
-    </>
-  )
+  return <StockPlaylists />
 }
 
 // ---- The stock playlists ----------------------------------------------------------------------
