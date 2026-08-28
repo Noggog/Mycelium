@@ -82,7 +82,7 @@ public static partial class AlbumTitleMatcher
     /// short-circuits the whole match. The album axis has been folded since the beginning; this is the
     /// other half.</para>
     /// </summary>
-    public static string NormalizeArtist(string? name) => TypographyFold.Apply(name);
+    public static string NormalizeArtist(string? name) => TypographyFold.ForArtist(name);
 
     /// <summary>
     /// Drops featured-artist credits — "(feat. Sia)", "[ft. Kendrick Lamar]", "(featuring Nate Dogg)" —

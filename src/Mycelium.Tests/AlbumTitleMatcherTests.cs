@@ -372,6 +372,11 @@ public class AlbumTitleMatcherTests
     [InlineData("Florence + the Machine", "florence + THE machine")]      // case only
     [InlineData("Simon & Garfunkel", "Simon and Garfunkel")]              // ampersand convention
     [InlineData(" Boards  of   Canada ", "Boards of Canada")]             // whitespace
+    [InlineData("J. Balvin", "J Balvin")]                                 // abbreviation period
+    [InlineData("M.I.A.", "MIA")]
+    [InlineData("Keston Cobblers Club", "Keston Cobblers\u2019 Club")]     // apostrophe dropped by one source
+    [InlineData("Yael Naim", "Yael Na\u00EFm")]                            // diacritic
+    [InlineData("Bjork", "Bj\u00F6rk")]
     public void Artist_spellings_that_differ_only_in_typography_are_one_act(string a, string b)
     {
         AlbumTitleMatcher.NormalizeArtist(a).Should().Be(AlbumTitleMatcher.NormalizeArtist(b));
@@ -386,6 +391,10 @@ public class AlbumTitleMatcherTests
     [InlineData("Yes", "The Yes")]
     [InlineData("Thao", "Thao and the Get Down Stay Down")]
     [InlineData("Eliza", "Eliza Doolittle")]
+    // A leading article is NOT stripped, deliberately. It costs a real match — Deezer's "The
+    // Traveling Wilburys" against Plex's "Traveling Wilburys" — but joining "The Band" to "Band"
+    // would be unrecoverable, so that one is left to a merge override.
+    [InlineData("The Traveling Wilburys", "Traveling Wilburys")]
     public void Artist_normalisation_does_not_trim_anything_beyond_typography(string a, string b)
     {
         AlbumTitleMatcher.NormalizeArtist(a).Should().NotBe(AlbumTitleMatcher.NormalizeArtist(b));
@@ -410,5 +419,26 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.NormalizeRecord("Read My Lips (Deluxe Version)").Should().Be("read my lips");
         AlbumTitleMatcher.NormalizeArtist("Sophie Ellis\u2010Bextor")
             .Should().Be(AlbumTitleMatcher.NormalizeArtist("Sophie Ellis-Bextor"));
+    }
+
+    [Fact]
+    public void The_artist_fold_leaves_album_titles_alone()
+    {
+        // Periods, apostrophes and accents are orthography in a proper noun and meaning in prose.
+        // The looser rule is for the artist axis only; titles keep the rules they always had.
+        AlbumTitleMatcher.NormalizeRecord("Don't Look Now").Should().Be("don't look now");
+        AlbumTitleMatcher.NormalizeRecord("Racine Carr\u00E9e").Should().Be("racine carr\u00E9e");
+    }
+
+    [Fact]
+    public void A_remix_bracket_survives_the_record_fold_on_both_sides()
+    {
+        // "Mi Gente (Steve Aoki Remix)" vs Plex's "Mi gente (Steve Aoki remix)": the bracket names a
+        // different performance, so it is kept — and kept identically either way, case folded. This
+        // pair always matched on title; what failed was the artist ("J. Balvin" vs "J Balvin").
+        AlbumTitleMatcher.NormalizeRecord("Mi Gente (Steve Aoki Remix)")
+            .Should().Be(AlbumTitleMatcher.NormalizeRecord("Mi gente (Steve Aoki remix)"));
+        AlbumTitleMatcher.NormalizeRecord("Mi Gente (Steve Aoki Remix)")
+            .Should().Be("mi gente (steve aoki remix)");
     }
 }

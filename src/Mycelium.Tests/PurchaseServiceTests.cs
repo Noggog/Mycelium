@@ -274,6 +274,33 @@ public class PurchaseServiceTests
     }
 
     [Fact]
+    public async Task A_sent_remix_closes_out_when_deezer_abbreviates_the_artist_with_a_period()
+    {
+        // The second real case: title matched all along ("mi gente (steve aoki remix)" both sides —
+        // the remix bracket is kept, and kept identically), but Deezer writes "J. Balvin" where Plex
+        // writes "J Balvin". Same short-circuit as the hyphen: the artist gate fails first.
+        const string deezerArtist = "J. Balvin";
+        const string plexArtist = "J Balvin";
+        const string deezerTitle = "Mi Gente (Steve Aoki Remix)";
+
+        AllLiked(new[]
+        {
+            new AlbumRating(new ArtistKey(deezerArtist), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),
+        });
+        await _sut.Reconcile();
+        await _purchases.SetStatus(PurchaseKey.ForAlbum(deezerArtist, deezerTitle), PurchaseStatus.Sent);
+
+        _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [plexArtist] = new(StringComparer.OrdinalIgnoreCase) { ["Mi gente (Steve Aoki remix)"] = null },
+        });
+
+        (await _sut.GetActive()).Should().BeEmpty();
+        _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+        _overrides.Items.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Two_acts_that_fold_together_keep_both_their_albums()
     {
         // The one way this fold could make matching worse: if the owned map overwrote one act with its
