@@ -32,7 +32,8 @@ public record StockPlaylistStatus(
     string? MatchedTitle = null,
     string? MatchedRatingKey = null,
     int? TrackCount = null,
-    string? Note = null);
+    string? Note = null,
+    string? PlexUrl = null);
 
 /// <summary>The whole page: whether the user has linked Plex, and where each stock playlist stands.</summary>
 public record PlaylistSurvey(
@@ -120,6 +121,7 @@ public class SmartPlaylistService
             MatchedRatingKey = created.RatingKey,
             TrackCount = created.LeafCount,
             Note = null,
+            PlexUrl = context.LinkTo(created.RatingKey),
         };
     }
 
@@ -175,6 +177,10 @@ public class SmartPlaylistService
         var section = (await _plexApi.ResolveLibrary()).Key;
         var existing = await _playlists.GetSmartAudioPlaylists(link.ServerToken);
 
+        // Only used to build "open it in Plex" links, so a server that won't say who it is costs the
+        // links, not the survey.
+        var machineId = await MachineIdentifier();
+
         // The same tag the thumbs write, derived the same way, so the rule can't drift from the tagger.
         // Looked up twice because Plex keys its tag vocabularies per metadata type: the identical name
         // has one id on artists and a different one on albums, and a "My Library" playlist has to match
@@ -203,7 +209,22 @@ public class SmartPlaylistService
                 .ToDictionary(g => g.Key, g => g.First().Title, StringComparer.Ordinal);
         }
 
-        return new SurveyContext(link.ServerToken, link.Username, section, definitions, existing, maps);
+        return new SurveyContext(
+            link.ServerToken, link.Username, section, machineId, definitions, existing, maps);
+    }
+
+    /// <summary>The server id the deep links are built from, or null when Plex can't be reached.</summary>
+    private async Task<string?> MachineIdentifier()
+    {
+        try
+        {
+            return await _plexApi.GetMachineIdentifier();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Couldn't fetch Plex machineIdentifier for playlist links");
+            return null;
+        }
     }
 
     private async Task<string?> FindTagId(int section, string field, string tagName, int type)
@@ -217,6 +238,7 @@ public class SmartPlaylistService
         string Token,
         string PlexUsername,
         int SectionKey,
+        string? MachineId,
         IReadOnlyList<StockPlaylistDefinition> Definitions,
         IReadOnlyList<PlexPlaylist> Existing,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> TagNames)
@@ -243,6 +265,7 @@ public class SmartPlaylistService
                         MatchedTitle = playlist.Title,
                         MatchedRatingKey = playlist.RatingKey,
                         TrackCount = playlist.LeafCount,
+                        PlexUrl = LinkTo(playlist.RatingKey),
                     };
                 }
             }
@@ -261,8 +284,13 @@ public class SmartPlaylistService
                     MatchedRatingKey = clash.RatingKey,
                     TrackCount = clash.LeafCount,
                     Note = "This name is taken by a different playlist.",
+                    PlexUrl = LinkTo(clash.RatingKey),
                 };
         }
+
+        /// <summary>An app.plex.tv link to one of the user's playlists, when the server named itself.</summary>
+        public string? LinkTo(string ratingKey) =>
+            string.IsNullOrEmpty(MachineId) ? null : PlexDeepLink.ToPlaylist(MachineId, ratingKey);
 
         private string? ResolveTag(string field, string value) =>
             TagNames.TryGetValue(field, out var map) && map.TryGetValue(value, out var name) ? name : null;

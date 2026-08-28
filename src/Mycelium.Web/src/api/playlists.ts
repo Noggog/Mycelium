@@ -88,6 +88,8 @@ export interface StockPlaylist {
   matchedRatingKey: string | null
   trackCount: number | null
   note: string | null
+  // app.plex.tv link to the matched playlist, when one was matched and the server named itself.
+  plexUrl: string | null
 }
 
 export interface PlaylistSurvey {

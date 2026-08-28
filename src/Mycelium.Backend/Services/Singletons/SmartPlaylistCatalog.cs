@@ -104,7 +104,7 @@ public static class SmartPlaylistCatalog
         return new StockPlaylistDefinition(
             Id: MyLibraryId,
             Title: "My Library",
-            Description: "Contains everything you've thumbed up — artists, and collections that have no artist",
+            Description: "Contains everything you've thumbed up in Mycelium",
             Filter: rules.Count == 0 ? null : Sorted(PlexGroup.Flatten(PlexGroup.Any(rules.ToArray()))),
             Unavailable: rules.Count == 0
                 ? "Thumb up an artist first."

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
 import { usePlexLink } from '../auth/usePlexLink'
@@ -176,6 +176,27 @@ function PlexConnection() {
 const STAR_TIERS = [3, 4, 5] as const
 type Variant = 'raw' | 'fresh'
 
+// Both "matched" states name a playlist that exists in Plex, so the badge opens it. Without a link
+// — an unreachable server can't be asked for its id — the same text renders as plain text rather
+// than as an anchor that goes nowhere.
+function BadgeLink({
+  tone,
+  href,
+  children,
+}: {
+  tone: string
+  href: string | null
+  children: ReactNode
+}) {
+  const className = `playlist-badge ${tone}`
+  if (!href) return <span className={className}>{children}</span>
+  return (
+    <a className={`${className} is-link`} href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  )
+}
+
 function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
   switch (playlist.state) {
     case 'Exists': {
@@ -185,11 +206,18 @@ function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
         playlist.matchedTitle && playlist.matchedTitle !== playlist.title
           ? ` as “${playlist.matchedTitle}”`
           : ''
-      const tracks = playlist.trackCount ? ` · ${playlist.trackCount.toLocaleString()}` : ''
-      return <span className="playlist-badge is-exists">✓ In Plex{renamed}{tracks}</span>
+      return (
+        <BadgeLink tone="is-exists" href={playlist.plexUrl}>
+          ✓ In Plex{renamed}
+        </BadgeLink>
+      )
     }
     case 'Differs':
-      return <span className="playlist-badge is-differs">Name taken</span>
+      return (
+        <BadgeLink tone="is-differs" href={playlist.plexUrl}>
+          Name taken
+        </BadgeLink>
+      )
     case 'Unavailable':
       return <span className="playlist-badge is-unavailable">Not yet</span>
     default:
@@ -247,8 +275,9 @@ function PlaylistRow({
           </button>
         )}
         {playlist.state === 'Differs' && (
-          <button onClick={() => update.mutate()} disabled={busy}>
-            {update.isPending ? 'Updating…' : 'Update'}
+          // Destructive: it rewrites the rules of a playlist the user made themselves.
+          <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
+            {update.isPending ? 'Replacing…' : 'Replace'}
           </button>
         )}
       </div>

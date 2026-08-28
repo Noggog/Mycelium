@@ -3205,6 +3205,35 @@ a.detail-chip.via:hover {
   color: var(--text-dim);
   border-color: var(--border);
 }
+/* The matched states are anchors into Plex — they keep the badge shape, and lose the underline the
+   global link rule would give them. */
+a.playlist-badge.is-link {
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+a.playlist-badge.is-link:hover {
+  border-color: currentColor;
+  box-shadow: 0 0 12px -4px currentColor;
+}
+
+/* Rewriting someone's own playlist is the one destructive action on the page, so it reads as one. */
+.content button.playlist-replace {
+  background: rgba(225, 96, 99, 0.16);
+  color: var(--salmon-white);
+  border: 1px solid var(--salmon);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+}
+.content button.playlist-replace:hover:not(:disabled) {
+  border-color: var(--salmon-light);
+  box-shadow: 0 0 14px -3px var(--salmon);
+  transform: translateY(-1px);
+}
 
 .playlist-actions:not(:empty) {
   margin-top: 0.6rem;

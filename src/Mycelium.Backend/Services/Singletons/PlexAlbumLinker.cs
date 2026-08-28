@@ -20,6 +20,16 @@ public static class PlexDeepLink
         var key = Uri.EscapeDataString($"/library/metadata/{ratingKey}");
         return $"https://app.plex.tv/desktop/#!/server/{machineId}/details?key={key}";
     }
+
+    /// <summary>
+    /// One playlist. Playlists live outside the library sections, so they take their own route and the
+    /// <c>/playlists/{ratingKey}</c> key rather than a <c>/library/metadata</c> one.
+    /// </summary>
+    public static string ToPlaylist(string machineId, string ratingKey)
+    {
+        var key = Uri.EscapeDataString($"/playlists/{ratingKey}");
+        return $"https://app.plex.tv/desktop/#!/server/{machineId}/playlist?key={key}";
+    }
 }
 
 /// <summary>
