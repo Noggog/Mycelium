@@ -268,6 +268,31 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
   )
 }
 
+// What each rating means, so the scales aren't just a number of stars — this is the ladder the
+// playlists are built around, and seeing it is how someone decides which scale they want. The half
+// scale earns its extra rungs at the top ("I'd play it for others" is a different verdict from "I
+// like it"); the whole scale says the same thing in five.
+const HALF_STAR_KEY: [string, string][] = [
+  ['0.5', 'Hate. Never play again'],
+  ['1.0', 'Deciding whether to give another chance before blocking'],
+  ['1.5', "Boring. Maybe stop playing just out of drabness"],
+  ['2.0', 'Slightly interesting but questionable'],
+  ['2.5', 'Stuff to have on. Not too opinionated'],
+  ['3.0', 'Like it. Wouldn\'t really play for others'],
+  ['3.5', 'Like it, Would play for others'],
+  ['4.0', 'Love it, Would play for others'],
+  ['4.5', 'Extremely memorable favorite songs'],
+  ['5.0', 'Undeniable masterpieces'],
+]
+
+const WHOLE_STAR_KEY: [string, string][] = [
+  ['1', 'Hate. Never play again'],
+  ['2', 'Meh'],
+  ['3', 'Like it. Wouldn\'t really play for others'],
+  ['4', 'Like it, Would play for others'],
+  ['5', 'Love it'],
+]
+
 // How this user rates in Plex. There is no way to ask Plex: half-star support is a per-client
 // capability — Plexamp offers it, Plex Web can only set whole stars — and no server or account
 // setting exposes which one someone actually uses. It matters because the lowest score a user can
@@ -283,15 +308,11 @@ function RatingScale({ halfStars }: { halfStars: boolean }) {
   })
 
   return (
-    <div className="dev-tool">
-      <h2>Rating scale</h2>
-      <p>
-        Plex can't tell us how you rate — half stars are a per-app setting, on in Plexamp and the
-        mobile apps, unavailable in Plex for the web — so it's worth saying. The playlists treat your
-        lowest possible rating as “never play again”, and skip it.
-      </p>
+    <div className="dev-tool playlist-scale">
+      <div className="playlist-scale-choice">
+        <h2>Rating scale</h2>
+        <p>How do you plan on rating your songs?</p>
 
-      <div className="controls playlist-picker">
         <label className="playlist-check">
           <input
             type="checkbox"
@@ -299,16 +320,20 @@ function RatingScale({ halfStars }: { halfStars: boolean }) {
             disabled={save.isPending}
             onChange={(e) => save.mutate(e.target.checked)}
           />
-          I rate in half stars (0.5★ steps)
+          Rate in half stars
         </label>
+
+        {save.isError && <p className="error">{(save.error as Error).message}</p>}
       </div>
 
-      <p className="dev-status">
-        {halfStars ? '0.5★' : '1★'} means never play again. Changing this rewrites what Frontier and
-        Deep Frontier select, so copies you've already created will show as “name taken” until you
-        replace them.
-      </p>
-      {save.isError && <p className="error">{(save.error as Error).message}</p>}
+      <dl className="playlist-scale-key">
+        {(halfStars ? HALF_STAR_KEY : WHOLE_STAR_KEY).map(([stars, meaning]) => (
+          <div key={stars}>
+            <dt>{stars}★</dt>
+            <dd>{meaning}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   )
 }

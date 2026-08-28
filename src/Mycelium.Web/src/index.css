@@ -3259,6 +3259,52 @@ a.playlist-badge.is-link:hover {
   cursor: pointer;
 }
 
+/* Rating scale: the choice on the left, the key to what each star means on the right. Two columns
+   only where there's room for the key to stay readable — below that it stacks under the checkbox. */
+.playlist-scale {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(0, 1.4fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .playlist-scale {
+    grid-template-columns: 1fr;
+  }
+}
+
+.playlist-scale-choice h2 {
+  margin-top: 0;
+}
+
+.playlist-scale-key {
+  margin: 0;
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+/* Each rung is its own row: the rating in a fixed column so the stars line up, the meaning beside it. */
+.playlist-scale-key > div {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+
+.playlist-scale-key dt {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 600;
+  color: var(--cyan);
+  text-align: right;
+}
+
+.playlist-scale-key dd {
+  margin: 0;
+  color: var(--text-dim);
+}
+
 /* The rating slider takes the row's spare width, with its current tier pinned to the right so the
    label doesn't jump around as the thumb moves. */
 .playlist-slider input[type='range'] {
