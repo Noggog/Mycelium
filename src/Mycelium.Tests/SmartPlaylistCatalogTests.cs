@@ -68,7 +68,7 @@ public class SmartPlaylistCatalogTests
         static string[] TierIds(bool halfStars) => SmartPlaylistCatalog
             .Build(new StockPlaylistOptions(HalfStars: halfStars))
             .Select(d => d.Id)
-            .Where(id => id.StartsWith("stars-") && !id.EndsWith("-fresh"))
+            .Where(id => id.StartsWith("stars-") && !id.Contains("-fresh"))
             .ToArray();
 
         TierIds(halfStars: false).Should().Equal("stars-1", "stars-2", "stars-3", "stars-4", "stars-5");
@@ -294,6 +294,29 @@ public class SmartPlaylistCatalogTests
 
         PlexFilterCanonicalizer.AreEquivalent(Filter(SmartPlaylistCatalog.DeepFrontierId), original)
             .Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The starter rows are a fixed one-month window whatever the picker is set to, so they carry the
+    /// window in their id — two definitions can't share one, and the picker generates the same shape
+    /// at whichever window the user chose.
+    /// </summary>
+    [Fact]
+    public void The_fresh_starters_are_pinned_to_one_month()
+    {
+        var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions(FreshMonths: 12));
+
+        foreach (var tier in SmartPlaylistCatalog.StarterTiers)
+        {
+            var starter = definitions.Single(d => d.Id == SmartPlaylistCatalog.StarterTierId(tier));
+
+            starter.Title.Should().Be($"{SmartPlaylistCatalog.TierLabel(tier)} (Fresh 1mo)");
+            PlexFilterSerializer.Serialize(starter.Filter!)
+                .Should().EndWith("&and=1&track.lastViewedAt%3C%3C=-1mon");
+        }
+
+        // ...and the picker's own fresh variant is still the window it was asked for.
+        definitions.Single(d => d.Id == "stars-4-fresh").Title.Should().Be("4★+ (Fresh 12mo)");
     }
 
     /// <summary>

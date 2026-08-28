@@ -76,6 +76,24 @@ public static class SmartPlaylistCatalog
     public static readonly int[] FreshWindows = { 1, 3, 6, 12 };
 
     /// <summary>
+    /// The tiers offered as ready-made starters, in rating units — 3★, 4★, 5★. Whole stars whichever
+    /// scale the user rates on: these are the "just give me something that works" rows, and a half
+    /// step is a distinction only someone already invested in the picker cares about.
+    /// </summary>
+    public static readonly int[] StarterTiers = { 6, 8, 10 };
+
+    /// <summary>
+    /// The window the starter tiers use. One month is the tightest on offer, which is the point: the
+    /// starters are for putting music on right now, and anything heard this month isn't that.
+    /// </summary>
+    public const int StarterFreshMonths = 1;
+
+    /// <summary>The id of a starter tier — the window is in the id, because the picker generates a
+    /// same-shaped playlist at whatever window it is set to.</summary>
+    public static string StarterTierId(int ratingUnits) =>
+        $"{TierId(ratingUnits)}-fresh-{StarterFreshMonths}mo";
+
+    /// <summary>
     /// The threshold for "<paramref name="ratingUnits"/> and up", expressed for Plex's strictly-greater
     /// operator: 3★ is a rating of 6, so the rule is "greater than 5".
     /// </summary>
@@ -122,6 +140,14 @@ public static class SmartPlaylistCatalog
             Frontier(options),
             DeepFrontier(options),
         };
+
+        // The ready-made "put something on" trio. Fixed at one month rather than following the
+        // picker's window: a starter that changed meaning depending on a control in another section
+        // would be a puzzle, not a shortcut.
+        foreach (var tier in StarterTiers)
+        {
+            definitions.Add(Stars(tier, StarterFreshMonths, id: StarterTierId(tier)));
+        }
 
         // Every tier the scale allows, not just the one the page happens to be showing: the survey has
         // to be able to answer "do you already have this?" for whichever the slider lands on, and it is
@@ -288,7 +314,11 @@ public static class SmartPlaylistCatalog
     /// name across all media, and the server labels it "Track Last Played" for audio. There is no
     /// <c>lastPlayedAt</c>. Same for <c>viewCount</c>, which Plex labels "Track Plays".</para>
     /// </summary>
-    private static StockPlaylistDefinition Stars(int ratingUnits, int? freshMonths)
+    /// <param name="id">
+    /// Overrides the derived id, for a tier offered twice — the starter rows pin a one-month window,
+    /// which the picker can also be set to, and two definitions can't share an id.
+    /// </param>
+    private static StockPlaylistDefinition Stars(int ratingUnits, int? freshMonths, string? id = null)
     {
         var threshold = new PlexCondition("track.userRating", PlexOp.GreaterThan, Above(ratingUnits));
         var label = TierLabel(ratingUnits);
@@ -297,14 +327,14 @@ public static class SmartPlaylistCatalog
         if (freshMonths is null)
         {
             return new StockPlaylistDefinition(
-                Id: TierId(ratingUnits),
+                Id: id ?? TierId(ratingUnits),
                 Title: label,
                 Description: $"Rated {stars} stars and up.",
                 Filter: Sorted(threshold));
         }
 
         return new StockPlaylistDefinition(
-            Id: $"{TierId(ratingUnits)}-fresh",
+            Id: id ?? $"{TierId(ratingUnits)}-fresh",
             Title: $"{label} (Fresh {freshMonths}mo)",
             Description: $"Rated {stars} stars and up, not played in "
                          + $"{freshMonths} month{(freshMonths == 1 ? "" : "s")}.",

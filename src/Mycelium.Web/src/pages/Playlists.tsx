@@ -224,6 +224,18 @@ function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
   }
 }
 
+// The starter block, in the order it reads on the page: the three tag-driven playlists, then the
+// ready-made "put something on now" trio. Their ids carry the one-month window they are pinned to,
+// because the picker below can be set to the same window and two definitions can't share an id.
+const STARTERS = [
+  'my-library',
+  'frontier',
+  'frontier-deep',
+  'stars-3-fresh-1mo',
+  'stars-4-fresh-1mo',
+  'stars-5-fresh-1mo',
+]
+
 // Every survey in the cache — there is one per fresh window the user has looked at, and a write
 // affects all of them.
 const SURVEYS = { queryKey: ['stock-playlists'] } as const
@@ -340,7 +352,7 @@ function RatingScale({ halfStars, busy }: { halfStars: boolean; busy: boolean })
   return (
     <div className="dev-tool playlist-scale">
       <div className="playlist-scale-choice">
-        <h2>Rating scale</h2>
+        <h2>Rating Scale</h2>
         <p>How do you plan on rating your songs?</p>
 
         <label className="playlist-check">
@@ -395,7 +407,7 @@ function StockPlaylists() {
   const tiers = useMemo(
     () =>
       (survey.data?.playlists ?? []).filter(
-        (p) => p.id.startsWith('stars-') && !p.id.endsWith('-fresh'),
+        (p) => p.id.startsWith('stars-') && !p.id.includes('-fresh'),
       ),
     [survey.data],
   )
@@ -428,9 +440,10 @@ function StockPlaylists() {
       <RatingScale halfStars={survey.data?.halfStars ?? false} busy={survey.isFetching} />
 
       <div className="dev-tool">
-        <h2>Starter playlists</h2>
+        <h2>Starter Playlists</h2>
+        <p>Some quick smart playlists to get you rolling</p>
         <div className={survey.isFetching ? 'playlist-rows is-stale' : 'playlist-rows'}>
-          {['my-library', 'frontier', 'frontier-deep']
+          {STARTERS
             .map((id) => byId.get(id))
             .filter((p): p is StockPlaylist => p !== undefined)
             .map((playlist) => (
@@ -440,8 +453,8 @@ function StockPlaylists() {
       </div>
 
       <div className="dev-tool">
-        <h2>By star rating</h2>
-        <p>One playlist of everything at or above the rating you pick.</p>
+        <h2>By Star Rating</h2>
+        <p>Create star-based playlists to your liking</p>
 
         <div className="controls playlist-picker playlist-slider">
           <span className="playlist-picker-label">Rating</span>
