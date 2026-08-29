@@ -82,11 +82,14 @@ public static class SmartPlaylistCatalog
     public static readonly int[] FreshWindows = { 1, 3, 6, 12 };
 
     /// <summary>
-    /// The tiers offered as ready-made starters, in rating units — 3★, 4★, 5★. Whole stars whichever
-    /// scale the user rates on: these are the "just give me something that works" rows, and a half
-    /// step is a distinction only someone already invested in the picker cares about.
+    /// The tiers offered as ready-made starters, in rating units, ascending — 3★/4★/5★ on a whole-star
+    /// scale, 3★/3.5★/4★ on a half-star one. Someone rating in halves is offered the half step because
+    /// it is a threshold only they can set, and a scale with twice the rungs puts "the good stuff"
+    /// lower down. Three rows wide either way, which is what lets <see cref="StarterArt"/> follow a
+    /// row's rank rather than its star count.
     /// </summary>
-    public static readonly int[] StarterTiers = { 6, 8, 10 };
+    public static int[] StarterTiers(bool halfStars) =>
+        halfStars ? new[] { 6, 7, 8 } : new[] { 6, 8, 10 };
 
     /// <summary>
     /// The window the starter tiers use. One month is the tightest on offer, which is the point: the
@@ -100,15 +103,15 @@ public static class SmartPlaylistCatalog
         $"{TierId(ratingUnits)}-fresh-{StarterFreshMonths}mo";
 
     /// <summary>
-    /// The cover a starter tier is given, or null for one nothing has been drawn for yet. One image
-    /// per tier and never shared: a cover that turns up on two rows stops identifying either of them.
+    /// The covers the starter tiers wear, lowest row first. Positional, because which three tiers are
+    /// on offer depends on the rating scale (see <see cref="StarterTiers"/>) — and one image per row,
+    /// never shared, since a cover that turns up twice stops identifying either row.
     /// </summary>
-    private static string? StarterArt(int ratingUnits) => ratingUnits switch
+    private static readonly string[] StarterArt =
     {
-        6 => PlaylistArt.ThreeStar,
-        8 => PlaylistArt.FourStar,
-        10 => PlaylistArt.FiveStar,
-        _ => null,
+        PlaylistArt.Grid,
+        PlaylistArt.Ridge,
+        PlaylistArt.NightDrive,
     };
 
     /// <summary>
@@ -162,10 +165,11 @@ public static class SmartPlaylistCatalog
         // The ready-made "put something on" trio. Fixed at one month rather than following the
         // picker's window: a starter that changed meaning depending on a control in another section
         // would be a puzzle, not a shortcut.
-        foreach (var tier in StarterTiers)
+        var starters = StarterTiers(options.HalfStars);
+        for (var i = 0; i < starters.Length; i++)
         {
             definitions.Add(Stars(
-                tier, StarterFreshMonths, id: StarterTierId(tier), art: StarterArt(tier)));
+                starters[i], StarterFreshMonths, id: StarterTierId(starters[i]), art: StarterArt[i]));
         }
 
         // Every tier the scale allows, not just the one the page happens to be showing: the survey has

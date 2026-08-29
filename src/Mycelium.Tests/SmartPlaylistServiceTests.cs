@@ -384,9 +384,9 @@ public class SmartPlaylistServiceTests
     /// </summary>
     [Theory]
     [InlineData(SmartPlaylistCatalog.DeepFrontierId, "/api/playlists/art/deep-frontier")]
-    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/three-star")]
-    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/four-star")]
-    [InlineData("stars-5-fresh-1mo", "/api/playlists/art/five-star")]
+    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/grid")]
+    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/ridge")]
+    [InlineData("stars-5-fresh-1mo", "/api/playlists/art/nightdrive")]
     [InlineData(SmartPlaylistCatalog.FrontierId, "/api/playlists/art/frontier")]
     [InlineData("stars-4", null)]
     [InlineData("stars-4-fresh", null)]
@@ -394,6 +394,38 @@ public class SmartPlaylistServiceTests
     public async Task Only_a_starter_with_a_cover_advertises_one(string id, string? artUrl)
     {
         (await Row(Survey(), id)).ArtUrl.Should().Be(artUrl);
+    }
+
+    /// <summary>
+    /// A half-star rater is offered 3★/3.5★/4★ instead, wearing the same three covers in the same
+    /// order — the cover follows the row, not the rating, which is the whole reason the ids name a
+    /// picture rather than a star count.
+    /// </summary>
+    [Theory]
+    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/grid")]
+    [InlineData("stars-3_5-fresh-1mo", "/api/playlists/art/ridge")]
+    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/nightdrive")]
+    public async Task A_half_star_rater_gets_the_same_covers_on_their_own_tiers(string id, string artUrl)
+    {
+        RatesInHalfStars(true);
+
+        (await Row(Survey(), id)).ArtUrl.Should().Be(artUrl);
+    }
+
+    /// <summary>Whichever scale, the starters are three rows and no cover is used twice.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_starter_covers_are_never_shared_between_rows(bool halfStars)
+    {
+        RatesInHalfStars(halfStars);
+
+        var art = (await Survey()).Playlists
+            .Where(p => p.Id.EndsWith("-fresh-1mo"))
+            .Select(p => p.ArtUrl)
+            .ToArray();
+
+        art.Should().HaveCount(3).And.OnlyHaveUniqueItems();
     }
 
     [Fact]

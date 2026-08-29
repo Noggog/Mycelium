@@ -306,7 +306,7 @@ public class SmartPlaylistCatalogTests
     {
         var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions(FreshMonths: 12));
 
-        foreach (var tier in SmartPlaylistCatalog.StarterTiers)
+        foreach (var tier in SmartPlaylistCatalog.StarterTiers(SmartPlaylistCatalog.DefaultHalfStars))
         {
             var starter = definitions.Single(d => d.Id == SmartPlaylistCatalog.StarterTierId(tier));
 

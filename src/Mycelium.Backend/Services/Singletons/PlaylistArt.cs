@@ -9,20 +9,26 @@ namespace Mycelium.Backend.Services.Singletons;
 /// to Plex as a playlist poster and served to the browser for the row thumbnail, so the cover on the
 /// page and the cover in Plex can't drift apart.</para>
 ///
+/// <para><b>The tier covers are named for the picture, not the rating they sit on.</b> Which three
+/// tiers the starters offer depends on the user's rating scale, so a cover belongs to a row's rank
+/// rather than to a star count — "ridge" is the middle starter on either scale, where "four-star"
+/// would have been a lie to half the users. The two named playlists below are fixed, so they are
+/// named for the playlist.</para>
+///
 /// <para><b>Ids are public.</b> They travel to the SPA in the survey and come back on the art route,
 /// so a request names one of <see cref="Known"/> rather than a path — a caller must never be able to
 /// pick which resource gets opened.</para>
 /// </summary>
 public static class PlaylistArt
 {
-    /// <summary>The 3★ starter: a neon wireframe corridor running to a vanishing point.</summary>
-    public const string ThreeStar = "three-star";
+    /// <summary>Lowest starter tier: a neon wireframe corridor running to a vanishing point.</summary>
+    public const string Grid = "grid";
 
-    /// <summary>The 4★ starter: a synthwave range under a low sun.</summary>
-    public const string FourStar = "four-star";
+    /// <summary>Middle starter tier: a synthwave range under a low sun.</summary>
+    public const string Ridge = "ridge";
 
-    /// <summary>The 5★ starter: a supercar on a wet neon street.</summary>
-    public const string FiveStar = "five-star";
+    /// <summary>Top starter tier: a supercar on a wet neon street.</summary>
+    public const string NightDrive = "nightdrive";
 
     /// <summary>Frontier: a starship leaving orbit.</summary>
     public const string Frontier = "frontier";
@@ -36,9 +42,9 @@ public static class PlaylistArt
     /// <summary>Everything <see cref="Open"/> will serve. Anything else is not art, whoever asks.</summary>
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
-        ThreeStar,
-        FourStar,
-        FiveStar,
+        Grid,
+        Ridge,
+        NightDrive,
         Frontier,
         DeepFrontier,
     };

@@ -142,17 +142,15 @@ function StatusBadge({ playlist }: { playlist: StockPlaylist }) {
   }
 }
 
-// The starter block, in the order it reads on the page: the three tag-driven playlists, then the
-// ready-made "put something on now" trio. Their ids carry the one-month window they are pinned to,
-// because the picker below can be set to the same window and two definitions can't share an id.
-const STARTERS = [
-  'my-library',
-  'frontier',
-  'frontier-deep',
-  'stars-3-fresh-1mo',
-  'stars-4-fresh-1mo',
-  'stars-5-fresh-1mo',
-]
+// The named half of the starter block, in the order it reads on the page.
+const NAMED_STARTERS = ['my-library', 'frontier', 'frontier-deep']
+
+// ...and how the ready-made "put something on now" trio is picked out of the survey behind them.
+// Not a fixed list: which three tiers they are depends on the user's rating scale (3/4/5★ on whole
+// stars, 3/3.5/4★ on halves), so the server decides and the page takes whatever it sent, in order.
+// The suffix is the one-month window the starters are pinned to — the picker's own fresh variant is
+// "stars-N-fresh" with no window in the id, so it can't be caught by this.
+const STARTER_TIER_SUFFIX = '-fresh-1mo'
 
 // Every survey in the cache — there is one per fresh window the user has looked at, and a write
 // affects all of them.
@@ -212,21 +210,23 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
             <div className="playlist-desc">{playlist.description}</div>
             {playlist.note && <div className="playlist-note">{playlist.note}</div>}
           </div>
-          <StatusBadge playlist={playlist} />
-        </div>
 
-        <div className="playlist-actions">
-          {playlist.state === 'NotCreated' && (
-            <button onClick={() => create.mutate()} disabled={busy}>
-              {create.isPending ? <><Spinner /> Creating…</> : 'Create'}
-            </button>
-          )}
-          {playlist.state === 'Differs' && (
-            // Destructive: it rewrites the rules of a playlist the user made themselves.
-            <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
-              {update.isPending ? <><Spinner /> Replacing…</> : 'Replace'}
-            </button>
-          )}
+          {/* Status and the one action it allows share a column, so the button sits under the
+              badge that explains it. The states are exclusive — at most one button renders. */}
+          <div className="playlist-side">
+            <StatusBadge playlist={playlist} />
+            {playlist.state === 'NotCreated' && (
+              <button onClick={() => create.mutate()} disabled={busy}>
+                {create.isPending ? <><Spinner /> Creating…</> : 'Create'}
+              </button>
+            )}
+            {playlist.state === 'Differs' && (
+              // Destructive: it rewrites the rules of a playlist the user made themselves.
+              <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
+                {update.isPending ? <><Spinner /> Replacing…</> : 'Replace'}
+              </button>
+            )}
+          </div>
         </div>
 
         {error && <p className="error">{error.message}</p>}
@@ -336,6 +336,14 @@ function StockPlaylists() {
     return map
   }, [survey.data])
 
+  const starters = useMemo(() => {
+    const all = survey.data?.playlists ?? []
+    return [
+      ...NAMED_STARTERS.map((id) => all.find((p) => p.id === id)),
+      ...all.filter((p) => p.id.endsWith(STARTER_TIER_SUFFIX)),
+    ].filter((p): p is StockPlaylist => p !== undefined)
+  }, [survey.data])
+
   // The tiers on offer, ascending, as the server generated them — every half step for a half-star
   // user, every whole star otherwise. Taken from the survey rather than rebuilt here, so the id
   // format ("stars-4", "stars-3_5") stays the server's business alone.
@@ -378,12 +386,9 @@ function StockPlaylists() {
         <h2>Starter Playlists</h2>
         <p>Some quick smart playlists to get you rolling</p>
         <div className={survey.isFetching ? 'playlist-rows is-stale' : 'playlist-rows'}>
-          {STARTERS
-            .map((id) => byId.get(id))
-            .filter((p): p is StockPlaylist => p !== undefined)
-            .map((playlist) => (
-              <PlaylistRow key={playlist.id} playlist={playlist} freshMonths={freshMonths} />
-            ))}
+          {starters.map((playlist) => (
+            <PlaylistRow key={playlist.id} playlist={playlist} freshMonths={freshMonths} />
+          ))}
         </div>
       </div>
 

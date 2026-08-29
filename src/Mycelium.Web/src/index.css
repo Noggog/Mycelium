@@ -3133,8 +3133,8 @@ a.detail-chip.via:hover {
 }
 
 .playlist-art {
-  width: 64px;
-  height: 64px;
+  width: 96px;
+  height: 96px;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -3232,8 +3232,18 @@ a.playlist-badge.is-link:hover {
   transform: translateY(-1px);
 }
 
-.playlist-actions:not(:empty) {
-  margin-top: 0.6rem;
+/* The status badge and the single action it allows, stacked against the right edge. */
+.playlist-side {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+/* The badge centres itself when it sits beside the text; in this column it lines up with the button
+   under it instead. */
+.playlist-side .playlist-badge {
+  align-self: auto;
 }
 
 /* The picker rows sit left-aligned rather than centred like the shared .controls default, so the
