@@ -14,9 +14,9 @@ namespace Mycelium.Tests;
 public class PlaylistArtTests
 {
     [Theory]
-    [InlineData(PlaylistArt.Grid)]
     [InlineData(PlaylistArt.Ridge)]
-    [InlineData(PlaylistArt.NightDrive)]
+    [InlineData(PlaylistArt.Poolroom)]
+    [InlineData(PlaylistArt.Prism)]
     [InlineData(PlaylistArt.Frontier)]
     [InlineData(PlaylistArt.DeepFrontier)]
     public void Every_named_cover_is_embedded_in_the_build(string id)
@@ -42,6 +42,7 @@ public class PlaylistArtTests
     [InlineData("")]
     [InlineData("my-library")]
     [InlineData("four-star")]
+    [InlineData("grid")]
     [InlineData("../appsettings")]
     [InlineData("Posters/four-star")]
     [InlineData("FOUR-STAR")]

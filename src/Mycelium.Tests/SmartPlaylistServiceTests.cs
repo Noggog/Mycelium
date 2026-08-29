@@ -384,9 +384,9 @@ public class SmartPlaylistServiceTests
     /// </summary>
     [Theory]
     [InlineData(SmartPlaylistCatalog.DeepFrontierId, "/api/playlists/art/deep-frontier")]
-    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/grid")]
-    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/ridge")]
-    [InlineData("stars-5-fresh-1mo", "/api/playlists/art/nightdrive")]
+    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/ridge")]
+    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/poolroom")]
+    [InlineData("stars-5-fresh-1mo", "/api/playlists/art/prism")]
     [InlineData(SmartPlaylistCatalog.FrontierId, "/api/playlists/art/frontier")]
     [InlineData("stars-4", null)]
     [InlineData("stars-4-fresh", null)]
@@ -402,9 +402,9 @@ public class SmartPlaylistServiceTests
     /// picture rather than a star count.
     /// </summary>
     [Theory]
-    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/grid")]
-    [InlineData("stars-3_5-fresh-1mo", "/api/playlists/art/ridge")]
-    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/nightdrive")]
+    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/ridge")]
+    [InlineData("stars-3_5-fresh-1mo", "/api/playlists/art/poolroom")]
+    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/prism")]
     public async Task A_half_star_rater_gets_the_same_covers_on_their_own_tiers(string id, string artUrl)
     {
         RatesInHalfStars(true);

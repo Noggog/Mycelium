@@ -21,14 +21,14 @@ namespace Mycelium.Backend.Services.Singletons;
 /// </summary>
 public static class PlaylistArt
 {
-    /// <summary>Lowest starter tier: a neon wireframe corridor running to a vanishing point.</summary>
-    public const string Grid = "grid";
-
-    /// <summary>Middle starter tier: a synthwave range under a low sun.</summary>
+    /// <summary>Lowest starter tier: a synthwave range under a low sun.</summary>
     public const string Ridge = "ridge";
 
-    /// <summary>Top starter tier: a supercar on a wet neon street.</summary>
-    public const string NightDrive = "nightdrive";
+    /// <summary>Middle starter tier: a pink poolroom open to the sky.</summary>
+    public const string Poolroom = "poolroom";
+
+    /// <summary>Top starter tier: a vaporwave collage — sphere, triangle, wireframe.</summary>
+    public const string Prism = "prism";
 
     /// <summary>Frontier: a starship leaving orbit.</summary>
     public const string Frontier = "frontier";
@@ -42,9 +42,9 @@ public static class PlaylistArt
     /// <summary>Everything <see cref="Open"/> will serve. Anything else is not art, whoever asks.</summary>
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
-        Grid,
         Ridge,
-        NightDrive,
+        Poolroom,
+        Prism,
         Frontier,
         DeepFrontier,
     };

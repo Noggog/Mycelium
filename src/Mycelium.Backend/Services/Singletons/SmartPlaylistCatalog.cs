@@ -109,9 +109,9 @@ public static class SmartPlaylistCatalog
     /// </summary>
     private static readonly string[] StarterArt =
     {
-        PlaylistArt.Grid,
         PlaylistArt.Ridge,
-        PlaylistArt.NightDrive,
+        PlaylistArt.Poolroom,
+        PlaylistArt.Prism,
     };
 
     /// <summary>
