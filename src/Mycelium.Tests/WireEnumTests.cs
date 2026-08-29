@@ -46,6 +46,25 @@ public class WireEnumTests
     }
 
     [Theory]
+    [InlineData(ManualAddResult.Added, "Added")]
+    [InlineData(ManualAddResult.BadLink, "BadLink")]
+    [InlineData(ManualAddResult.NotFound, "NotFound")]
+    [InlineData(ManualAddResult.AlreadyQueued, "AlreadyQueued")]
+    [InlineData(ManualAddResult.AlreadyOwned, "AlreadyOwned")]
+    public void A_manual_add_result_goes_over_the_wire_as_its_name(ManualAddResult result, string expected)
+    {
+        JsonSerializer.Serialize(result).Should().Be($"\"{expected}\"");
+    }
+
+    [Theory]
+    [InlineData(AudioQuality.Lossy, "Lossy")]
+    [InlineData(AudioQuality.Lossless, "Lossless")]
+    public void An_audio_quality_goes_over_the_wire_as_its_name(AudioQuality quality, string expected)
+    {
+        JsonSerializer.Serialize(quality).Should().Be($"\"{expected}\"");
+    }
+
+    [Theory]
     [InlineData(DiscoveryStatus.Pending, "Pending")]
     [InlineData(DiscoveryStatus.Liked, "Liked")]
     [InlineData(DiscoveryStatus.Disliked, "Disliked")]
@@ -74,6 +93,23 @@ public class WireEnumTests
             null,
             AudioQuality.Lossy);
 
-        JsonSerializer.Serialize(item).Should().Contain("\"UpgradeAlbum\"");
+        JsonSerializer.Serialize(item)
+            .Should().Contain("\"UpgradeAlbum\"")
+            // The owned quality on an upgrade card is read through a string-keyed label map, so an
+            // ordinal here is the same silent blank as a numeric kind.
+            .And.Contain("\"Lossy\"");
+    }
+
+    /// <summary>
+    /// The manual-add reply, for the same reason: the paste box looks its result up in a string-keyed
+    /// copy map, so an ordinal renders no message at all — the refusal reads as the button doing
+    /// nothing, which is worse than an error.
+    /// </summary>
+    [Fact]
+    public void A_manual_add_outcome_carries_its_result_as_a_name()
+    {
+        var outcome = new ManualAddOutcome(ManualAddResult.AlreadyOwned, null);
+
+        JsonSerializer.Serialize(outcome).Should().Contain("\"AlreadyOwned\"");
     }
 }

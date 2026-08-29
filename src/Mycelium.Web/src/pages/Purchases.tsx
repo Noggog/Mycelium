@@ -360,12 +360,34 @@ function Monitor({
 // What each outcome of a pasted link says back. The refusals are the interesting half: "already
 // owned" and "already queued" are successes from the user's point of view (the album is handled),
 // while a bad link is the only one that means "try again with something else".
-const ADD_COPY: Record<ManualAddResult, { text: string; tone: 'ok' | 'note' | 'error' }> = {
+type AddCopy = { text: string; tone: 'ok' | 'note' | 'error' }
+
+const ADD_COPY: Record<ManualAddResult, AddCopy> = {
   Added: { text: 'Queued to download.', tone: 'ok' },
   AlreadyQueued: { text: 'Already on the list.', tone: 'note' },
-  AlreadyOwned: { text: 'Already in the library.', tone: 'note' },
+  AlreadyOwned: {
+    text: 'Already in the library — delete it in Plex and run “Refresh from Plex” in the dev panel '
+      + 'if you want it fetched again.',
+    tone: 'note',
+  },
   NotFound: { text: "Deezer doesn't have an album with that id.", tone: 'error' },
   BadLink: { text: 'That isn\'t a Deezer album link — copy the URL from an album page.', tone: 'error' },
+}
+
+// Every answer the server can give has to put words on the page, including one this build has no copy
+// for. That case is not hypothetical: ManualAddResult once shipped as an ordinal rather than its name,
+// so every refusal missed the map above and rendered nothing at all — the button looked broken rather
+// than refusing, and the reason (already owned) was sitting in the response the whole time. The map
+// stays exhaustive over the union so a new case is a compile error; this is the guard for the answers
+// the type system can't see.
+function addCopy(result: ManualAddResult): AddCopy {
+  return (
+    ADD_COPY[result] ?? {
+      text: `The server refused this paste (${String(result)}), and this page has no message for that `
+        + 'answer — check the backend log for the reason.',
+      tone: 'error',
+    }
+  )
 }
 
 // Paste a Deezer album link to queue it directly. The way in for releases the artist-rooted sync can
@@ -396,7 +418,7 @@ function PasteAlbum({ onAdded }: { onAdded: () => void }) {
     add.mutate(trimmed)
   }
 
-  const copy = outcome ? ADD_COPY[outcome] : null
+  const copy = outcome ? addCopy(outcome) : null
 
   return (
     <div className="dl-section paste-album">

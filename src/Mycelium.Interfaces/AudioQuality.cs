@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mycelium.Interfaces;
 
 /// <summary>
@@ -12,6 +14,7 @@ namespace Mycelium.Interfaces;
 /// opposite: sorting below <see cref="Lossy"/>, it would make every album we haven't inspected look
 /// upgradeable to everyone.</para>
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum AudioQuality
 {
     /// <summary>Compressed with loss — MP3, AAC, Vorbis, Opus, at any bitrate.</summary>

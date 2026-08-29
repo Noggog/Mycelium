@@ -146,6 +146,7 @@ public static class PurchaseKey
 /// <summary>What happened to a hand-pasted Deezer album link. The distinctions are the ones that
 /// change what the page should say back: nothing was read out of the paste, Deezer doesn't know the
 /// album, it's already queued, or the library already has it.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ManualAddResult
 {
     /// <summary>Queued as a new pending purchase.</summary>
