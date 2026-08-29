@@ -3113,12 +3113,32 @@ a.detail-chip.via:hover {
   border-color: var(--salmon);
 }
 
+/* A starter row leads with its cover — the same image the playlist is given in Plex — so the row is
+   a two-column flex and everything else sits in the body beside it. A row without one (every tier the
+   picker generates) has a single child and lays out exactly as it did before. */
 .playlist-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
   border-top: 1px solid var(--border);
   padding: 0.85rem 0;
 }
 .playlist-row:first-of-type {
   border-top: none;
+}
+
+.playlist-row-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.playlist-art {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  object-fit: cover;
 }
 
 .playlist-row-main {

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using Mycelium.Plex.Services.Smart;
@@ -13,6 +14,10 @@ namespace Mycelium.Plex.Services.Singletons;
 /// percent-encoded <em>twice</em> — once by <see cref="PlexFilterSerializer"/> for the operators, and
 /// again here when the whole address becomes a parameter value. Getting that wrong is the classic way
 /// to end up with a playlist whose filter silently matches nothing.</para>
+///
+/// <para><b>Artwork.</b> A playlist's poster lives on the ordinary <c>/library/metadata/{key}</c>
+/// route, not under <c>/playlists</c> — the rating key is the same one either way. Uploading and
+/// selecting are two separate operations there; see <see cref="UploadPlaylistPoster"/>.</para>
 /// </summary>
 public class PlexPlaylistApi : IPlexPlaylistApi
 {
@@ -107,6 +112,66 @@ public class PlexPlaylistApi : IPlexPlaylistApi
                ?? throw new InvalidOperationException($"Playlist {ratingKey} vanished after its update.");
     }
 
+    public async Task UploadPlaylistPoster(
+        string token, string ratingKey, Stream image, string contentType)
+    {
+        var posters = $"/library/metadata/{ratingKey}/posters";
+
+        _logger.LogInformation("Uploading a cover to playlist {RatingKey}", ratingKey);
+        using var content = new StreamContent(image);
+        content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        await Send(HttpMethod.Post, posters, token, content: content);
+
+        // Storing a poster and *showing* it are separate choices in Plex, and whether an upload wins
+        // the second one by itself has varied between server versions. Reading the list back and
+        // selecting explicitly costs one request and removes the question; an upload Plex already
+        // selected needs nothing further.
+        var uploaded = LastUpload(await Send(HttpMethod.Get, posters, token));
+        if (uploaded is null)
+        {
+            _logger.LogWarning(
+                "Plex accepted a cover for playlist {RatingKey} but doesn't list it", ratingKey);
+            return;
+        }
+
+        if (uploaded.Value.Selected)
+        {
+            return;
+        }
+
+        await Send(
+            HttpMethod.Put,
+            $"/library/metadata/{ratingKey}/poster?url={Uri.EscapeDataString(uploaded.Value.Key)}",
+            token);
+    }
+
+    /// <summary>
+    /// The last uploaded poster in a poster listing, and whether it is the selected one — or null when
+    /// the listing holds none.
+    ///
+    /// <para>Only an <c>upload://</c> key is ours: the same listing also carries whatever the agent
+    /// found and the auto-generated composite, and selecting one of those would replace the cover we
+    /// just set with the mosaic it was meant to displace. "Last" because Plex appends, so the newest
+    /// upload is the one this call just made.</para>
+    ///
+    /// <para>The entries arrive under <c>Metadata</c> on some server versions and <c>Photo</c> on
+    /// others — this is the XML <c>&lt;Photo&gt;</c> tag showing through the JSON — so both are read.</para>
+    /// </summary>
+    private static (string Key, bool Selected)? LastUpload(JObject? listing)
+    {
+        var container = listing?["MediaContainer"];
+        var entries = (container?["Metadata"] ?? container?["Photo"]) as JArray;
+
+        return entries?
+            .OfType<JObject>()
+            .Select(entry => (
+                Key: entry["ratingKey"]?.ToString() ?? "",
+                Selected: entry["selected"]?.Value<bool>() ?? false))
+            .Where(entry => entry.Key.StartsWith("upload://", StringComparison.Ordinal))
+            .Cast<(string Key, bool Selected)?>()
+            .LastOrDefault();
+    }
+
     public async Task<IReadOnlyList<PlexTagEntry>> GetSectionTags(int sectionKey, string field, int type)
     {
         // Library metadata, identical for every account — read with the server token.
@@ -156,9 +221,11 @@ public class PlexPlaylistApi : IPlexPlaylistApi
     /// rather than on the client, because this class serves every linked user from the one instance.
     /// </summary>
     private async Task<JObject?> Send(
-        HttpMethod method, string path, string token, bool allowNotFound = false)
+        HttpMethod method, string path, string token, bool allowNotFound = false,
+        HttpContent? content = null)
     {
         using var request = new HttpRequestMessage(method, _endpointInfo.BaseUri.TrimEnd('/') + path);
+        request.Content = content;
         request.Headers.Add("Accept", "application/json");
         request.Headers.Add("X-Plex-Token", token);
         request.Headers.Add("X-Plex-Product", _identity.Product);

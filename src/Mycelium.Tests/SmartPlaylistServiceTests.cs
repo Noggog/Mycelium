@@ -375,6 +375,80 @@ public class SmartPlaylistServiceTests
         await act.Should().ThrowAsync<ArgumentException>();
     }
 
+    // ---- cover art ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Art belongs to a named starter, not to a rating. The 4★ starter and the 4★ tier select nearly
+    /// the same music, so they are the pair that would go wrong if the cover were keyed on the tier —
+    /// the picker would hand out a row wearing another playlist's identity.
+    /// </summary>
+    [Theory]
+    [InlineData(SmartPlaylistCatalog.DeepFrontierId, "/api/playlists/art/deep-frontier")]
+    [InlineData("stars-3-fresh-1mo", "/api/playlists/art/three-star")]
+    [InlineData("stars-4-fresh-1mo", "/api/playlists/art/four-star")]
+    [InlineData("stars-5-fresh-1mo", "/api/playlists/art/five-star")]
+    [InlineData(SmartPlaylistCatalog.FrontierId, "/api/playlists/art/frontier")]
+    [InlineData("stars-4", null)]
+    [InlineData("stars-4-fresh", null)]
+    [InlineData(SmartPlaylistCatalog.MyLibraryId, null)]
+    public async Task Only_a_starter_with_a_cover_advertises_one(string id, string? artUrl)
+    {
+        (await Row(Survey(), id)).ArtUrl.Should().Be(artUrl);
+    }
+
+    [Fact]
+    public async Task Creating_a_starter_gives_the_new_playlist_its_cover()
+    {
+        var created = await _sut.Create(Subject, Username, SmartPlaylistCatalog.DeepFrontierId, 3);
+
+        var poster = _playlists.Posters.Should().ContainSingle().Subject;
+        poster.RatingKey.Should().Be(created.MatchedRatingKey);
+        poster.ContentType.Should().Be("image/jpeg");
+        // The real bytes, read out of the backend assembly: a JPEG opens FF D8 FF.
+        poster.Image.Take(3).Should().Equal(new byte[] { 0xFF, 0xD8, 0xFF });
+    }
+
+    [Fact]
+    public async Task Creating_a_playlist_with_no_cover_uploads_nothing()
+    {
+        await _sut.Create(Subject, Username, "stars-4", 3);
+
+        _playlists.Created.Should().ContainSingle();
+        _playlists.Posters.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// A cover is a decoration. A Plex that refuses the upload — an older server, a token without the
+    /// rights — must still leave the user with the playlist they actually asked for.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_cover_does_not_cost_the_user_their_playlist()
+    {
+        _playlists.PosterFailure = new HttpRequestException("Plex said no");
+
+        var created = await _sut.Create(Subject, Username, SmartPlaylistCatalog.DeepFrontierId, 3);
+
+        created.State.Should().Be(StockPlaylistState.Exists);
+        created.MatchedRatingKey.Should().NotBeNull();
+        _playlists.Created.Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// Rewriting rules leaves artwork alone — by then the cover may be one the user picked themselves,
+    /// and replacing it is not what they asked for when they pressed Replace.
+    /// </summary>
+    [Fact]
+    public async Task Replacing_a_drifted_playlist_leaves_its_cover_alone()
+    {
+        ServerHas("Deep Frontier", "stars-4");
+
+        var updated = await _sut.UpdateRules(Subject, Username, SmartPlaylistCatalog.DeepFrontierId, 3);
+
+        updated.State.Should().Be(StockPlaylistState.Exists);
+        _playlists.Updated.Should().ContainSingle();
+        _playlists.Posters.Should().BeEmpty();
+    }
+
     /// <summary>
     /// A stand-in Plex account holding smart playlists. Stores each one the way Plex does — as an encoded
     /// content URI — so the service exercises the real parser rather than being handed a rule tree.
@@ -388,7 +462,11 @@ public class SmartPlaylistServiceTests
 
         public List<(string Title, PlexSmartFilter Filter)> Created { get; } = new();
         public List<(string RatingKey, PlexSmartFilter Filter)> Updated { get; } = new();
+        public List<(string RatingKey, byte[] Image, string ContentType)> Posters { get; } = new();
         public List<string> TokensSeen { get; } = new();
+
+        /// <summary>Set to make the cover upload throw, standing in for a Plex that refuses it.</summary>
+        public Exception? PosterFailure { get; set; }
 
         public void Clear() => _playlists.Clear();
 
@@ -430,6 +508,20 @@ public class SmartPlaylistServiceTests
             var at = _playlists.FindIndex(p => p.RatingKey == ratingKey);
             _playlists[at] = _playlists[at] with { Content = Content(sectionKey, filter), LeafCount = 42 };
             return Task.FromResult(_playlists[at]);
+        }
+
+        public async Task UploadPlaylistPoster(
+            string token, string ratingKey, Stream image, string contentType)
+        {
+            TokensSeen.Add(token);
+            if (PosterFailure is not null)
+            {
+                throw PosterFailure;
+            }
+
+            using var buffer = new MemoryStream();
+            await image.CopyToAsync(buffer);
+            Posters.Add((ratingKey, buffer.ToArray(), contentType));
         }
 
         public Task<IReadOnlyList<PlexTagEntry>> GetSectionTags(int sectionKey, string field, int type) =>

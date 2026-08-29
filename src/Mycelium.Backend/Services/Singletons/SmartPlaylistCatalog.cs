@@ -7,12 +7,18 @@ namespace Mycelium.Backend.Services.Singletons;
 /// <see cref="Unavailable"/> explains why it can't be built for this user right now — currently only
 /// "My Library", which has nothing to filter on until the user has thumbed at least one artist.
 /// </summary>
+/// <param name="Art">
+/// The <see cref="PlaylistArt"/> id of this playlist's cover, or null for one that has none. Only the
+/// fixed starter rows carry art: the tiers the picker generates are a family, not a named playlist,
+/// and stamping the 4★ cover on every window of it would say they were the same thing.
+/// </param>
 public record StockPlaylistDefinition(
     string Id,
     string Title,
     string Description,
     PlexSmartFilter? Filter,
-    string? Unavailable = null);
+    string? Unavailable = null,
+    string? Art = null);
 
 /// <summary>
 /// Everything one survey's definitions depend on.
@@ -94,6 +100,18 @@ public static class SmartPlaylistCatalog
         $"{TierId(ratingUnits)}-fresh-{StarterFreshMonths}mo";
 
     /// <summary>
+    /// The cover a starter tier is given, or null for one nothing has been drawn for yet. One image
+    /// per tier and never shared: a cover that turns up on two rows stops identifying either of them.
+    /// </summary>
+    private static string? StarterArt(int ratingUnits) => ratingUnits switch
+    {
+        6 => PlaylistArt.ThreeStar,
+        8 => PlaylistArt.FourStar,
+        10 => PlaylistArt.FiveStar,
+        _ => null,
+    };
+
+    /// <summary>
     /// The threshold for "<paramref name="ratingUnits"/> and up", expressed for Plex's strictly-greater
     /// operator: 3★ is a rating of 6, so the rule is "greater than 5".
     /// </summary>
@@ -146,7 +164,8 @@ public static class SmartPlaylistCatalog
         // would be a puzzle, not a shortcut.
         foreach (var tier in StarterTiers)
         {
-            definitions.Add(Stars(tier, StarterFreshMonths, id: StarterTierId(tier)));
+            definitions.Add(Stars(
+                tier, StarterFreshMonths, id: StarterTierId(tier), art: StarterArt(tier)));
         }
 
         // Every tier the scale allows, not just the one the page happens to be showing: the survey has
@@ -291,7 +310,8 @@ public static class SmartPlaylistCatalog
                     FrontierRules(options.HalfStars).Append(PlexGroup.Any(tags.ToArray())).ToArray()))),
             Unavailable: tags.Count == 0
                 ? "Approve an artist first."
-                : null);
+                : null,
+            Art: PlaylistArt.Frontier);
     }
 
     /// <summary>
@@ -303,7 +323,8 @@ public static class SmartPlaylistCatalog
         Id: DeepFrontierId,
         Title: "Deep Frontier",
         Description: "New or forgotten music from anywhere in the library, approved or not.",
-        Filter: Sorted(PlexGroup.All(FrontierRules(options.HalfStars))));
+        Filter: Sorted(PlexGroup.All(FrontierRules(options.HalfStars))),
+        Art: PlaylistArt.DeepFrontier);
 
     /// <summary>
     /// A star-rating tier over the whole library. The Fresh variant additionally drops anything played
@@ -318,7 +339,12 @@ public static class SmartPlaylistCatalog
     /// Overrides the derived id, for a tier offered twice — the starter rows pin a one-month window,
     /// which the picker can also be set to, and two definitions can't share an id.
     /// </param>
-    private static StockPlaylistDefinition Stars(int ratingUnits, int? freshMonths, string? id = null)
+    /// <param name="art">
+    /// The cover for this row, which only the starter rows pass — see
+    /// <see cref="StockPlaylistDefinition.Art"/>.
+    /// </param>
+    private static StockPlaylistDefinition Stars(
+        int ratingUnits, int? freshMonths, string? id = null, string? art = null)
     {
         var threshold = new PlexCondition("track.userRating", PlexOp.GreaterThan, Above(ratingUnits));
         var label = TierLabel(ratingUnits);
@@ -330,7 +356,8 @@ public static class SmartPlaylistCatalog
                 Id: id ?? TierId(ratingUnits),
                 Title: label,
                 Description: $"Rated {stars} stars and up.",
-                Filter: Sorted(threshold));
+                Filter: Sorted(threshold),
+                Art: art);
         }
 
         return new StockPlaylistDefinition(
@@ -340,7 +367,8 @@ public static class SmartPlaylistCatalog
                          + $"{freshMonths} month{(freshMonths == 1 ? "" : "s")}.",
             Filter: Sorted(PlexGroup.All(
                 threshold,
-                new PlexCondition("track.lastViewedAt", PlexOp.LessThan, $"-{freshMonths}mon"))));
+                new PlexCondition("track.lastViewedAt", PlexOp.LessThan, $"-{freshMonths}mon"))),
+            Art: art);
     }
 
     /// <summary>

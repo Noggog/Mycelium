@@ -1303,6 +1303,24 @@ static int FreshWindow(int? months) =>
         ? months.Value
         : SmartPlaylistService.DefaultFreshMonths;
 
+// The starter covers, for the thumbnail on each row. Anonymous and long-cached on purpose: these are
+// a couple of images baked into the build, identical for every user and secret from none of them, so
+// gating them behind the session would buy nothing and cost a revalidation on every page load. The id
+// is checked against a fixed list rather than pasted into a path — see PlaylistArt.
+playlists.MapGet("/art/{id}", (HttpContext http, string id) =>
+    {
+        var image = PlaylistArt.Open(id);
+        if (image is null)
+        {
+            return Results.NotFound();
+        }
+
+        http.Response.Headers.CacheControl = "public, max-age=604800, immutable";
+        return Results.File(image, PlaylistArt.ContentType);
+    })
+    .AllowAnonymous()
+    .WithName("PlaylistArt");
+
 playlists.MapGet("/stock", async (HttpContext http, SmartPlaylistService service, int? freshMonths) =>
         Results.Ok(await service.Survey(
             http.User.GetSubject()!,

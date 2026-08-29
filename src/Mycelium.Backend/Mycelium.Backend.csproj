@@ -17,6 +17,12 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- Starter playlist covers. LogicalName pins the resource key so it survives a namespace
+             rename - PlaylistArt looks them up by "Posters/{id}.jpg", not by assembly namespace. -->
+        <EmbeddedResource Include="Assets\Posters\*.jpg" LogicalName="Posters/%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.3.1" />
         <PackageReference Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
         <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="9.0.7" />

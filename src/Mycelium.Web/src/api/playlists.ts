@@ -90,6 +90,9 @@ export interface StockPlaylist {
   note: string | null
   // app.plex.tv link to the matched playlist, when one was matched and the server named itself.
   plexUrl: string | null
+  // The row's cover, or null for a row that has none — the picker's tiers, and the starters nothing
+  // has been drawn for yet. The same image the playlist is given in Plex when it is created.
+  artUrl: string | null
 }
 
 export interface PlaylistSurvey {

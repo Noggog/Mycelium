@@ -199,30 +199,38 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
 
   return (
     <div className="playlist-row">
-      <div className="playlist-row-main">
-        <div className="playlist-text">
-          <div className="playlist-title">{playlist.title}</div>
-          <div className="playlist-desc">{playlist.description}</div>
-          {playlist.note && <div className="playlist-note">{playlist.note}</div>}
+      {/* Only the starter rows have one. Decorative — the title beside it already names the
+          playlist, so an alt would just say the same thing twice to a screen reader. */}
+      {playlist.artUrl && (
+        <img className="playlist-art" src={playlist.artUrl} alt="" loading="lazy" />
+      )}
+
+      <div className="playlist-row-body">
+        <div className="playlist-row-main">
+          <div className="playlist-text">
+            <div className="playlist-title">{playlist.title}</div>
+            <div className="playlist-desc">{playlist.description}</div>
+            {playlist.note && <div className="playlist-note">{playlist.note}</div>}
+          </div>
+          <StatusBadge playlist={playlist} />
         </div>
-        <StatusBadge playlist={playlist} />
-      </div>
 
-      <div className="playlist-actions">
-        {playlist.state === 'NotCreated' && (
-          <button onClick={() => create.mutate()} disabled={busy}>
-            {create.isPending ? <><Spinner /> Creating…</> : 'Create'}
-          </button>
-        )}
-        {playlist.state === 'Differs' && (
-          // Destructive: it rewrites the rules of a playlist the user made themselves.
-          <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
-            {update.isPending ? <><Spinner /> Replacing…</> : 'Replace'}
-          </button>
-        )}
-      </div>
+        <div className="playlist-actions">
+          {playlist.state === 'NotCreated' && (
+            <button onClick={() => create.mutate()} disabled={busy}>
+              {create.isPending ? <><Spinner /> Creating…</> : 'Create'}
+            </button>
+          )}
+          {playlist.state === 'Differs' && (
+            // Destructive: it rewrites the rules of a playlist the user made themselves.
+            <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
+              {update.isPending ? <><Spinner /> Replacing…</> : 'Replace'}
+            </button>
+          )}
+        </div>
 
-      {error && <p className="error">{error.message}</p>}
+        {error && <p className="error">{error.message}</p>}
+      </div>
     </div>
   )
 }

@@ -57,6 +57,16 @@ public interface IPlexPlaylistApi
         string token, string ratingKey, int sectionKey, PlexSmartFilter filter);
 
     /// <summary>
+    /// Uploads <paramref name="image"/> as the poster of a playlist and selects it, so it is the cover
+    /// every client shows.
+    ///
+    /// <para>Posting the bytes rather than handing Plex a <c>?url=</c> to fetch: the URL form needs
+    /// Plex to be able to reach us over the network, which is an extra thing to be true for a
+    /// decoration.</para>
+    /// </summary>
+    Task UploadPlaylistPoster(string token, string ratingKey, Stream image, string contentType);
+
+    /// <summary>
     /// A section's vocabulary for one tag field (<c>mood</c>, <c>genre</c>, …) at one metadata type.
     /// Both directions are needed: name to id when building rules, id to name when reading them back for
     /// comparison. Server-wide metadata, so it uses the configured server token, not a user's.

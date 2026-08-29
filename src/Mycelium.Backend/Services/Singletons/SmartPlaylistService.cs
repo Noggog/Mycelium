@@ -24,6 +24,10 @@ public enum StockPlaylistState
 }
 
 /// <summary>One row of the Playlists page.</summary>
+/// <param name="ArtUrl">
+/// Where to load this row's cover from, or null for a row that has none — the picker's tiers, and the
+/// starters nothing has been drawn for yet. The same image the playlist is given in Plex.
+/// </param>
 public record StockPlaylistStatus(
     string Id,
     string Title,
@@ -33,7 +37,8 @@ public record StockPlaylistStatus(
     string? MatchedRatingKey = null,
     int? TrackCount = null,
     string? Note = null,
-    string? PlexUrl = null);
+    string? PlexUrl = null,
+    string? ArtUrl = null);
 
 /// <summary>The whole page: whether the user has linked Plex, and where each stock playlist stands.</summary>
 public record PlaylistSurvey(
@@ -121,6 +126,8 @@ public class SmartPlaylistService
         var created = await _playlists.CreateSmartPlaylist(
             context.Token, definition.Title, context.SectionKey, definition.Filter!);
 
+        await ApplyArt(context.Token, created.RatingKey, definition);
+
         _logger.LogInformation(
             "Created stock playlist {Id} as '{Title}' ({Tracks} tracks) for {User}",
             definition.Id, created.Title, created.LeafCount, context.PlexUsername);
@@ -164,6 +171,33 @@ public class SmartPlaylistService
             TrackCount = updated.LeafCount,
             Note = null,
         };
+    }
+
+    /// <summary>
+    /// Gives a just-created playlist its cover, when the definition has one.
+    ///
+    /// <para><b>On create only, and never fatal.</b> A cover is a decoration: a Plex that refuses the
+    /// upload must still leave the user with the playlist they asked for, so this logs and returns
+    /// rather than throwing. And it is deliberately not done from <see cref="UpdateRules"/> — a rules
+    /// rewrite promises to leave artwork alone, which by then may be art the user chose themselves.</para>
+    /// </summary>
+    private async Task ApplyArt(string token, string ratingKey, StockPlaylistDefinition definition)
+    {
+        await using var image = PlaylistArt.Open(definition.Art);
+        if (image is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _playlists.UploadPlaylistPoster(token, ratingKey, image, PlaylistArt.ContentType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex, "Couldn't set the cover on playlist {RatingKey} ({Id})", ratingKey, definition.Id);
+        }
     }
 
     private async Task<(SurveyContext Context, StockPlaylistDefinition Definition)> Resolve(
@@ -312,7 +346,8 @@ public class SmartPlaylistService
         public StockPlaylistStatus Evaluate(StockPlaylistDefinition definition)
         {
             var status = new StockPlaylistStatus(
-                definition.Id, definition.Title, definition.Description, StockPlaylistState.NotCreated);
+                definition.Id, definition.Title, definition.Description, StockPlaylistState.NotCreated,
+                ArtUrl: definition.Art is null ? null : PlaylistArt.UrlFor(definition.Art));
 
             if (definition.Filter is null)
             {
