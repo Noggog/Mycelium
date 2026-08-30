@@ -388,9 +388,9 @@ public class SmartPlaylistServiceTests
     [InlineData("stars-4-fresh-1mo", "/api/playlists/art/poolroom")]
     [InlineData("stars-5-fresh-1mo", "/api/playlists/art/prism")]
     [InlineData(SmartPlaylistCatalog.FrontierId, "/api/playlists/art/frontier")]
+    [InlineData(SmartPlaylistCatalog.MyLibraryId, "/api/playlists/art/my-library")]
     [InlineData("stars-4", null)]
     [InlineData("stars-4-fresh", null)]
-    [InlineData(SmartPlaylistCatalog.MyLibraryId, null)]
     public async Task Only_a_starter_with_a_cover_advertises_one(string id, string? artUrl)
     {
         (await Row(Survey(), id)).ArtUrl.Should().Be(artUrl);

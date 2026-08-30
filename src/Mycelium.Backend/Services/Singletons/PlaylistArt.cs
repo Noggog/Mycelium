@@ -12,7 +12,7 @@ namespace Mycelium.Backend.Services.Singletons;
 /// <para><b>The tier covers are named for the picture, not the rating they sit on.</b> Which three
 /// tiers the starters offer depends on the user's rating scale, so a cover belongs to a row's rank
 /// rather than to a star count — "ridge" is the middle starter on either scale, where "four-star"
-/// would have been a lie to half the users. The two named playlists below are fixed, so they are
+/// would have been a lie to half the users. The three named playlists below are fixed, so they are
 /// named for the playlist.</para>
 ///
 /// <para><b>Ids are public.</b> They travel to the SPA in the survey and come back on the art route,
@@ -30,6 +30,9 @@ public static class PlaylistArt
     /// <summary>Top starter tier: a vaporwave collage — sphere, triangle, wireframe.</summary>
     public const string Prism = "prism";
 
+    /// <summary>My Library: a car parked on a rain-slick street at night.</summary>
+    public const string MyLibrary = "my-library";
+
     /// <summary>Frontier: a starship leaving orbit.</summary>
     public const string Frontier = "frontier";
 
@@ -45,6 +48,7 @@ public static class PlaylistArt
         Ridge,
         Poolroom,
         Prism,
+        MyLibrary,
         Frontier,
         DeepFrontier,
     };

@@ -191,7 +191,7 @@ app.MapGet("/auth/me", async (
     .WithName("Me");
 
 // Application API, grouped under /api so it shares the origin with the SPA without the SPA's
-// client routes (/artists, /related, /purchases, ...) colliding with same-named API paths.
+// client routes (/artists, /related, /downloads, ...) colliding with same-named API paths.
 var api = app.MapGroup("/api");
 
 // Deezer never answered — its rate-limit quota, usually. A retryable 503, never an empty 200: the

@@ -16,7 +16,9 @@ export default function App() {
         <Route path="/browse" element={<Browse />} />
         {/* Ratings was folded into the Browse drill-down + Download queue; keep old links working. */}
         <Route path="/ratings" element={<Navigate to="/browse" replace />} />
-        <Route path="/purchases" element={<Purchases />} />
+        <Route path="/downloads" element={<Purchases />} />
+        {/* The download queue used to live at /purchases; keep old links/bookmarks working. */}
+        <Route path="/purchases" element={<Navigate to="/downloads" replace />} />
         {/* Ready-made Plex smart playlists, built in the user's own linked Plex account. */}
         <Route path="/playlists" element={<Playlists />} />
         {/* Cleanup and the old similarity debugger were folded into the dev panel. Keep old links working. */}

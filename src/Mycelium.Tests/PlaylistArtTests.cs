@@ -17,6 +17,7 @@ public class PlaylistArtTests
     [InlineData(PlaylistArt.Ridge)]
     [InlineData(PlaylistArt.Poolroom)]
     [InlineData(PlaylistArt.Prism)]
+    [InlineData(PlaylistArt.MyLibrary)]
     [InlineData(PlaylistArt.Frontier)]
     [InlineData(PlaylistArt.DeepFrontier)]
     public void Every_named_cover_is_embedded_in_the_build(string id)
@@ -40,12 +41,12 @@ public class PlaylistArtTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("my-library")]
     [InlineData("four-star")]
     [InlineData("grid")]
     [InlineData("../appsettings")]
     [InlineData("Posters/four-star")]
     [InlineData("FOUR-STAR")]
+    [InlineData("MY-LIBRARY")]
     public void Anything_else_is_not_art(string? id)
     {
         PlaylistArt.Open(id).Should().BeNull();

@@ -9,8 +9,8 @@ namespace Mycelium.Backend.Services.Singletons;
 /// </summary>
 /// <param name="Art">
 /// The <see cref="PlaylistArt"/> id of this playlist's cover, or null for one that has none. Only the
-/// fixed starter rows carry art: the tiers the picker generates are a family, not a named playlist,
-/// and stamping the 4★ cover on every window of it would say they were the same thing.
+/// fixed rows carry art: the tiers the picker generates are a family, not a named playlist, and
+/// stamping the 4★ cover on every window of it would say they were the same thing.
 /// </param>
 public record StockPlaylistDefinition(
     string Id,
@@ -218,7 +218,8 @@ public static class SmartPlaylistCatalog
             Filter: rules.Count == 0 ? null : Sorted(PlexGroup.Flatten(PlexGroup.Any(rules.ToArray()))),
             Unavailable: rules.Count == 0
                 ? "Approve an artist first."
-                : null);
+                : null,
+            Art: PlaylistArt.MyLibrary);
     }
 
     /// <summary>
