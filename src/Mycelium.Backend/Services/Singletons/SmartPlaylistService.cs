@@ -137,6 +137,7 @@ public class SmartPlaylistService
         var created = await _playlists.CreateSmartPlaylist(
             context.Token, PlaylistName.InPlex(definition.Title), context.SectionKey, definition.Filter!);
 
+        await Describe(context.Token, created.RatingKey, definition, username ?? context.PlexUsername);
         await ApplyArt(context.Token, created.RatingKey, definition);
 
         _logger.LogInformation(
@@ -171,6 +172,12 @@ public class SmartPlaylistService
         var updated = await _playlists.UpdateSmartPlaylistFilter(
             context.Token, status.MatchedRatingKey, context.SectionKey, definition.Filter!);
 
+        // Unlike the cover, the summary follows the rules: it is a statement of what this playlist
+        // selects, and the rules it described are the ones that were just replaced. Leaving the old
+        // text in place would leave the playlist describing something it no longer is.
+        await Describe(
+            context.Token, status.MatchedRatingKey, definition, username ?? context.PlexUsername);
+
         _logger.LogInformation(
             "Rewrote rules of '{Title}' to stock playlist {Id} ({Tracks} tracks) for {User}",
             updated.Title, definition.Id, updated.LeafCount, context.PlexUsername);
@@ -182,6 +189,29 @@ public class SmartPlaylistService
             TrackCount = updated.LeafCount,
             Note = null,
         };
+    }
+
+    /// <summary>
+    /// Writes the playlist's description in Plex — what it is for, what it selects, and whose taste it
+    /// was built from (see <see cref="PlaylistSummary"/>).
+    ///
+    /// <para><b>Never fatal</b>, for the same reason the cover isn't: a server that refuses the edit
+    /// must still leave the user with the playlist they asked for. The rules are the thing they
+    /// pressed the button for; the blurb beside them is not worth failing over.</para>
+    /// </summary>
+    private async Task Describe(
+        string token, string ratingKey, StockPlaylistDefinition definition, string? username)
+    {
+        try
+        {
+            await _playlists.SetPlaylistSummary(
+                token, ratingKey, PlaylistSummary.For(definition, username));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex, "Couldn't set the description on playlist {RatingKey} ({Id})", ratingKey, definition.Id);
+        }
     }
 
     /// <summary>

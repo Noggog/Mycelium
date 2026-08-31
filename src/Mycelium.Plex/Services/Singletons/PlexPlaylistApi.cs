@@ -112,6 +112,18 @@ public class PlexPlaylistApi : IPlexPlaylistApi
                ?? throw new InvalidOperationException($"Playlist {ratingKey} vanished after its update.");
     }
 
+    public async Task SetPlaylistSummary(string token, string ratingKey, string summary)
+    {
+        // A playlist's own route, not /library/metadata — the rating key is the same either way, but
+        // only /playlists accepts an edit to a playlist's fields. Sending just `summary` leaves the
+        // title alone; naming a field at all is what makes Plex write it.
+        _logger.LogInformation("Describing smart playlist {RatingKey}", ratingKey);
+        await Send(
+            HttpMethod.Put,
+            $"/playlists/{ratingKey}?summary={Uri.EscapeDataString(summary)}",
+            token);
+    }
+
     public async Task UploadPlaylistPoster(
         string token, string ratingKey, Stream image, string contentType)
     {

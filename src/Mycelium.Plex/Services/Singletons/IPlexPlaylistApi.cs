@@ -57,6 +57,15 @@ public interface IPlexPlaylistApi
         string token, string ratingKey, int sectionKey, PlexSmartFilter filter);
 
     /// <summary>
+    /// Sets a playlist's summary — the description Plex shows beside it in every client.
+    ///
+    /// <para>Separate from the create call rather than a parameter of it: Plex's playlist creation
+    /// takes a title and a rule query and nothing else, and the summary is an ordinary metadata edit
+    /// on the playlist that comes back.</para>
+    /// </summary>
+    Task SetPlaylistSummary(string token, string ratingKey, string summary);
+
+    /// <summary>
     /// Uploads <paramref name="image"/> as the poster of a playlist and selects it, so it is the cover
     /// every client shows.
     ///
