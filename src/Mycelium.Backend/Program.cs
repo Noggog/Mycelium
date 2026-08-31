@@ -1308,6 +1308,19 @@ plexLink.MapDelete("", async (HttpContext http, PlexLinkService links) =>
 // filter editor. Whether one already exists is decided by comparing *rules*, never names.
 var playlists = api.MapGroup("/playlists").RequireAuthorization();
 
+// A Plex failure is the media server's answer, not this app's fault, so it is reported as a bad
+// gateway with the status Plex gave. A request Plex never answered is the one worth wording
+// differently: the write may have gone through regardless, and saying so is what stops the user
+// pressing the button a second time and ending up with two playlists.
+static IResult PlexRefused(PlexRequestException ex) => Results.Json(
+    new
+    {
+        error = ex.Unanswered
+            ? $"{ex.Message} It may still have gone through — reload to see."
+            : ex.Message,
+    },
+    statusCode: StatusCodes.Status502BadGateway);
+
 static int FreshWindow(int? months) =>
     months is not null && SmartPlaylistCatalog.FreshWindows.Contains(months.Value)
         ? months.Value
@@ -1332,10 +1345,21 @@ playlists.MapGet("/art/{id}", (HttpContext http, string id) =>
     .WithName("PlaylistArt");
 
 playlists.MapGet("/stock", async (HttpContext http, SmartPlaylistService service, int? freshMonths) =>
-        Results.Ok(await service.Survey(
-            http.User.GetSubject()!,
-            http.User.FindFirst("preferred_username")?.Value,
-            FreshWindow(freshMonths))))
+    {
+        try
+        {
+            return Results.Ok(await service.Survey(
+                http.User.GetSubject()!,
+                http.User.FindFirst("preferred_username")?.Value,
+                FreshWindow(freshMonths)));
+        }
+        catch (PlexRequestException ex)
+        {
+            // The survey reads every playlist the user owns, so it is the call most likely to catch
+            // Plex having a bad moment. Saying which call Plex refused beats a bare "Failed to load".
+            return PlexRefused(ex);
+        }
+    })
     .WithName("SurveyStockPlaylists");
 
 playlists.MapPost("/stock/{id}", async (
@@ -1357,6 +1381,13 @@ playlists.MapPost("/stock/{id}", async (
         {
             // No linked Plex account, or the server is unreachable — both are "can't act yet", not bugs.
             return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (PlexRequestException ex)
+        {
+            // What Plex said, rather than a bare 500 that reads as "this app is broken". A write that
+            // went unanswered is called out separately: it may well have landed, and the next survey
+            // is what settles it.
+            return PlexRefused(ex);
         }
     })
     .WithName("CreateStockPlaylist");
@@ -1401,6 +1432,10 @@ playlists.MapPut("/stock/{id}", async (
         catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (PlexRequestException ex)
+        {
+            return PlexRefused(ex);
         }
     })
     .WithName("UpdateStockPlaylist");

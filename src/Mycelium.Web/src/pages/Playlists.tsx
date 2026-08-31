@@ -230,8 +230,9 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
                 {create.isPending ? <><Spinner /> Creating…</> : 'Create'}
               </button>
             )}
-            {playlist.state === 'Differs' && (
-              // Destructive: it rewrites the rules of a playlist the user made themselves.
+            {playlist.state === 'Differs' && playlist.replaceable && (
+              // Destructive: it rewrites the rules of a playlist the user made themselves. Offered
+              // only for a playlist that *has* rules — the note says so for the ones that don't.
               <button className="playlist-replace" onClick={() => update.mutate()} disabled={busy}>
                 {update.isPending ? <><Spinner /> Replacing…</> : 'Replace'}
               </button>

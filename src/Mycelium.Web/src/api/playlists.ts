@@ -99,6 +99,11 @@ export interface StockPlaylist {
   // The row's cover, or null for a row that has none — the picker's tiers, and the starters nothing
   // has been drawn for yet. The same image the playlist is given in Plex when it is created.
   artUrl: string | null
+  // Whether the playlist holding this name is one whose rules can be rewritten — only meaningful in
+  // 'Differs'. False when the name is held by a playlist that isn't smart: the same call that
+  // replaces a smart playlist's rules would append tracks to an ordinary one, so that clash is the
+  // user's to resolve in Plex and no Replace is offered.
+  replaceable: boolean
 }
 
 export interface PlaylistSurvey {

@@ -362,8 +362,8 @@ public static class SmartPlaylistCatalog
             Details: new[]
             {
                 StaleDetail,
-                "Mycelium approved or recommended",
                 FloorDetail(options.HalfStars),
+                "Includes Mycelium approved or recommended artists and their albums",
             },
             // Flattened because a single surviving tag must be a bare condition, not a one-child
             // bracket Plex's editor would drop on the user's next save.

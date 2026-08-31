@@ -33,6 +33,13 @@ public enum StockPlaylistState
 /// Where to load this row's cover from, or null for a row that has none — the picker's tiers, and the
 /// starters nothing has been drawn for yet. The same image the playlist is given in Plex.
 /// </param>
+/// <param name="Replaceable">
+/// Whether the playlist holding this name is one whose rules we can rewrite — only meaningful in
+/// <see cref="StockPlaylistState.Differs"/>. False when the name is held by a playlist that isn't a
+/// smart one: rewriting rules means handing Plex a filter for a playlist that <em>has</em> a filter,
+/// and the same call against an ordinary playlist would quietly append tracks to it instead. That one
+/// the user has to rename or delete themselves.
+/// </param>
 public record StockPlaylistStatus(
     string Id,
     string Title,
@@ -44,7 +51,8 @@ public record StockPlaylistStatus(
     int? TrackCount = null,
     string? Note = null,
     string? PlexUrl = null,
-    string? ArtUrl = null);
+    string? ArtUrl = null,
+    bool Replaceable = true);
 
 /// <summary>The whole page: whether the user has linked Plex, and where each stock playlist stands.</summary>
 public record PlaylistSurvey(
@@ -129,8 +137,12 @@ public class SmartPlaylistService
     {
         var (context, definition) = await Resolve(subject, username, definitionId, freshMonths);
         var status = context.Evaluate(definition);
-        if (status.State is StockPlaylistState.Exists or StockPlaylistState.Unavailable)
+        if (status.State is not StockPlaylistState.NotCreated)
         {
+            // Already there, not buildable yet, or the name is taken by something else — and creating
+            // over a taken name is the one this guards that the page can still ask for, from a row
+            // that was surveyed before the clash appeared. Two playlists with one name is worse than
+            // the answer the row already carries.
             return status;
         }
 
@@ -164,13 +176,36 @@ public class SmartPlaylistService
     {
         var (context, definition) = await Resolve(subject, username, definitionId, freshMonths);
         var status = context.Evaluate(definition);
-        if (status.State != StockPlaylistState.Differs || status.MatchedRatingKey is null)
+        if (status.State != StockPlaylistState.Differs || status.MatchedRatingKey is null
+            || !status.Replaceable)
         {
+            // Nothing to rewrite, or nothing we are willing to rewrite — a name held by a playlist
+            // that isn't smart takes a filter as an instruction to append tracks, so it is left alone
+            // and the row keeps the note that says why.
             return status;
         }
 
         var updated = await _playlists.UpdateSmartPlaylistFilter(
             context.Token, status.MatchedRatingKey, context.SectionKey, definition.Filter!);
+
+        // Plex answers a rules rewrite with a 200 whether or not the stored query changed, so the
+        // playlist is read back and compared the same way the survey compares it. Reporting "done" on
+        // the strength of the request having been accepted is what made a Replace that changed nothing
+        // look like it had worked, right up until the page refreshed and said "name taken" again.
+        if (!context.Matches(definition.Filter!, updated))
+        {
+            _logger.LogWarning(
+                "Plex accepted a rules rewrite of '{Title}' ({RatingKey}) for stock playlist {Id} but "
+                + "the playlist still selects something else. Stored content: {Content}",
+                updated.Title, status.MatchedRatingKey, definition.Id, updated.Content);
+
+            return status with
+            {
+                TrackCount = updated.LeafCount,
+                Note = "Plex accepted the rewrite but the playlist still selects something else. "
+                       + "Rename or delete it in Plex and create this one fresh.",
+            };
+        }
 
         // Unlike the cover, the summary follows the rules: it is a statement of what this playlist
         // selects, and the rules it described are the ones that were just replaced. Leaving the old
@@ -407,9 +442,7 @@ public class SmartPlaylistService
 
             foreach (var playlist in Existing)
             {
-                if (playlist.TryGetFilter(out var section, out var filter)
-                    && section == SectionKey
-                    && PlexFilterCanonicalizer.AreEquivalent(definition.Filter, filter, ResolveTag))
+                if (Matches(definition.Filter, playlist))
                 {
                     return status with
                     {
@@ -429,18 +462,45 @@ public class SmartPlaylistService
                 p => string.Equals(
                     PlaylistName.Bare(p.Title), definition.Title, StringComparison.OrdinalIgnoreCase));
 
-            return clash is null
-                ? status
-                : status with
-                {
-                    State = StockPlaylistState.Differs,
-                    MatchedTitle = PlaylistName.Bare(clash.Title),
-                    MatchedRatingKey = clash.RatingKey,
-                    TrackCount = clash.LeafCount,
-                    Note = "This name is taken by a different playlist.",
-                    PlexUrl = LinkTo(clash.RatingKey),
-                };
+            if (clash is null)
+            {
+                return status;
+            }
+
+            // Rewriting rules is only a thing a *smart* playlist can be asked for. The same call
+            // against an ordinary one adds tracks to it — so an unrewritable clash has to be said out
+            // loud rather than offered as a Replace that silently does something else.
+            var rewritable = IsRewritable(clash);
+
+            return status with
+            {
+                State = StockPlaylistState.Differs,
+                MatchedTitle = PlaylistName.Bare(clash.Title),
+                MatchedRatingKey = clash.RatingKey,
+                TrackCount = clash.LeafCount,
+                Note = rewritable
+                    ? "This name is taken by a different playlist."
+                    : "This name is taken by a playlist that isn't a smart one, so its rules can't be "
+                      + "rewritten. Rename or delete it in Plex first.",
+                PlexUrl = LinkTo(clash.RatingKey),
+                Replaceable = rewritable,
+            };
         }
+
+        /// <summary>
+        /// Whether this playlist is one whose rules can be replaced: a smart playlist whose stored
+        /// query we can read, over the section the definitions are written against. The listing asks
+        /// Plex for smart playlists only, but the flag is checked rather than assumed — an ordinary
+        /// playlist reaching this far is exactly the case that must not be handed a filter.
+        /// </summary>
+        public static bool IsRewritable(PlexPlaylist playlist) =>
+            playlist.Smart && playlist.TryGetFilter(out _, out _);
+
+        /// <summary>Whether a stored filter selects the same thing as one of ours.</summary>
+        public bool Matches(PlexSmartFilter definition, PlexPlaylist playlist) =>
+            playlist.TryGetFilter(out var section, out var filter)
+            && section == SectionKey
+            && PlexFilterCanonicalizer.AreEquivalent(definition, filter, ResolveTag);
 
         /// <summary>An app.plex.tv link to one of the user's playlists, when the server named itself.</summary>
         public string? LinkTo(string ratingKey) =>

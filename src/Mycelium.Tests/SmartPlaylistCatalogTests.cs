@@ -304,7 +304,9 @@ public class SmartPlaylistCatalogTests
             LikedArtist, RecommendedArtistMoodTagId: RecommendedArtist, HalfStars: halfStars));
 
         definitions.Single(d => d.Id == SmartPlaylistCatalog.FrontierId)
-            .Details.Should().Equal("Not heard in 1+ years", "Mycelium approved or recommended", expected);
+            .Details.Should().Equal(
+                "Not heard in 1+ years", expected,
+                "Includes Mycelium approved or recommended artists and their albums");
         definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId)
             .Details.Should().Equal(
                 "Not heard in 1+ years", expected,

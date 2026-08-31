@@ -26,7 +26,15 @@ public class PlexPlaylistApi : IPlexPlaylistApi
     private readonly PlexAppIdentity _identity;
     private readonly IPlexApi _plexApi;
     private readonly ILogger<PlexPlaylistApi> _logger;
-    private readonly HttpClient _httpClient = new();
+
+    /// <summary>
+    /// The timeout is explicit and generous because creating a smart playlist is not a metadata write:
+    /// Plex evaluates the rules across the whole music section before it answers, which on a large
+    /// library and domestic hardware can run well past the 100 seconds an HttpClient allows by default.
+    /// Timing out there is the worst of both worlds — Plex goes on to build the playlist, while this app
+    /// reports a failure and never records what it made.
+    /// </summary>
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(10) };
 
     public PlexPlaylistApi(
         PlexEndpointInfo endpointInfo,
@@ -244,14 +252,48 @@ public class PlexPlaylistApi : IPlexPlaylistApi
         request.Headers.Add("X-Plex-Client-Identifier", _identity.ClientIdentifier);
 
         _logger.LogDebug("Plex {Method} {Path}", method, path);
-        using var response = await _httpClient.SendAsync(request);
-        if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            // No answer at all. Distinguished from a refusal because Plex may have carried out the
+            // write regardless — a create that times out still leaves a playlist behind.
+            throw new PlexRequestException(method, path, status: null, detail: ex.Message, inner: ex);
+        }
+
+        using (response)
+        {
+            if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                // Plex answers errors in HTML as often as not, so the body is only worth repeating as a
+                // short excerpt — enough to tell "unauthorized" from "invalid filter" without pasting a
+                // page of markup into the browser.
+                throw new PlexRequestException(method, path, response.StatusCode, Excerpt(body));
+            }
+
+            return string.IsNullOrWhiteSpace(body) ? null : JObject.Parse(body);
+        }
+    }
+
+    /// <summary>The first line of a response body, capped — a hint at what Plex objected to.</summary>
+    private static string? Excerpt(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
         {
             return null;
         }
 
-        response.EnsureSuccessStatusCode();
-        var body = await response.Content.ReadAsStringAsync();
-        return string.IsNullOrWhiteSpace(body) ? null : JObject.Parse(body);
+        var line = body.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        return line.Length <= 200 ? line : line[..200] + "…";
     }
 }
