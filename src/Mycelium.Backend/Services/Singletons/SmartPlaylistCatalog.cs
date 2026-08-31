@@ -177,6 +177,18 @@ public static class SmartPlaylistCatalog
     internal static string TierLabel(int ratingUnits) => $"{TierStars(ratingUnits)}★+";
 
     /// <summary>
+    /// The second half of an <see cref="StockPlaylistDefinition.Unavailable"/> note: which tag Plex
+    /// hasn't got yet. Worth naming rather than leaving at "do something first", because the two ways
+    /// to reach this state look identical from the page — the user genuinely hasn't rated anything, or
+    /// the <c>MoodTagSeeder</c> found no record to anchor to — and the tag name is the thread an
+    /// operator pulls to tell them apart.
+    /// </summary>
+    private static string NoTag(params string[] verdicts) =>
+        "nothing in Plex carries your "
+        + string.Join(" or ", verdicts.Select(v => $"\"{v}\""))
+        + " tag yet.";
+
+    /// <summary>
     /// The staleness clause both Frontier variants are built on, in the page's words. Deliberately the
     /// shorter truth: the rule lets anything at all back in after two years, but the line a reader
     /// needs is when music they actually rated comes back around.
@@ -257,7 +269,7 @@ public static class SmartPlaylistCatalog
             Details: new[] { "Mycelium approved artists and their albums" },
             Filter: rules.Count == 0 ? null : Sorted(PlexGroup.Flatten(PlexGroup.Any(rules.ToArray()))),
             Unavailable: rules.Count == 0
-                ? "Approve an artist first."
+                ? $"Approve an artist first — {NoTag("liked")}"
                 : null,
             Art: PlaylistArt.MyLibrary);
     }
@@ -360,7 +372,7 @@ public static class SmartPlaylistCatalog
                 : Sorted(PlexGroup.Flatten(PlexGroup.All(
                     FrontierRules(options.HalfStars).Append(PlexGroup.Any(tags.ToArray())).ToArray()))),
             Unavailable: tags.Count == 0
-                ? "Approve an artist first."
+                ? $"Approve an artist first — {NoTag("liked", "recommended")}"
                 : null,
             Art: PlaylistArt.Frontier);
     }
@@ -378,9 +390,18 @@ public static class SmartPlaylistCatalog
     ///
     /// <para>Each is <c>and</c>-ed in as its own "is not" rather than bracketed together, because
     /// excluding either is excluding both — <c>NOT (a OR b)</c> is <c>NOT a AND NOT b</c> — and the
-    /// flat form is what Plex's own editor writes. Either may be absent: a tag has no id until
-    /// something carries it, and a user who has never thumbed anything down simply gets the rules
-    /// unchanged, which is why this variant still needs no <see cref="StockPlaylistDefinition.Unavailable"/>.</para>
+    /// flat form is what Plex's own editor writes. Either alone is enough; only having <em>neither</em>
+    /// is a problem.</para>
+    ///
+    /// <para><b>And with neither, it isn't offered at all.</b> This is the one place where a missing
+    /// tag would produce a playlist that <em>lies</em> rather than one that is honestly unavailable:
+    /// the other two rows lose their whole point without their tag and say so, but a Deep Frontier
+    /// stripped of its exclusion still looks entirely correct while quietly resurfacing music the user
+    /// has already rejected. A tag has no id until something in the library carries it, so the rule
+    /// simply cannot be written — and shipping the playlist without it would break the promise its own
+    /// description makes. <c>MoodTagSeeder</c> is what normally keeps this from ever being reached, so
+    /// a row that <em>is</em> blocked is also the visible symptom of a seed that found nothing to
+    /// anchor to.</para>
     /// </summary>
     private static StockPlaylistDefinition DeepFrontier(StockPlaylistOptions options)
     {
@@ -394,21 +415,25 @@ public static class SmartPlaylistCatalog
             exclusions.Add(new PlexCondition("album.mood", PlexOp.IsNot, options.DislikedAlbumMoodTagId));
         }
 
-        var details = new List<string> { StaleDetail, FloorDetail(options.HalfStars) };
-        if (exclusions.Count > 0)
-        {
-            // Only claimed when a rule backs it. With no thumbs-down on the server there is nothing to
-            // exclude, and a bullet promising otherwise would be describing a different playlist.
-            details.Add("Excludes Mycelium rejected artists and their albums");
-        }
-
         return new StockPlaylistDefinition(
             Id: DeepFrontierId,
             Title: "Deep Frontier",
             Description: "New or forgotten music from the entire library",
-            Details: details,
-            Filter: Sorted(PlexGroup.All(
-                FrontierRules(options.HalfStars).Concat(exclusions).ToArray())),
+            // Stated flatly rather than conditionally: a Deep Frontier that exists at all now carries
+            // the exclusion, so the bullet is describing an invariant, not a maybe.
+            Details: new[]
+            {
+                StaleDetail,
+                FloorDetail(options.HalfStars),
+                "Excludes Mycelium rejected artists and their albums",
+            },
+            Filter: exclusions.Count == 0
+                ? null
+                : Sorted(PlexGroup.All(
+                    FrontierRules(options.HalfStars).Concat(exclusions).ToArray())),
+            Unavailable: exclusions.Count == 0
+                ? $"Reject an artist first — {NoTag("disliked")}"
+                : null,
             Art: PlaylistArt.DeepFrontier);
     }
 

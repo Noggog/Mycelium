@@ -22,6 +22,7 @@ public class SmartPlaylistServiceTests
     private const string Subject = "user-sub";
     private const string Username = "noggog";
     private const string LikedTagId = "749936";
+    private const string DislikedTagId = "749937";
     private const int Section = 1;
 
     private readonly IPlexLinkRepo _links = Substitute.For<IPlexLinkRepo>();
@@ -37,11 +38,13 @@ public class SmartPlaylistServiceTests
 
         _plexApi.ResolveLibrary().Returns(new PlexLibrary { Key = Section, Title = "Music", Type = "artist" });
         Linked();
-        // The user has thumbed at least one artist, so their liked mood tag exists on the server.
+        // The user has thumbed at least one artist each way, so both verdict moods exist on the
+        // server — the liked one is what My Library and Frontier hang off, and the disliked one is
+        // what Deep Frontier subtracts (and refuses to be built without).
         _playlists.Tags[("mood", PlexSmartFilter.ArtistType)] = new List<PlexTagEntry>
         {
             new(LikedTagId, $"{Username}_liked"),
-            new("749937", $"{Username}_disliked"),
+            new(DislikedTagId, $"{Username}_disliked"),
             new("2779", "ambient"),
         };
     }
@@ -65,7 +68,11 @@ public class SmartPlaylistServiceTests
     private static StockPlaylistDefinition Definition(
         string definitionId, int freshMonths = 3, bool halfStars = SmartPlaylistCatalog.DefaultHalfStars) =>
         SmartPlaylistCatalog
-            .Build(new StockPlaylistOptions(LikedTagId, FreshMonths: freshMonths, HalfStars: halfStars))
+            .Build(new StockPlaylistOptions(
+                LikedTagId,
+                DislikedArtistMoodTagId: DislikedTagId,
+                FreshMonths: freshMonths,
+                HalfStars: halfStars))
             .Single(d => d.Id == definitionId);
 
     /// <summary>Puts a playlist on the fake server with the rules the named stock definition generates.</summary>
@@ -291,6 +298,33 @@ public class SmartPlaylistServiceTests
 
         row.State.Should().Be(StockPlaylistState.Unavailable);
         row.Note.Should().NotBeNullOrWhiteSpace();
+    }
+
+    /// <summary>
+    /// The same gate on the row where a missing tag would otherwise be invisible: without the reject
+    /// mood Deep Frontier can't write its exclusion, and a Deep Frontier that quietly resurfaced
+    /// rejected music would look entirely correct. Withheld, with a note naming the tag it wants — the
+    /// page is the only place a failed MoodTagSeeder ever shows up.
+    /// </summary>
+    [Fact]
+    public async Task Deep_frontier_is_unavailable_until_the_reject_tag_exists()
+    {
+        _playlists.Tags[("mood", PlexSmartFilter.ArtistType)] = new List<PlexTagEntry>
+        {
+            new(LikedTagId, $"{Username}_liked"),
+        };
+
+        var row = await Row(Survey(), SmartPlaylistCatalog.DeepFrontierId);
+
+        row.State.Should().Be(StockPlaylistState.Unavailable);
+        row.Note.Should().Contain("disliked");
+
+        // ...and it comes straight back once something carries the tag.
+        _playlists.Tags[("mood", PlexSmartFilter.ArtistType)]
+            .Add(new PlexTagEntry(DislikedTagId, $"{Username}_disliked"));
+
+        (await Row(Survey(), SmartPlaylistCatalog.DeepFrontierId))
+            .State.Should().Be(StockPlaylistState.NotCreated);
     }
 
     /// <summary>An unparseable playlist is skipped, not fatal — the rest of the survey still answers.</summary>

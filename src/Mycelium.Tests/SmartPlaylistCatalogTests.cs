@@ -22,7 +22,7 @@ public class SmartPlaylistCatalogTests
         string id,
         string? likedTagId = LikedArtist,
         string? recommendedTagId = null,
-        string? dislikedArtistTagId = null,
+        string? dislikedArtistTagId = DislikedArtist,
         string? dislikedAlbumTagId = null,
         int freshMonths = 3,
         bool halfStars = true) =>
@@ -163,6 +163,12 @@ public class SmartPlaylistCatalogTests
     /// "3★ and up", which on Plex's strictly-greater operator is <c>&gt;&gt; 5</c> — one half-step below
     /// the tier, so 3★ itself is in.
     /// </summary>
+    /// <summary>
+    /// The exclusion every buildable Deep Frontier carries — the artist half alone, which is what the
+    /// helper's default supplies.
+    /// </summary>
+    private const string RejectExclusion = "&and=1&artist.mood!=700001";
+
     private const string FrontierBody =
         "&push=1"
         + "&push=1&track.userRating%3E%3E=5&and=1&track.lastViewedAt%3C%3C=-1y&pop=1"
@@ -185,7 +191,7 @@ public class SmartPlaylistCatalogTests
     public void Deep_frontier_is_the_hand_built_rules_with_the_one_year_lane_starting_at_three_stars()
     {
         PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId))
-            .Should().Be("type=8&sort=titleSort" + FrontierBody);
+            .Should().Be("type=8&sort=titleSort" + FrontierBody + RejectExclusion);
     }
 
     /// <summary>
@@ -216,30 +222,72 @@ public class SmartPlaylistCatalogTests
     {
         PlexFilterSerializer.Serialize(
                 Filter(SmartPlaylistCatalog.DeepFrontierId, dislikedArtistTagId: DislikedArtist))
-            .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&artist.mood!=700001");
+            .Should().Be("type=8&sort=titleSort" + FrontierBody + RejectExclusion);
 
-        PlexFilterSerializer.Serialize(
-                Filter(SmartPlaylistCatalog.DeepFrontierId, dislikedAlbumTagId: DislikedAlbum))
+        PlexFilterSerializer.Serialize(Filter(
+                SmartPlaylistCatalog.DeepFrontierId,
+                dislikedArtistTagId: null,
+                dislikedAlbumTagId: DislikedAlbum))
             .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&album.mood!=700002");
     }
 
     /// <summary>
-    /// The exclusion is a subtraction, never a dependency: unlike Frontier, Deep Frontier still means
-    /// something with no tags on the server at all, so it stays buildable — and the bullet that claims
-    /// the exclusion only appears when a rule backs it.
+    /// With no reject tag the exclusion cannot be written at all, and this is the one row where that
+    /// silently changes what the playlist <em>selects</em> rather than making it obviously pointless —
+    /// so it is withheld rather than shipped without its promise, and the note names the tag that is
+    /// missing. In normal operation MoodTagSeeder means this is never reached; when it is, this row is
+    /// the visible symptom of a seed that found nothing to anchor to.
     /// </summary>
     [Fact]
-    public void Deep_frontier_only_claims_the_exclusion_when_a_reject_tag_exists()
+    public void Deep_frontier_is_withheld_when_there_is_no_reject_tag_to_exclude_by()
     {
-        static StockPlaylistDefinition Deep(StockPlaylistOptions options) =>
-            SmartPlaylistCatalog.Build(options).Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId);
+        var definition = SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(LikedArtist, RecommendedArtistMoodTagId: RecommendedArtist))
+            .Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId);
 
-        var without = Deep(new StockPlaylistOptions());
-        without.Filter.Should().NotBeNull();
-        without.Details.Should().NotContain(d => d.Contains("rejected"));
+        definition.Filter.Should().BeNull();
+        definition.Unavailable.Should().Be(
+            "Reject an artist first — nothing in Plex carries your \"disliked\" tag yet.");
+    }
 
-        Deep(new StockPlaylistOptions(DislikedArtistMoodTagId: DislikedArtist))
-            .Details.Should().Contain("Excludes Mycelium rejected artists and their albums");
+    /// <summary>
+    /// Either vocabulary on its own is enough to build it — only having neither withholds the row.
+    /// </summary>
+    [Fact]
+    public void Deep_frontier_needs_only_one_of_the_two_reject_vocabularies()
+    {
+        foreach (var options in new[]
+                 {
+                     new StockPlaylistOptions(DislikedArtistMoodTagId: DislikedArtist),
+                     new StockPlaylistOptions(DislikedAlbumMoodTagId: DislikedAlbum),
+                 })
+        {
+            var definition = SmartPlaylistCatalog.Build(options)
+                .Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId);
+
+            definition.Filter.Should().NotBeNull();
+            definition.Unavailable.Should().BeNull();
+        }
+    }
+
+    /// <summary>
+    /// An unavailable row still describes the playlist you would get, so the reader can judge whether
+    /// it is worth unblocking. The exclusion bullet is now an invariant of a built Deep Frontier, not
+    /// a maybe, so it is stated flatly.
+    /// </summary>
+    [Fact]
+    public void Deep_frontier_always_claims_the_exclusion_it_now_requires()
+    {
+        foreach (var options in new[]
+                 {
+                     new StockPlaylistOptions(),
+                     new StockPlaylistOptions(DislikedArtistMoodTagId: DislikedArtist),
+                 })
+        {
+            SmartPlaylistCatalog.Build(options)
+                .Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId)
+                .Details.Should().Contain("Excludes Mycelium rejected artists and their albums");
+        }
     }
 
     /// <summary>
@@ -258,7 +306,9 @@ public class SmartPlaylistCatalogTests
         definitions.Single(d => d.Id == SmartPlaylistCatalog.FrontierId)
             .Details.Should().Equal("Not heard in 1+ years", "Mycelium approved or recommended", expected);
         definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId)
-            .Details.Should().Equal("Not heard in 1+ years", expected);
+            .Details.Should().Equal(
+                "Not heard in 1+ years", expected,
+                "Excludes Mycelium rejected artists and their albums");
     }
 
     /// <summary>
@@ -338,8 +388,9 @@ public class SmartPlaylistCatalogTests
         frontier.Filter.Should().BeNull();
         frontier.Unavailable.Should().NotBeNullOrWhiteSpace();
 
-        // Deep Frontier has no such dependency and stays on offer.
-        definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter.Should().NotBeNull();
+        // ...and with no tags at all Deep Frontier is withheld too, for its own reason: see
+        // Deep_frontier_is_withheld_when_there_is_no_reject_tag_to_exclude_by.
+        definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter.Should().BeNull();
     }
 
     /// <summary>
@@ -365,7 +416,8 @@ public class SmartPlaylistCatalogTests
                 + "&or=1&push=1&track.userRating%3E%3E=2&and=1&track.viewCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
                 + "&or=1&track.userRating%3E%3E=3"
                 + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1&and=1&track.userRating%3C%3C=3&pop=1"
-                + "&pop=1");
+                + "&pop=1"
+                + RejectExclusion);
     }
 
     /// <summary>
@@ -379,7 +431,7 @@ public class SmartPlaylistCatalogTests
 
         PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: false))
             .Should().Be(PlexFilterSerializer.Serialize(
-                SmartPlaylistCatalog.Build(new StockPlaylistOptions())
+                SmartPlaylistCatalog.Build(new StockPlaylistOptions(DislikedArtistMoodTagId: DislikedArtist))
                     .Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId).Filter!));
     }
 
