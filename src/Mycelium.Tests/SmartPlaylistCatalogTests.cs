@@ -57,10 +57,39 @@ public class SmartPlaylistCatalogTests
         int ratingUnits, string id, string title, string threshold)
     {
         SmartPlaylistCatalog.TierId(ratingUnits).Should().Be(id);
-        SmartPlaylistCatalog.TierLabel(ratingUnits).Should().Be(title);
+        SmartPlaylistCatalog.TierLabel(ratingUnits, halfStars: true).Should().Be(title);
 
         Filter(id).Rules
             .Should().Be(new PlexCondition("track.userRating", PlexOp.GreaterThan, threshold));
+    }
+
+    /// <summary>
+    /// A half-star user's tiers have to sort in rating order down a Plex sidebar, which orders by
+    /// title character by character. "★" sorts after ".", so a bare "3★+" lands below "3.5★+" — the
+    /// whole stars are padded to "3.0★+" to put the comparison on the digit that matters.
+    /// </summary>
+    [Fact]
+    public void Half_star_tier_titles_sort_in_rating_order()
+    {
+        var tiers = SmartPlaylistCatalog.Tiers(halfStars: true);
+
+        var labels = tiers.Select(t => SmartPlaylistCatalog.TierLabel(t, halfStars: true)).ToArray();
+
+        labels.Should().StartWith(new[] { "0.5★+", "1.0★+", "1.5★+", "2.0★+" });
+        labels.Should().BeInAscendingOrder(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// ...and a whole-star user has no halves to interleave with, so their tiers keep the plain
+    /// spelling they have always had. A ".0" there would be pedantry about a distinction they can't
+    /// make.
+    /// </summary>
+    [Fact]
+    public void Whole_star_tier_titles_are_left_plain()
+    {
+        SmartPlaylistCatalog.Tiers(halfStars: false)
+            .Select(t => SmartPlaylistCatalog.TierLabel(t, halfStars: false))
+            .Should().Equal("1★+", "2★+", "3★+", "4★+", "5★+");
     }
 
     /// <summary>
@@ -465,7 +494,9 @@ public class SmartPlaylistCatalogTests
         {
             var starter = definitions.Single(d => d.Id == SmartPlaylistCatalog.StarterTierId(tier));
 
-            starter.Title.Should().Be($"{SmartPlaylistCatalog.TierLabel(tier)} (Fresh 1mo)");
+            starter.Title.Should().Be(
+                $"{SmartPlaylistCatalog.TierLabel(tier, SmartPlaylistCatalog.DefaultHalfStars)} "
+                + "(Fresh 1mo)");
             PlexFilterSerializer.Serialize(starter.Filter!)
                 .Should().EndWith("&and=1&track.lastViewedAt%3C%3C=-1mon");
         }
@@ -498,7 +529,7 @@ public class SmartPlaylistCatalogTests
                         identical,
                         "'{0}' should match our {1} tier only if it is the same rule set",
                         title,
-                        SmartPlaylistCatalog.TierLabel(ratingUnits));
+                        SmartPlaylistCatalog.TierLabel(ratingUnits, halfStars: true));
             }
         }
     }

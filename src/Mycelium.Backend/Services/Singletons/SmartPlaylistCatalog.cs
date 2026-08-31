@@ -169,12 +169,25 @@ public static class SmartPlaylistCatalog
     internal static string TierId(int ratingUnits) =>
         ratingUnits % 2 == 0 ? $"stars-{ratingUnits / 2}" : $"stars-{ratingUnits / 2}_5";
 
-    /// <summary>A tier written as a star count: "4", "3.5".</summary>
-    internal static string TierStars(int ratingUnits) =>
-        ratingUnits % 2 == 0 ? $"{ratingUnits / 2}" : $"{ratingUnits / 2}.5";
+    /// <summary>
+    /// A tier written as a star count: "4", "3.5" — and "4.0" rather than "4" for a user rating in
+    /// halves.
+    ///
+    /// <para><b>The trailing ".0" is there to sort.</b> Plex orders a sidebar by title, character by
+    /// character, and "★" sorts after "." — so "3.5★+" lands <em>above</em> "3★+" and a half-star
+    /// user's tiers come out interleaved wrongly. Padding the whole stars to one decimal puts the
+    /// comparison on the digit that matters and the family reads 3.0, 3.5, 4.0 down the list. A
+    /// whole-star user has no halves to interleave with, so their tiers stay the plain "4★+" they
+    /// have always been.</para>
+    /// </summary>
+    internal static string TierStars(int ratingUnits, bool halfStars) =>
+        ratingUnits % 2 != 0 ? $"{ratingUnits / 2}.5"
+        : halfStars ? $"{ratingUnits / 2}.0"
+        : $"{ratingUnits / 2}";
 
-    /// <summary>How a tier is written for a human: "4★+", "3.5★+".</summary>
-    internal static string TierLabel(int ratingUnits) => $"{TierStars(ratingUnits)}★+";
+    /// <summary>How a tier is written for a human: "4★+", "3.5★+" — "4.0★+" on a half-star scale.</summary>
+    internal static string TierLabel(int ratingUnits, bool halfStars) =>
+        $"{TierStars(ratingUnits, halfStars)}★+";
 
     /// <summary>
     /// The second half of an <see cref="StockPlaylistDefinition.Unavailable"/> note: which tag Plex
@@ -201,7 +214,7 @@ public static class SmartPlaylistCatalog
     /// rule half the users don't have.
     /// </summary>
     private static string FloorDetail(bool halfStars) =>
-        $"Excludes {TierStars(Floor(halfStars))}★ rated songs";
+        $"Excludes {TierStars(Floor(halfStars), halfStars)}★ rated songs";
 
     /// <summary>Every definition on offer, in display order.</summary>
     public static IReadOnlyList<StockPlaylistDefinition> Build(StockPlaylistOptions options)
@@ -220,7 +233,8 @@ public static class SmartPlaylistCatalog
         for (var i = 0; i < starters.Length; i++)
         {
             definitions.Add(Stars(
-                starters[i], StarterFreshMonths, id: StarterTierId(starters[i]), art: StarterArt[i]));
+                starters[i], StarterFreshMonths, options.HalfStars,
+                id: StarterTierId(starters[i]), art: StarterArt[i]));
         }
 
         // Every tier the scale allows, not just the one the page happens to be showing: the survey has
@@ -228,8 +242,8 @@ public static class SmartPlaylistCatalog
         // pure arithmetic over state that is already loaded.
         foreach (var tier in Tiers(options.HalfStars))
         {
-            definitions.Add(Stars(tier, freshMonths: null));
-            definitions.Add(Stars(tier, options.FreshMonths));
+            definitions.Add(Stars(tier, freshMonths: null, options.HalfStars));
+            definitions.Add(Stars(tier, options.FreshMonths, options.HalfStars));
         }
 
         return definitions;
@@ -455,11 +469,11 @@ public static class SmartPlaylistCatalog
     /// <see cref="StockPlaylistDefinition.Art"/>.
     /// </param>
     private static StockPlaylistDefinition Stars(
-        int ratingUnits, int? freshMonths, string? id = null, string? art = null)
+        int ratingUnits, int? freshMonths, bool halfStars, string? id = null, string? art = null)
     {
         var threshold = new PlexCondition("track.userRating", PlexOp.GreaterThan, Above(ratingUnits));
-        var label = TierLabel(ratingUnits);
-        var rated = $"Rated {TierStars(ratingUnits)}★ and up";
+        var label = TierLabel(ratingUnits, halfStars);
+        var rated = $"Rated {TierStars(ratingUnits, halfStars)}★ and up";
 
         if (freshMonths is null)
         {
