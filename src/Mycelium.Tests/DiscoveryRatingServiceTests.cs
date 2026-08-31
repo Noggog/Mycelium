@@ -67,7 +67,8 @@ public class DiscoveryRatingServiceTests
             quality, NullLogger<DiscoveryEngine>.Instance);
 
         _followUps = new ArtistFollowUpService(
-            _verdicts, _related, _tagger, _albumTagger, NullLogger<ArtistFollowUpService>.Instance);
+            _verdicts, _related, _tagger, _albumTagger, Substitute.For<IMoodTagSeeder>(),
+            NullLogger<ArtistFollowUpService>.Instance);
 
         var collections = new CollectionService(
             _deezer, _missing, _albumRatings, _catalog, _overrides, _plex, _followUps, _followUps,

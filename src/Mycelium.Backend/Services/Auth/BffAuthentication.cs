@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Mycelium.Backend.Services.Background;
 using Mycelium.Interfaces;
 
 namespace Mycelium.Backend.Services.Auth;
@@ -184,14 +185,27 @@ public static class BffAuthentication
                     if (subject == null) return;
 
                     var now = DateTimeOffset.UtcNow;
+                    var username = principal!.FindFirst("preferred_username")?.Value;
                     var users = ctx.HttpContext.RequestServices.GetRequiredService<IUserRepo>();
-                    await users.UpsertOnLogin(new AppUser(
+                    var isNewUser = await users.UpsertOnLogin(new AppUser(
                         Subject: subject,
-                        Username: principal!.FindFirst("preferred_username")?.Value,
+                        Username: username,
                         Email: principal.FindFirst("email")?.Value,
                         DisplayName: principal.FindFirst("name")?.Value,
                         FirstSeenAt: now,
                         LastLoginAt: now));
+
+                    if (isNewUser)
+                    {
+                        // The one bit of per-user setup that has to happen before the account is
+                        // usable rather than on the next nightly pass: without a seeded "_disliked"
+                        // mood, Plex has no tag id for it and the Deep Frontier this user builds today
+                        // would silently be the un-excluded one (see MoodTagSeeder). Queued, never
+                        // awaited — a login must not wait on Plex, or fail because Plex did.
+                        ctx.HttpContext.RequestServices
+                            .GetRequiredService<ArtistFollowUpService>()
+                            .QueueMoodSeed(username);
+                    }
                 };
             });
 

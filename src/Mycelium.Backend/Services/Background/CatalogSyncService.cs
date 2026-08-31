@@ -21,6 +21,7 @@ public class CatalogSyncService : BackgroundService
     private readonly ArtistTagBackfill _tagBackfill;
     private readonly AlbumTagBackfill _albumTagBackfill;
     private readonly RecommendedArtistTagger _recommendedTagger;
+    private readonly MoodTagSeeder _moodSeeder;
     private readonly JitterPolicy _jitter;
     private readonly DailySyncSchedule _schedule;
     private readonly ILogger<CatalogSyncService> _logger;
@@ -28,7 +29,7 @@ public class CatalogSyncService : BackgroundService
     public CatalogSyncService(
         CatalogRefresher refresher, PlexServerTokenService serverToken, PurchaseService purchases,
         ArtistTagBackfill tagBackfill, AlbumTagBackfill albumTagBackfill,
-        RecommendedArtistTagger recommendedTagger, JitterPolicy jitter,
+        RecommendedArtistTagger recommendedTagger, MoodTagSeeder moodSeeder, JitterPolicy jitter,
         DailySyncSchedule schedule, ILogger<CatalogSyncService> logger)
     {
         _refresher = refresher;
@@ -37,6 +38,7 @@ public class CatalogSyncService : BackgroundService
         _tagBackfill = tagBackfill;
         _albumTagBackfill = albumTagBackfill;
         _recommendedTagger = recommendedTagger;
+        _moodSeeder = moodSeeder;
         _jitter = jitter;
         _schedule = schedule;
         _logger = logger;
@@ -81,6 +83,12 @@ public class CatalogSyncService : BackgroundService
             // as "<username>_recommended". A full reconcile rather than a top-up — the set moves with
             // every like, and nothing else is in a position to take a stale marker back off.
             await _recommendedTagger.Sync();
+            // Finally, the one tag nothing else can put there: a user who has never thumbed anything
+            // down has no "_disliked" tag, so Plex has minted no id for it and Deep Frontier's
+            // exclusion cannot be written at all. Seeding it onto a record nobody wants surfacing gives
+            // the rule something to reference. Last because it reads the rating keys this pass just
+            // refreshed, and because it must not delay the work above if the anchor is missing.
+            await _moodSeeder.SeedAll();
         }
         catch (PlexUnauthorizedException ex)
         {

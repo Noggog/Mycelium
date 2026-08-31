@@ -10,8 +10,13 @@ public interface IUserRepo
     /// <summary>
     /// Upserts the user on login: profile fields and last-login are refreshed every time;
     /// first-seen is set once on initial insert.
+    ///
+    /// <para>Returns true when this login <em>created</em> the user — the one moment the app knows an
+    /// account is new, and the hook for the per-user setup that would otherwise wait on a nightly
+    /// pass (see <c>MoodTagSeeder</c>). Reported rather than inferred from the timestamps, because
+    /// "first seen equals last login" is also true of a second login in the same tick.</para>
     /// </summary>
-    Task UpsertOnLogin(AppUser user);
+    Task<bool> UpsertOnLogin(AppUser user);
 
     Task<AppUser?> Get(string subject);
 

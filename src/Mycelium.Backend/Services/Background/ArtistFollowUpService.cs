@@ -56,6 +56,7 @@ public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp, IArti
     private readonly IRelatedArtistReader _related;
     private readonly IArtistTagger _tagger;
     private readonly IAlbumTagger _albumTagger;
+    private readonly IMoodTagSeeder _moodSeeder;
     private readonly ILogger<ArtistFollowUpService> _logger;
 
     // Unbounded, but only ever holds a user's in-flight clicks — one item per rate/seed/correction.
@@ -66,12 +67,14 @@ public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp, IArti
         IRelatedArtistReader related,
         IArtistTagger tagger,
         IAlbumTagger albumTagger,
+        IMoodTagSeeder moodSeeder,
         ILogger<ArtistFollowUpService> logger)
     {
         _engine = engine;
         _related = related;
         _tagger = tagger;
         _albumTagger = albumTagger;
+        _moodSeeder = moodSeeder;
         _logger = logger;
     }
 
@@ -143,6 +146,21 @@ public class ArtistFollowUpService : BackgroundService, IAlbumTagFollowUp, IArti
             // at all, since a verdict on a record we haven't acquired yet names an artist the library
             // has never heard of. ArtistTagBackfill re-stamps it if it later arrives.
             _tagger.SetTags(artist, addTag, removeTags));
+    }
+
+    /// <summary>
+    /// Queues a brand-new user's mood-tag seed — see <see cref="MoodTagSeeder"/> for what it is and
+    /// why it can't wait for them to rate something.
+    ///
+    /// <para>Deferred for the same reason everything else here is, but with a sharper edge: the caller
+    /// is the OIDC token-validated event, so the work sits directly between the identity provider's
+    /// redirect and the user's first page. It reads the catalog and writes to Plex, neither of which
+    /// a login should ever block on — and a Plex that is down must not turn a valid login into a
+    /// failed one. Queued, it costs the login nothing and retries on the nightly pass if it fails.</para>
+    /// </summary>
+    public void QueueMoodSeed(string? username)
+    {
+        Enqueue($"mood tag seed for {username ?? "(no username)"}", () => _moodSeeder.Seed(username));
     }
 
     /// <summary>

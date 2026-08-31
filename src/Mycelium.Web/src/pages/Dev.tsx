@@ -19,6 +19,7 @@ import {
   getUserQualities,
   reapplyPlexTags,
   rebuildPlexTags,
+  seedMoodTags,
   syncRecommendedTags,
   runQualitySweep,
   setUserQuality,
@@ -636,7 +637,20 @@ function PlexTagTools() {
     onError: (e) => setStatus((e as Error).message),
   })
 
-  const busy = clear.isPending || reapply.isPending || rebuild.isPending || recommended.isPending
+  const seed = useMutation({
+    mutationFn: seedMoodTags,
+    onSuccess: (r) =>
+      setStatus(
+        r.anchor
+          ? `Seeded ${r.seeded} user(s) on "${r.anchor}".`
+          : "No anchor record in the library — nothing seeded. Deep Frontier can't exclude rejected " +
+            'artists until someone thumbs one down.',
+      ),
+    onError: (e) => setStatus((e as Error).message),
+  })
+
+  const busy =
+    clear.isPending || reapply.isPending || rebuild.isPending || recommended.isPending || seed.isPending
 
   return (
     <div className="dev-tool">
@@ -652,6 +666,12 @@ function PlexTagTools() {
         has that your liked bands point at and you haven't thumbed yet. It's derived, so{' '}
         <em>sync</em> both adds and removes it — the nightly catalog sync does the same pass, and this
         just runs it now.
+      </p>
+      <p>
+        <em>Seed</em> puts everyone's <code>_disliked</code> mood on one deliberately chosen record, so
+        Plex has minted a tag id for it before anyone has rejected anything — without one, Deep
+        Frontier can't write its "not rejected" rule at all. Runs nightly and on a new user's first
+        login; this just runs it now, and says which record it landed on.
       </p>
 
       <div className="controls">
@@ -694,6 +714,15 @@ function PlexTagTools() {
           disabled={busy}
         >
           {recommended.isPending ? 'Syncing…' : 'Sync recommended'}
+        </button>
+        <button
+          onClick={() => {
+            setStatus(null)
+            seed.mutate()
+          }}
+          disabled={busy}
+        >
+          {seed.isPending ? 'Seeding…' : 'Seed mood tags'}
         </button>
       </div>
 

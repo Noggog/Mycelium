@@ -43,6 +43,13 @@ export interface RecommendedSyncResult {
   removed: number
 }
 
+// `anchor` is the record the seed found to hang the tags on, or null when the library holds none of
+// the credits it looks for — the case where the whole pass is a silent no-op.
+export interface MoodSeedResult {
+  anchor: string | null
+  seeded: number
+}
+
 // Strip every verdict ("_liked"/"_disliked") tag from every artist — moods, plus the legacy
 // same-named collections — for a clean slate. The permanent "<user>_added" credits are left alone:
 // they're stamped on albums when an acquisition lands, and nothing could put them back.
@@ -81,6 +88,18 @@ export async function syncRecommendedTags(): Promise<RecommendedSyncResult> {
     throw new Error(`Failed to sync recommended tags: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as RecommendedSyncResult
+}
+
+// Put every user's "<username>_disliked" mood on the anchor record, so Plex has minted a tag id for it
+// before they have rejected anything — without one, Deep Frontier cannot write its exclusion rule at
+// all. The nightly sync and a new user's first login both do this; this just runs it now, and reports
+// which record it found so a library that hasn't got it doesn't fail silently.
+export async function seedMoodTags(): Promise<MoodSeedResult> {
+  const res = await fetch('/api/dev/plex-tags/seed', { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to seed the mood tags: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as MoodSeedResult
 }
 
 export interface QualitySweepResult {

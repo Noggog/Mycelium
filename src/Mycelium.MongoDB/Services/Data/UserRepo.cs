@@ -28,7 +28,7 @@ public class UserRepo : IUserRepo
     private IMongoCollection<BsonDocument> Collection =>
         _mongoDbProvider.database.GetCollection<BsonDocument>(CollectionName);
 
-    public async Task UpsertOnLogin(AppUser user)
+    public async Task<bool> UpsertOnLogin(AppUser user)
     {
         var update = Builders<BsonDocument>.Update
             .Set(FieldUsername, (BsonValue?)user.Username ?? BsonNull.Value)
@@ -41,10 +41,14 @@ public class UserRepo : IUserRepo
         // the IdP, and touching it here would undo an operator's decision on the user's next login.
         // Same for halfStarRatings, which the user themselves sets from the Playlists page.
 
-        await Collection.UpdateOneAsync(
+        var result = await Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", user.Subject),
             update,
             new UpdateOptions { IsUpsert = true });
+
+        // Mongo reports the id it had to invent, and only ever on the branch that inserted — so this is
+        // the upsert telling us it was an insert, not a guess made from the document afterwards.
+        return result.UpsertedId is not null;
     }
 
     public async Task<AppUser?> Get(string subject)

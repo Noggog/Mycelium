@@ -914,6 +914,16 @@ dev.MapPost("/recommended", async (RecommendedArtistTagger tagger) =>
     })
     .WithName("DevSyncRecommendedTags");
 
+// Run the mood-tag seed out of band, instead of waiting for the nightly sync or a new user's first
+// login. Mostly a diagnostic: the response names the anchor record it found, so an operator can tell
+// "seeded everyone" apart from the silent no-op a library without that record gets (anchor: null).
+dev.MapPost("/seed", async (MoodTagSeeder seeder) =>
+    {
+        var result = await seeder.SeedAll();
+        return Results.Ok(new { anchor = result.Anchor, seeded = result.Seeded });
+    })
+    .WithName("DevSeedMoodTags");
+
 // --- Dev panel: the server's own Plex credential ---
 // The token every library read is made with. These endpoints mint it in place: the same plex.tv PIN
 // flow the per-user link uses, pointed at the server credential, with the result stored in Mongo and
