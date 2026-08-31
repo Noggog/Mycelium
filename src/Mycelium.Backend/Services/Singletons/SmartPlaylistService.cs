@@ -24,6 +24,11 @@ public enum StockPlaylistState
 }
 
 /// <summary>One row of the Playlists page.</summary>
+/// <param name="Details">
+/// What this row's rules actually do, one clause per line — see
+/// <see cref="StockPlaylistDefinition.Details"/>. Carried through verbatim, because the page's job is
+/// to show what was generated, not to re-derive it.
+/// </param>
 /// <param name="ArtUrl">
 /// Where to load this row's cover from, or null for a row that has none — the picker's tiers, and the
 /// starters nothing has been drawn for yet. The same image the playlist is given in Plex.
@@ -31,7 +36,8 @@ public enum StockPlaylistState
 public record StockPlaylistStatus(
     string Id,
     string Title,
-    string Description,
+    string? Description,
+    IReadOnlyList<string> Details,
     StockPlaylistState State,
     string? MatchedTitle = null,
     string? MatchedRatingKey = null,
@@ -59,6 +65,11 @@ public record PlaylistSurvey(
 /// comparison — see <see cref="PlexFilterCanonicalizer"/>. Name is used for exactly one thing: spotting
 /// a playlist that holds a name we want but means something else, so we can offer to fix it rather than
 /// silently create a second playlist with the same title.</para>
+///
+/// <para><b>Titles are wrapped on the way into Plex</b> and unwrapped on the way back — see
+/// <see cref="PlaylistName"/>. Everything in this file below the two calls that cross that boundary
+/// speaks the bare title, including the name-clash check, so the wrapper can't leak into what the
+/// page shows or split one name into two.</para>
 /// </summary>
 public class SmartPlaylistService
 {
@@ -124,7 +135,7 @@ public class SmartPlaylistService
         }
 
         var created = await _playlists.CreateSmartPlaylist(
-            context.Token, definition.Title, context.SectionKey, definition.Filter!);
+            context.Token, PlaylistName.InPlex(definition.Title), context.SectionKey, definition.Filter!);
 
         await ApplyArt(context.Token, created.RatingKey, definition);
 
@@ -135,7 +146,7 @@ public class SmartPlaylistService
         return status with
         {
             State = StockPlaylistState.Exists,
-            MatchedTitle = created.Title,
+            MatchedTitle = PlaylistName.Bare(created.Title),
             MatchedRatingKey = created.RatingKey,
             TrackCount = created.LeafCount,
             Note = null,
@@ -167,7 +178,7 @@ public class SmartPlaylistService
         return status with
         {
             State = StockPlaylistState.Exists,
-            MatchedTitle = updated.Title,
+            MatchedTitle = PlaylistName.Bare(updated.Title),
             TrackCount = updated.LeafCount,
             Note = null,
         };
@@ -251,6 +262,10 @@ public class SmartPlaylistService
         // at, which the Frontier rule unions with the likes. Artists only — the sweep never puts it on
         // an album — so there is no album-vocabulary lookup to match the pair above.
         var recommendedTag = ArtistTag.Recommended(username);
+        // The thumbs-down twin of the liked pair, and the only tag used to subtract: Deep Frontier
+        // spans the whole library but must not resurface an act the user has already rejected. Both
+        // vocabularies again, for the same reason — a rejected collection carries the mood on its album.
+        var dislikedTag = ArtistTag.For(username, DiscoveryStatus.Disliked);
 
         // Everything below is independent of everything else, so it all goes out at once and the page
         // waits for the slowest rather than for the sum.
@@ -262,6 +277,9 @@ public class SmartPlaylistService
         var likedArtistTask = FindTagId(Vocabulary("mood", PlexSmartFilter.ArtistType), likedTag);
         var likedAlbumTask = FindTagId(Vocabulary("mood", PlexSmartFilter.AlbumType), likedTag);
         var recommendedArtistTask = FindTagId(Vocabulary("mood", PlexSmartFilter.ArtistType), recommendedTag);
+        // Free: both vocabularies are already in flight above, and Vocabulary hands back the same task.
+        var dislikedArtistTask = FindTagId(Vocabulary("mood", PlexSmartFilter.ArtistType), dislikedTag);
+        var dislikedAlbumTask = FindTagId(Vocabulary("mood", PlexSmartFilter.AlbumType), dislikedTag);
 
         var existing = await existingTask;
 
@@ -269,6 +287,8 @@ public class SmartPlaylistService
             await likedArtistTask,
             await likedAlbumTask,
             await recommendedArtistTask,
+            await dislikedArtistTask,
+            await dislikedAlbumTask,
             freshMonths,
             await halfStarsTask);
         var definitions = SmartPlaylistCatalog.Build(options);
@@ -346,7 +366,8 @@ public class SmartPlaylistService
         public StockPlaylistStatus Evaluate(StockPlaylistDefinition definition)
         {
             var status = new StockPlaylistStatus(
-                definition.Id, definition.Title, definition.Description, StockPlaylistState.NotCreated,
+                definition.Id, definition.Title, definition.Description, definition.Details,
+                StockPlaylistState.NotCreated,
                 ArtUrl: definition.Art is null ? null : PlaylistArt.UrlFor(definition.Art));
 
             if (definition.Filter is null)
@@ -363,7 +384,7 @@ public class SmartPlaylistService
                     return status with
                     {
                         State = StockPlaylistState.Exists,
-                        MatchedTitle = playlist.Title,
+                        MatchedTitle = PlaylistName.Bare(playlist.Title),
                         MatchedRatingKey = playlist.RatingKey,
                         TrackCount = playlist.LeafCount,
                         PlexUrl = LinkTo(playlist.RatingKey),
@@ -372,16 +393,18 @@ public class SmartPlaylistService
             }
 
             // No rule match. If something already holds the name, creating would leave two playlists
-            // called the same thing — offer to rewrite that one instead.
+            // called the same thing — offer to rewrite that one instead. Compared undecorated, so a
+            // playlist made before the wrapper existed still counts as holding the name.
             var clash = Existing.FirstOrDefault(
-                p => string.Equals(p.Title, definition.Title, StringComparison.OrdinalIgnoreCase));
+                p => string.Equals(
+                    PlaylistName.Bare(p.Title), definition.Title, StringComparison.OrdinalIgnoreCase));
 
             return clash is null
                 ? status
                 : status with
                 {
                     State = StockPlaylistState.Differs,
-                    MatchedTitle = clash.Title,
+                    MatchedTitle = PlaylistName.Bare(clash.Title),
                     MatchedRatingKey = clash.RatingKey,
                     TrackCount = clash.LeafCount,
                     Note = "This name is taken by a different playlist.",

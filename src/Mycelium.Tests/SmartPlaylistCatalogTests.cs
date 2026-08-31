@@ -15,15 +15,21 @@ public class SmartPlaylistCatalogTests
     private const string LikedArtist = "749936";
     private const string LikedAlbum = "812004";
     private const string RecommendedArtist = "901122";
+    private const string DislikedArtist = "700001";
+    private const string DislikedAlbum = "700002";
 
     private static PlexSmartFilter Filter(
         string id,
         string? likedTagId = LikedArtist,
         string? recommendedTagId = null,
+        string? dislikedArtistTagId = null,
+        string? dislikedAlbumTagId = null,
         int freshMonths = 3,
         bool halfStars = true) =>
         SmartPlaylistCatalog
-            .Build(new StockPlaylistOptions(likedTagId, null, recommendedTagId, freshMonths, halfStars))
+            .Build(new StockPlaylistOptions(
+                likedTagId, null, recommendedTagId, dislikedArtistTagId, dislikedAlbumTagId,
+                freshMonths, halfStars))
             .Single(d => d.Id == id).Filter!;
 
     [Theory]
@@ -183,6 +189,100 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
+    /// "Approved or not" means unrated, not rejected. An act the user thumbed down has already been
+    /// heard and answered, so both verdict moods are subtracted — the artist one for ordinary acts, the
+    /// album one for the collections whose umbrella credit is nobody's act to reject. Flat <c>and</c>-ed
+    /// "is not" terms, because excluding either is excluding both.
+    /// </summary>
+    [Fact]
+    public void Deep_frontier_excludes_the_artists_and_albums_the_user_thumbed_down()
+    {
+        PlexFilterSerializer.Serialize(Filter(
+                SmartPlaylistCatalog.DeepFrontierId,
+                dislikedArtistTagId: DislikedArtist,
+                dislikedAlbumTagId: DislikedAlbum))
+            .Should().Be(
+                "type=8&sort=titleSort" + FrontierBody
+                + "&and=1&artist.mood!=700001&and=1&album.mood!=700002");
+    }
+
+    /// <summary>
+    /// Each half is optional for the same reason every other tag rule here is: a Plex tag has no id
+    /// until something carries it, and a user who has only ever rejected acts (never a collection) has
+    /// no album-vocabulary tag to name.
+    /// </summary>
+    [Fact]
+    public void Deep_frontier_takes_whichever_reject_tags_exist()
+    {
+        PlexFilterSerializer.Serialize(
+                Filter(SmartPlaylistCatalog.DeepFrontierId, dislikedArtistTagId: DislikedArtist))
+            .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&artist.mood!=700001");
+
+        PlexFilterSerializer.Serialize(
+                Filter(SmartPlaylistCatalog.DeepFrontierId, dislikedAlbumTagId: DislikedAlbum))
+            .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&album.mood!=700002");
+    }
+
+    /// <summary>
+    /// The exclusion is a subtraction, never a dependency: unlike Frontier, Deep Frontier still means
+    /// something with no tags on the server at all, so it stays buildable — and the bullet that claims
+    /// the exclusion only appears when a rule backs it.
+    /// </summary>
+    [Fact]
+    public void Deep_frontier_only_claims_the_exclusion_when_a_reject_tag_exists()
+    {
+        static StockPlaylistDefinition Deep(StockPlaylistOptions options) =>
+            SmartPlaylistCatalog.Build(options).Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId);
+
+        var without = Deep(new StockPlaylistOptions());
+        without.Filter.Should().NotBeNull();
+        without.Details.Should().NotContain(d => d.Contains("rejected"));
+
+        Deep(new StockPlaylistOptions(DislikedArtistMoodTagId: DislikedArtist))
+            .Details.Should().Contain("Excludes Mycelium rejected artists and their albums");
+    }
+
+    /// <summary>
+    /// The bullets are generated from the same options the rules are, so the reject floor they name is
+    /// the user's own worst score — 1★ for a whole-star user, 0.5★ for a half-star one. A fixed number
+    /// here would describe a rule half the users don't have.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "Excludes 1★ rated songs")]
+    [InlineData(true, "Excludes 0.5★ rated songs")]
+    public void The_frontier_bullets_name_this_users_reject_floor(bool halfStars, string expected)
+    {
+        var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions(
+            LikedArtist, RecommendedArtistMoodTagId: RecommendedArtist, HalfStars: halfStars));
+
+        definitions.Single(d => d.Id == SmartPlaylistCatalog.FrontierId)
+            .Details.Should().Equal("Not heard in 1+ years", "Mycelium approved or recommended", expected);
+        definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId)
+            .Details.Should().Equal("Not heard in 1+ years", expected);
+    }
+
+    /// <summary>
+    /// A star tier is explained by its bullets rather than by a tagline: the title already says "4★+",
+    /// and the Fresh variant's second line is the only thing that distinguishes it.
+    /// </summary>
+    [Fact]
+    public void Star_tiers_spell_out_their_threshold_and_window()
+    {
+        var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions(FreshMonths: 1));
+
+        var plain = definitions.Single(d => d.Id == "stars-3");
+        plain.Description.Should().BeNull();
+        plain.Details.Should().Equal("Rated 3★ and up");
+
+        definitions.Single(d => d.Id == "stars-3-fresh")
+            .Details.Should().Equal("Rated 3★ and up", "Not played in 1 month");
+
+        SmartPlaylistCatalog.Build(new StockPlaylistOptions(FreshMonths: 6))
+            .Single(d => d.Id == "stars-3-fresh")
+            .Details.Should().Equal("Rated 3★ and up", "Not played in 6 months");
+    }
+
+    /// <summary>
     /// The plain Frontier is the same body with one more <c>and</c>-ed term: the union of the tags that
     /// say this is music the user has a claim on. Two ids of the same field is not a mistake — "liked"
     /// and "recommended" are separate moods that happen to live in the same artist vocabulary.
@@ -205,7 +305,8 @@ public class SmartPlaylistCatalogTests
     public void Frontier_also_admits_the_album_mood_a_liked_collection_carries()
     {
         var filter = SmartPlaylistCatalog
-            .Build(new StockPlaylistOptions(LikedArtist, LikedAlbum, RecommendedArtist, HalfStars: true))
+            .Build(new StockPlaylistOptions(
+                LikedArtist, LikedAlbum, RecommendedArtist, HalfStars: true))
             .Single(d => d.Id == SmartPlaylistCatalog.FrontierId).Filter!;
 
         PlexFilterSerializer.Serialize(filter).Should().Be(
@@ -358,7 +459,8 @@ public class SmartPlaylistCatalogTests
         foreach (var halfStars in new[] { true, false })
         {
             var options = new StockPlaylistOptions(
-                LikedArtist, LikedAlbum, RecommendedArtist, HalfStars: halfStars);
+                LikedArtist, LikedAlbum, RecommendedArtist, DislikedArtist, DislikedAlbum,
+                HalfStars: halfStars);
 
             foreach (var definition in SmartPlaylistCatalog.Build(options).Where(d => d.Filter is not null))
             {

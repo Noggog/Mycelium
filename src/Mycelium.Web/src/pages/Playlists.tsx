@@ -207,7 +207,17 @@ function PlaylistRow({ playlist, freshMonths }: { playlist: StockPlaylist; fresh
         <div className="playlist-row-main">
           <div className="playlist-text">
             <div className="playlist-title">{playlist.title}</div>
-            <div className="playlist-desc">{playlist.description}</div>
+            {playlist.description && <div className="playlist-desc">{playlist.description}</div>}
+            {/* The rules in plain words, so the row can be judged without opening Plex's filter
+                editor. Keyed by text: the clauses are distinct within a row and the list is
+                regenerated wholesale by the server, never reordered in place. */}
+            {playlist.details.length > 0 && (
+              <ul className="playlist-details">
+                {playlist.details.map((detail) => (
+                  <li key={detail}>{detail}</li>
+                ))}
+              </ul>
+            )}
             {playlist.note && <div className="playlist-note">{playlist.note}</div>}
           </div>
 

@@ -310,9 +310,46 @@ public class SmartPlaylistServiceTests
         var status = await _sut.Create(Subject, Username, "stars-5", 3);
 
         status.State.Should().Be(StockPlaylistState.Exists);
-        _playlists.Created.Should().ContainSingle().Which.Title.Should().Be("5★+");
+        // Wrapped, because this is the name Plex is being handed — see PlaylistName.
+        _playlists.Created.Should().ContainSingle().Which.Title.Should().Be(@"// 5★+ \\");
         _playlists.Created.Single().Filter.Rules
             .Should().Be(new PlexCondition("track.userRating", PlexOp.GreaterThan, "9"));
+        // ...and the row reports the bare name back, so nothing downstream sees the wrapper.
+        status.MatchedTitle.Should().Be("5★+");
+        status.Title.Should().Be("5★+");
+    }
+
+    /// <summary>
+    /// The wrapper marks a playlist as one of ours in a Plex sidebar full of hand-made ones, but it
+    /// must not turn one name into two: a playlist holding the bare name and one holding the wrapped
+    /// name are both "the name is taken", and neither may be reported as free.
+    /// </summary>
+    [Theory]
+    [InlineData("4★+")]
+    [InlineData(@"// 4★+ \\")]
+    public async Task A_name_clash_is_seen_through_the_wrapper(string existingTitle)
+    {
+        var somethingElse = new PlexSmartFilter(
+            PlexSmartFilter.ArtistType, new PlexCondition("track.viewCount", PlexOp.GreaterThan, "50"));
+        _playlists.Add(existingTitle, Section, somethingElse, leafCount: 7);
+
+        var row = await Row(Survey(), "stars-4");
+
+        row.State.Should().Be(StockPlaylistState.Differs);
+        // Reported bare either way — the page shows the app's spelling of the name, not Plex's.
+        row.MatchedTitle.Should().Be("4★+");
+    }
+
+    /// <summary>
+    /// A playlist the user renamed themselves keeps its own name in the survey. The unwrapping is a
+    /// strip of our own decoration, not a rewrite of whatever the user typed.
+    /// </summary>
+    [Fact]
+    public async Task An_unwrapped_name_of_the_users_own_is_reported_untouched()
+    {
+        ServerHas("// Driving music", "stars-4");
+
+        (await Row(Survey(), "stars-4")).MatchedTitle.Should().Be("// Driving music");
     }
 
     /// <summary>

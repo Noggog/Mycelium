@@ -7,6 +7,17 @@ namespace Mycelium.Backend.Services.Singletons;
 /// <see cref="Unavailable"/> explains why it can't be built for this user right now — currently only
 /// "My Library", which has nothing to filter on until the user has thumbed at least one artist.
 /// </summary>
+/// <param name="Description">
+/// A one-line tagline saying what the playlist is <em>for</em>, or null for a row whose
+/// <paramref name="Details"/> already say it — a star tier is named "4★+" and then explained by its
+/// own bullet, and a tagline there would only repeat the title.
+/// </param>
+/// <param name="Details">
+/// What the rules actually do, one clause per line, in the order they are worth reading. This is the
+/// honest half of the row: it is generated from the same options the filter is, so a clause only
+/// appears when the rule behind it does (the reject floor moves with the rating scale, and Deep
+/// Frontier only claims to exclude rejects when there is a reject tag on the server to exclude by).
+/// </param>
 /// <param name="Art">
 /// The <see cref="PlaylistArt"/> id of this playlist's cover, or null for one that has none. Only the
 /// fixed rows carry art: the tiers the picker generates are a family, not a named playlist, and
@@ -15,7 +26,8 @@ namespace Mycelium.Backend.Services.Singletons;
 public record StockPlaylistDefinition(
     string Id,
     string Title,
-    string Description,
+    string? Description,
+    IReadOnlyList<string> Details,
     PlexSmartFilter? Filter,
     string? Unavailable = null,
     string? Art = null);
@@ -39,6 +51,16 @@ public record StockPlaylistDefinition(
 /// discovery sweep puts on owned artists their liked artists point at — or null when no artist
 /// carries it yet. Artist vocabulary only: the marker is never written to an album.
 /// </param>
+/// <param name="DislikedArtistMoodTagId">
+/// The tag id of this user's "&lt;username&gt;_disliked" <em>artist</em> mood — the thumbs-down twin of
+/// the liked one — or null when nobody has been thumbed down yet. Unlike the others this is only ever
+/// used to <em>exclude</em>: see <see cref="SmartPlaylistCatalog.DeepFrontier"/>.
+/// </param>
+/// <param name="DislikedAlbumMoodTagId">
+/// The same tag in the <em>album</em> vocabulary, for the collections that carry their verdict on the
+/// record rather than on an act (<c>PlexAlbumTagger</c>). Looked up separately for the same reason the
+/// liked pair is: Plex keys tags per metadata type.
+/// </param>
 /// <param name="FreshMonths">The play-recency window for the Fresh variants.</param>
 /// <param name="HalfStars">Whether this user rates in half stars — see <see cref="SmartPlaylistCatalog.Floor"/>.</param>
 /// </summary>
@@ -46,6 +68,8 @@ public record StockPlaylistOptions(
     string? LikedArtistMoodTagId = null,
     string? LikedAlbumMoodTagId = null,
     string? RecommendedArtistMoodTagId = null,
+    string? DislikedArtistMoodTagId = null,
+    string? DislikedAlbumMoodTagId = null,
     int FreshMonths = 3,
     bool HalfStars = SmartPlaylistCatalog.DefaultHalfStars);
 
@@ -152,6 +176,21 @@ public static class SmartPlaylistCatalog
     /// <summary>How a tier is written for a human: "4★+", "3.5★+".</summary>
     internal static string TierLabel(int ratingUnits) => $"{TierStars(ratingUnits)}★+";
 
+    /// <summary>
+    /// The staleness clause both Frontier variants are built on, in the page's words. Deliberately the
+    /// shorter truth: the rule lets anything at all back in after two years, but the line a reader
+    /// needs is when music they actually rated comes back around.
+    /// </summary>
+    private const string StaleDetail = "Not heard in 1+ years";
+
+    /// <summary>
+    /// The "never play again" clause, naming <em>this</em> user's worst score — 1★ on a whole-star
+    /// scale, 0.5★ on a half-star one (see <see cref="Floor"/>). A fixed "1★" here would describe a
+    /// rule half the users don't have.
+    /// </summary>
+    private static string FloorDetail(bool halfStars) =>
+        $"Excludes {TierStars(Floor(halfStars))}★ rated songs";
+
     /// <summary>Every definition on offer, in display order.</summary>
     public static IReadOnlyList<StockPlaylistDefinition> Build(StockPlaylistOptions options)
     {
@@ -214,7 +253,8 @@ public static class SmartPlaylistCatalog
         return new StockPlaylistDefinition(
             Id: MyLibraryId,
             Title: "My Library",
-            Description: "Contains everything you've approved in Mycelium",
+            Description: null,
+            Details: new[] { "Mycelium approved artists and their albums" },
             Filter: rules.Count == 0 ? null : Sorted(PlexGroup.Flatten(PlexGroup.Any(rules.ToArray()))),
             Unavailable: rules.Count == 0
                 ? "Approve an artist first."
@@ -306,7 +346,13 @@ public static class SmartPlaylistCatalog
         return new StockPlaylistDefinition(
             Id: FrontierId,
             Title: "Frontier",
-            Description: "New or forgotten music, from bands you approve of or that are recommended to you.",
+            Description: "New or forgotten music in your wheelhouse",
+            Details: new[]
+            {
+                StaleDetail,
+                "Mycelium approved or recommended",
+                FloorDetail(options.HalfStars),
+            },
             // Flattened because a single surviving tag must be a bare condition, not a one-child
             // bracket Plex's editor would drop on the user's next save.
             Filter: tags.Count == 0
@@ -320,16 +366,51 @@ public static class SmartPlaylistCatalog
     }
 
     /// <summary>
-    /// The same idea with no tag filter at all: the whole library, however you feel about it. This is
-    /// the original hand-built Frontier verbatim, and the one to reach for when the tagged variant has
-    /// been mined out.
+    /// The same idea across the whole library rather than the part the user has a claim on: the one to
+    /// reach for when the tagged variant has been mined out.
+    ///
+    /// <para><b>Unapproved, but not rejected.</b> "Approved or not" is the point — an artist the user
+    /// has never thumbed is exactly what this playlist is for. An artist they thumbed <em>down</em> is
+    /// the opposite: they have already heard it and said no, so resurfacing it isn't a frontier, it's
+    /// ignoring them. So the verdict moods the thumbs already write are subtracted here, the same two
+    /// vocabularies <see cref="MyLibrary"/> adds: the artist mood for ordinary acts, the album mood for
+    /// the collections whose umbrella credit is nobody's act to reject.</para>
+    ///
+    /// <para>Each is <c>and</c>-ed in as its own "is not" rather than bracketed together, because
+    /// excluding either is excluding both — <c>NOT (a OR b)</c> is <c>NOT a AND NOT b</c> — and the
+    /// flat form is what Plex's own editor writes. Either may be absent: a tag has no id until
+    /// something carries it, and a user who has never thumbed anything down simply gets the rules
+    /// unchanged, which is why this variant still needs no <see cref="StockPlaylistDefinition.Unavailable"/>.</para>
     /// </summary>
-    private static StockPlaylistDefinition DeepFrontier(StockPlaylistOptions options) => new(
-        Id: DeepFrontierId,
-        Title: "Deep Frontier",
-        Description: "New or forgotten music from anywhere in the library, approved or not.",
-        Filter: Sorted(PlexGroup.All(FrontierRules(options.HalfStars))),
-        Art: PlaylistArt.DeepFrontier);
+    private static StockPlaylistDefinition DeepFrontier(StockPlaylistOptions options)
+    {
+        var exclusions = new List<PlexFilter>();
+        if (options.DislikedArtistMoodTagId is not null)
+        {
+            exclusions.Add(new PlexCondition("artist.mood", PlexOp.IsNot, options.DislikedArtistMoodTagId));
+        }
+        if (options.DislikedAlbumMoodTagId is not null)
+        {
+            exclusions.Add(new PlexCondition("album.mood", PlexOp.IsNot, options.DislikedAlbumMoodTagId));
+        }
+
+        var details = new List<string> { StaleDetail, FloorDetail(options.HalfStars) };
+        if (exclusions.Count > 0)
+        {
+            // Only claimed when a rule backs it. With no thumbs-down on the server there is nothing to
+            // exclude, and a bullet promising otherwise would be describing a different playlist.
+            details.Add("Excludes Mycelium rejected artists and their albums");
+        }
+
+        return new StockPlaylistDefinition(
+            Id: DeepFrontierId,
+            Title: "Deep Frontier",
+            Description: "New or forgotten music from the entire library",
+            Details: details,
+            Filter: Sorted(PlexGroup.All(
+                FrontierRules(options.HalfStars).Concat(exclusions).ToArray())),
+            Art: PlaylistArt.DeepFrontier);
+    }
 
     /// <summary>
     /// A star-rating tier over the whole library. The Fresh variant additionally drops anything played
@@ -353,14 +434,15 @@ public static class SmartPlaylistCatalog
     {
         var threshold = new PlexCondition("track.userRating", PlexOp.GreaterThan, Above(ratingUnits));
         var label = TierLabel(ratingUnits);
-        var stars = TierStars(ratingUnits);
+        var rated = $"Rated {TierStars(ratingUnits)}★ and up";
 
         if (freshMonths is null)
         {
             return new StockPlaylistDefinition(
                 Id: id ?? TierId(ratingUnits),
                 Title: label,
-                Description: $"Rated {stars} stars and up.",
+                Description: null,
+                Details: new[] { rated },
                 Filter: Sorted(threshold),
                 Art: art);
         }
@@ -368,8 +450,12 @@ public static class SmartPlaylistCatalog
         return new StockPlaylistDefinition(
             Id: id ?? $"{TierId(ratingUnits)}-fresh",
             Title: $"{label} (Fresh {freshMonths}mo)",
-            Description: $"Rated {stars} stars and up, not played in "
-                         + $"{freshMonths} month{(freshMonths == 1 ? "" : "s")}.",
+            Description: null,
+            Details: new[]
+            {
+                rated,
+                $"Not played in {freshMonths} month{(freshMonths == 1 ? "" : "s")}",
+            },
             Filter: Sorted(PlexGroup.All(
                 threshold,
                 new PlexCondition("track.lastViewedAt", PlexOp.LessThan, $"-{freshMonths}mon"))),

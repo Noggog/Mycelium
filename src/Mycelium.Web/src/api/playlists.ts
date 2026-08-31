@@ -82,7 +82,13 @@ export type StockPlaylistState = 'NotCreated' | 'Exists' | 'Differs' | 'Unavaila
 export interface StockPlaylist {
   id: string
   title: string
-  description: string
+  // A one-line tagline, or null for a row the bullets below already explain — a star tier is named
+  // "4★+" and a tagline there would only repeat the title.
+  description: string | null
+  // What the rules actually do, one clause per line. Generated alongside the filter, so a clause is
+  // only present when the rule behind it is: the reject floor follows the user's rating scale, and
+  // Deep Frontier only claims to exclude rejected artists when there is a tag to exclude by.
+  details: string[]
   state: StockPlaylistState
   matchedTitle: string | null
   matchedRatingKey: string | null
