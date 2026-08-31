@@ -86,6 +86,57 @@ public class PlexPlaylistApi : IPlexPlaylistApi
         return read.OfType<PlexPlaylist>().ToArray();
     }
 
+    public async Task<PlexPlaylist[]> GetAudioPlaylists(string token)
+    {
+        // No smart filter: the archive wants the hand-built playlists too, and those are the ones a
+        // rebuild couldn't reproduce.
+        var listing = await Send(HttpMethod.Get, "/playlists?playlistType=audio", token);
+        var metadata = listing?["MediaContainer"]?["Metadata"] as JArray;
+        if (metadata is null)
+        {
+            return Array.Empty<PlexPlaylist>();
+        }
+
+        var keys = metadata.OfType<JObject>()
+            .Select(entry => entry["ratingKey"]?.ToString())
+            .Where(key => key is not null)
+            .ToArray();
+
+        // Same fixed-slot pattern as the smart listing: concurrency for latency, without shuffling the
+        // order the server gave.
+        var read = new PlexPlaylist?[keys.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, keys.Length),
+            new ParallelOptions { MaxDegreeOfParallelism = PlaylistReadConcurrency },
+            async (i, _) => read[i] = await ReadPlaylist(token, keys[i]!));
+
+        return read.OfType<PlexPlaylist>().ToArray();
+    }
+
+    public async Task<PlexPlaylistItem[]> GetPlaylistItems(string token, string ratingKey)
+    {
+        var response = await Send(HttpMethod.Get, $"/playlists/{ratingKey}/items", token, allowNotFound: true);
+        if (response?["MediaContainer"]?["Metadata"] is not JArray metadata)
+        {
+            // A playlist that has been deleted between the listing and this read, or one with no tracks.
+            return Array.Empty<PlexPlaylistItem>();
+        }
+
+        var items = new List<PlexPlaylistItem>(metadata.Count);
+        var position = 1;
+        foreach (var entry in metadata.OfType<JObject>())
+        {
+            items.Add(new PlexPlaylistItem(
+                Position: position++,
+                Artist: entry["grandparentTitle"]?.ToString(),
+                Album: entry["parentTitle"]?.ToString(),
+                Title: entry["title"]?.ToString(),
+                File: entry["Media"]?.FirstOrDefault()?["Part"]?.FirstOrDefault()?["file"]?.ToString()));
+        }
+
+        return items.ToArray();
+    }
+
     public async Task<PlexPlaylist> CreateSmartPlaylist(
         string token, string title, int sectionKey, PlexSmartFilter filter)
     {

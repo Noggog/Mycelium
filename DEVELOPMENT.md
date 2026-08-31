@@ -90,6 +90,8 @@ AppHost env vars to child services).
 | `PLEX_APP_PRODUCT` | No | Name this app shows under in a user's Plex authorised-devices list (default `Mycelium`) |
 | `PLEX_CLIENT_IDENTIFIER` | No | Stable device id used when linking a user's Plex account (default `mycelium`) — see below |
 | `MONGO_URI` | No (auto) | Mongo connection string |
+| `METADATA_REPO_PATH` | No | Metadata archive checkout. **Unset = archiving off** |
+| `METADATA_REPO_REMOTE` | No | Optional push target for the archive |
 
 There are no hardcoded defaults — every value comes from the environment.
 
@@ -136,6 +138,43 @@ Notes:
   connection string — you don't set it yourself when running via the AppHost.
 - Spotify client credentials are still hardcoded in `MainModule` (should be externalized;
   the Spotify path is deprecated anyway — see Known Issues).
+
+### Metadata archive (git)
+
+The app can commit a nightly snapshot of everything we own that a machine can't re-derive — the
+library inventory, per-user verdicts, who brought each record in, blocks and identity pins — into a
+git repository. The point is ownership: if Mongo, Plex and Authentik all vanished, that repo plus the
+music files is enough to rebuild. See `METADATA-ARCHIVE.md` for the design and the remaining phases.
+
+`METADATA_REPO_PATH` turns it on, and the Docker image pins it to `/archive` — so in a container
+deployment it is always on, and compose's only job is to bind a persistent directory there. Left
+unset (a bare `dotnet run` in local dev) archiving does nothing. It runs daily at `DAILY_SYNC_HOUR + METADATA_ARCHIVE_HOUR_OFFSET` (default
++2h, so it lands after both daily syncs), and `POST /api/dev/archive/snapshot` takes one on demand.
+
+Three things worth knowing before changing any of it:
+
+- **It commits only when the bytes change.** That's what keeps `git log` a readable history rather
+  than 365 empty commits a year — and it's why `CanonicalJson` sorts keys and why no tracked file
+  carries a generated-at timestamp. Break either and the archive silently commits every night.
+- **It never writes `plexLinks.serverToken`.** Git history is forever. `ArchiveBuilderTests` and
+  `MetadataArchiverTests` both assert this; keep it that way.
+- **Per-user files are keyed by username, not by OIDC subject.** Subjects are reissued if Authentik
+  is rebuilt, which would orphan every rating. The subject is kept as a field in `users.jsonl` so an
+  exact restore is still possible.
+
+The archive is a pure Mongo→git path — it never talks to Plex. Star ratings and playlists, which
+live nowhere but Plex, are mirrored into Mongo first by two weekly harvesters (`StarHarvester`,
+`PlaylistHarvester`, both on `RECONSIDER_SWEEP_INTERVAL_DAYS`), and archived from there. That keeps
+the snapshot to one source and one failure mode, so a Plex outage can't stop it being taken.
+
+Two rules in the harvesters that look like bugs and aren't:
+
+- **Unlinking a Plex account does not empty that user's mirror.** "We can't read your ratings" is not
+  "you have none", and wiping would discard the only copy that outlives Plex. A *successful* read is
+  still authoritative, so un-rating a song does propagate.
+- **Smart playlists archive their rules, not their members.** The rules are the durable thing; the
+  membership is only their current answer, and it goes stale the moment the library changes.
+  Hand-built playlists are the opposite — the ordered track list *is* the playlist.
 
 ## Infrastructure Dependencies
 

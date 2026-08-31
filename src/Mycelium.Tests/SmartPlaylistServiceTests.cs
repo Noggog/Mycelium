@@ -760,6 +760,15 @@ public class SmartPlaylistServiceTests
             + Uri.EscapeDataString(
                 $"/library/sections/{sectionKey}/all?{PlexFilterSerializer.Serialize(filter)}");
 
+        // The stock-playlist feature only ever deals in smart playlists; the archive's whole-listing
+        // and membership reads are exercised by PlaylistHarvesterTests instead. Throwing rather than
+        // returning empty so a future caller here can't quietly get a wrong answer.
+        public Task<PlexPlaylist[]> GetAudioPlaylists(string token) =>
+            throw new NotSupportedException("SmartPlaylistService should not read non-smart playlists");
+
+        public Task<PlexPlaylistItem[]> GetPlaylistItems(string token, string ratingKey) =>
+            throw new NotSupportedException("SmartPlaylistService should not read playlist membership");
+
         public Task<PlexPlaylist[]> GetSmartAudioPlaylists(string token)
         {
             TokensSeen.Add(token);

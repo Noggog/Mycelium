@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Mycelium.Backend;
+using Mycelium.Backend.Services.Archive;
 using Mycelium.Backend.Services.Auth;
 using Mycelium.Backend.Services.Background;
 using Mycelium.Backend.Services.Download;
@@ -71,6 +72,21 @@ builder.Services.AddHostedService<QueueReplenishService>();
 // discovery categories. Slow by design (weekly, via RECONSIDER_SWEEP_INTERVAL_DAYS) — it exists to
 // re-litigate verdicts made years ago.
 builder.Services.AddHostedService<ReconsiderSweepService>();
+
+// Commits a snapshot of the metadata we own — taste, acquisitions, identity pins, blocks — into a git
+// repository, so none of it depends on Mongo, Plex or the identity provider surviving. Daily, two
+// hours past DAILY_SYNC_HOUR so it records a freshly-synced library. Inert unless METADATA_REPO_PATH
+// is set.
+builder.Services.AddHostedService<MetadataArchiveService>();
+
+// Mirrors each linked user's Plex star ratings into Mongo. Ratings live nowhere but Plex, so without
+// this they're the data a Plex failure takes with it; the archive can only commit what Mongo holds.
+// Weekly, on the same clock as the reconsider sweep (RECONSIDER_SWEEP_INTERVAL_DAYS).
+builder.Services.AddHostedService<StarHarvestService>();
+
+// The same, for playlists. They're created in the user's own Plex account and stored nowhere else, so
+// a hand-curated one is the least reconstructable thing in the system.
+builder.Services.AddHostedService<PlaylistHarvestService>();
 
 // The Deezer download engine (DownloadService) is registered in MainModule as a shared singleton
 // hosted service, so the "download now" endpoint and the drainer loop are the same instance.
@@ -983,6 +999,44 @@ api.MapPost("/dev/catalog/quality-sweep", async (CatalogRefresher refresher) =>
     })
     .RequireAuthorization("DevUser")
     .WithName("DevAudioQualitySweep");
+
+// --- Dev panel: metadata archive ---
+// Takes a snapshot now rather than waiting for the nightly pass — for verifying the archive is wired
+// up, and for capturing a deliberate change straight after making it. Idempotent: a snapshot with
+// nothing to say commits nothing, so this is safe to press repeatedly.
+api.MapPost("/dev/archive/snapshot", async (MetadataArchiver archiver) =>
+    {
+        var result = await archiver.Snapshot();
+        return Results.Ok(new
+        {
+            outcome = result.Outcome.ToString(),
+            commit = result.CommitSha,
+            pushed = result.Pushed,
+            error = result.Error,
+        });
+    })
+    .RequireAuthorization("DevUser")
+    .WithName("DevArchiveSnapshot");
+
+// --- Dev panel: Plex harvests ---
+// Mirror star ratings / playlists out of Plex now rather than waiting for the weekly pass. Both are
+// full per-account library reads (~22s each against a real server), so these are deliberately manual
+// and dev-gated. Safe to press repeatedly: each is a wholesale replace of what it just read.
+api.MapPost("/dev/archive/harvest-stars", async (StarHarvester harvester) =>
+    {
+        var result = await harvester.HarvestAll();
+        return Results.Ok(new { users = result.Users, ratings = result.Ratings, skipped = result.Skipped });
+    })
+    .RequireAuthorization("DevUser")
+    .WithName("DevHarvestStars");
+
+api.MapPost("/dev/archive/harvest-playlists", async (PlaylistHarvester harvester) =>
+    {
+        var result = await harvester.HarvestAll();
+        return Results.Ok(new { users = result.Users, playlists = result.Playlists, skipped = result.Skipped });
+    })
+    .RequireAuthorization("DevUser")
+    .WithName("DevHarvestPlaylists");
 
 // --- Dev panel: per-user download quality ---
 // Who is allowed to pull down lossless. The list is the app's own user store, which is populated on

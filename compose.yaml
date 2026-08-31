@@ -32,7 +32,7 @@ services:
       MONGO_URI: mongodb://mongo:27017
       # --- Deezer downloads (streamrip). The ARL lives in streamrip's own config volume. ---
       # Automatic vs. manual draining isn't set here: it's the Download page's switch, stored in Mongo.
-      MUSIC_DOWNLOAD_DIR: /music
+      # Downloads land at /music, fixed by the Dockerfile — bind your Plex music storage there below.
       DEEZER_QUALITY: ${DEEZER_QUALITY:-2}
       DEEZER_FALLBACK_QUALITY: ${DEEZER_FALLBACK_QUALITY:-1}
       # Tier for an account with no per-user setting. Default-deny; existing users are backfilled to
@@ -44,6 +44,22 @@ services:
       # The daily catalog/album syncs run at DAILY_SYNC_HOUR in *this container's* local time, so set
       # TZ if you want "6am" to mean 6am where the server is (the image is UTC otherwise).
       TZ: ${TZ:-UTC}
+      # --- Metadata archive (git) ---
+      # A nightly commit of the data we own — taste, acquisitions, identity pins, blocks — so none of
+      # it depends on Mongo, Plex or Authentik surviving. The repo holds usernames: keep it private.
+      #
+      # The archive lives at /archive inside the container (the Dockerfile sets METADATA_REPO_PATH);
+      # all this stack does is mount a directory there — see volumes below.
+      # Optional push target, e.g. https://<user>:<token>@git.example.com/you/mycelium-metadata.git
+      # or git@... with a key mounted in. Unset = commit locally only, which is already a full copy.
+      METADATA_REPO_REMOTE: ${METADATA_REPO_REMOTE:-}
+      METADATA_REPO_BRANCH: ${METADATA_REPO_BRANCH:-main}
+      METADATA_COMMIT_NAME: ${METADATA_COMMIT_NAME:-Mycelium}
+      METADATA_COMMIT_EMAIL: ${METADATA_COMMIT_EMAIL:-mycelium@localhost}
+      # Set to true only for a remote on your own LAN using a self-signed certificate (a Forgejo/Gitea
+      # box reached by IP, typically). git reads this itself; it disables certificate verification for
+      # the push, so never point it at a remote you don't control.
+      GIT_SSL_NO_VERIFY: ${GIT_SSL_NO_VERIFY:-}
       # Optional knobs (left unset -> backend defaults): TIMER_JITTER_PERCENT, RELATED_STALENESS_DAYS,
       # DAILY_SYNC_HOUR, QUEUE_REPLENISH_INTERVAL_HOURS, DEEZER_CODEC, DOWNLOAD_BATCH_SIZE,
       # DOWNLOAD_ITEM_DELAY_SECONDS, DOWNLOAD_BATCH_INTERVAL_MINUTES,
@@ -52,12 +68,18 @@ services:
       # DOWNLOAD_FAST_SETTLE_WINDOW_MINUTES, PLEX_RESCAN_AFTER_DOWNLOAD, PLEX_RESCAN_DEBOUNCE_MINUTES,
       # PLEX_RESCAN_FAST_DEBOUNCE_SECONDS,
       # RECONSIDER_MIN_AVG_STARS, RECONSIDER_MAX_AVG_STARS, RECONSIDER_MIN_RATED_FRACTION,
-      # RECONSIDER_SWEEP_INTERVAL_DAYS, PLEX_APP_PRODUCT, PLEX_CLIENT_IDENTIFIER.
+      # RECONSIDER_SWEEP_INTERVAL_DAYS, PLEX_APP_PRODUCT, PLEX_CLIENT_IDENTIFIER,
+      # METADATA_ARCHIVE_HOUR_OFFSET, METADATA_GIT_TIMEOUT_MINUTES.
     volumes:
       # Downloads must land where Plex scans — point this host path at your Plex music library.
       - ${MUSIC_DOWNLOAD_DIR_HOST}:/music
       # streamrip config (Deezer ARL + folder_format) — bind-mounted so you can edit config.toml.
       - ${STREAMRIP_CONFIG_HOST}:/config
+      # The metadata archive's git repository. Point the left side at wherever you want the archive
+      # to live — you can `cd` in and `git log` it directly, which is rather the point of it.
+      # It has to be persistent storage: git cannot push without a local repo, and a fresh one on
+      # every restart would be rejected by a remote that already has history.
+      - /srv/appdata/mycelium/metadata:/archive
       - app_logs:/app/logs
     # Start order only — deliberately NOT `condition: service_healthy`. Under Podman the healthcheck
     # is driven by a transient systemd timer, and when that doesn't fire the compose wait sat on

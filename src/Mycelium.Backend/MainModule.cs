@@ -1,5 +1,6 @@
 ﻿using Autofac;
 using Microsoft.Extensions.Hosting;
+using Mycelium.Backend.Services.Archive;
 using Mycelium.Backend.Services.Background;
 using Mycelium.Backend.Services.Download;
 using Mycelium.Backend.Services.Singletons;
@@ -126,6 +127,16 @@ public class MainModule : Autofac.Module
         builder.RegisterType<UserQualityService>().AsSelf().SingleInstance()
             .WithParameter("defaultQuality", DefaultAudioQuality());
 
+        // The metadata archive: a nightly commit of everything a person decided (taste, acquisitions,
+        // identity pins, blocks) into a git repository we own, so the data survives losing Mongo, Plex
+        // or the identity provider. Off entirely unless METADATA_REPO_PATH is set. Registered by hand
+        // because Services.Archive, like Services.Download and Services.Background, isn't covered by
+        // the assembly scan below.
+        builder.RegisterInstance(BuildMetadataArchiveConfig(syncHour));
+        builder.RegisterType<ArchiveBuilder>().AsSelf().SingleInstance();
+        builder.RegisterType<GitRepository>().As<IGitRepository>().AsSelf().SingleInstance();
+        builder.RegisterType<MetadataArchiver>().AsSelf().SingleInstance();
+
         builder.RegisterAssemblyTypes(typeof(LibraryProvider).Assembly)
             .InNamespacesOf(
                 typeof(LibraryProvider))
@@ -208,6 +219,40 @@ public class MainModule : Autofac.Module
             SettleWindow: TimeSpan.FromHours(EnvDouble("DOWNLOAD_SETTLE_WINDOW_HOURS", 6)),
             FastSettleInterval: TimeSpan.FromSeconds(EnvDouble("DOWNLOAD_FAST_SETTLE_INTERVAL_SECONDS", 10)),
             FastSettleWindow: TimeSpan.FromMinutes(EnvDouble("DOWNLOAD_FAST_SETTLE_WINDOW_MINUTES", 2)));
+    }
+
+    /// <summary>
+    /// Where the metadata archive lives, and when it commits. Everything is optional: with no
+    /// <c>METADATA_REPO_PATH</c> the feature is simply off.
+    /// </summary>
+    /// <param name="syncHour">
+    /// The daily sync hour, so the snapshot can be anchored relative to it rather than configured
+    /// twice. Two hours later by default, which puts it past both the catalog read and the Deezer
+    /// album diff — the archive should record a freshly-synced library, not race one.
+    /// </param>
+    private static MetadataArchiveConfig BuildMetadataArchiveConfig(int syncHour)
+    {
+        static string? Env(string name)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+
+        var offset = int.TryParse(
+            Environment.GetEnvironmentVariable("METADATA_ARCHIVE_HOUR_OFFSET"), out var o) ? o : 2;
+
+        return new MetadataArchiveConfig(
+            RepoPath: Env("METADATA_REPO_PATH"),
+            Remote: Env("METADATA_REPO_REMOTE"),
+            Branch: Env("METADATA_REPO_BRANCH") ?? "main",
+            SnapshotAt: new TimeOnly(syncHour, 0).AddHours(offset),
+            CommitName: Env("METADATA_COMMIT_NAME") ?? "Mycelium",
+            CommitEmail: Env("METADATA_COMMIT_EMAIL") ?? "mycelium@localhost",
+            GitBinary: Env("GIT_BIN") ?? "git",
+            CommandTimeout: TimeSpan.FromMinutes(
+                double.TryParse(Environment.GetEnvironmentVariable("METADATA_GIT_TIMEOUT_MINUTES"), out var t)
+                    ? t
+                    : 5));
     }
 
     private static LibraryScannerConfig BuildLibraryScannerConfig()

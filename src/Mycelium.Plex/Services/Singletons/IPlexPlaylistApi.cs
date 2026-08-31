@@ -21,6 +21,20 @@ public record PlexPlaylist(string RatingKey, string Title, bool Smart, int LeafC
         PlexFilterParser.TryParseContent(Content, out sectionKey, out filter);
 }
 
+/// <summary>
+/// One track in a hand-built playlist, at its position in the running order.
+/// </summary>
+/// <param name="Position">
+/// 1-based index in the playlist. Order is part of what a curated playlist *is*, so it is stored
+/// rather than left to whatever sequence the rows happen to come back in.
+/// </param>
+/// <param name="File">
+/// The backing file in the server's own path namespace — the identity that outlives this Plex install,
+/// since rating keys are reissued by a rebuild and files are not.
+/// </param>
+public record PlexPlaylistItem(
+    int Position, string? Artist, string? Album, string? Title, string? File);
+
 /// <summary>One entry of a section's tag vocabulary — <see cref="Key"/> is the numeric id rules store.</summary>
 public record PlexTagEntry(string Key, string Title);
 
@@ -44,6 +58,27 @@ public interface IPlexPlaylistApi
     /// rules, whatever it's asked.
     /// </summary>
     Task<PlexPlaylist[]> GetSmartAudioPlaylists(string token);
+
+    /// <summary>
+    /// <b>Every</b> audio playlist visible to <paramref name="token"/>'s account — hand-built ones as
+    /// well as smart ones — each with its rules loaded where it has any.
+    ///
+    /// <para>Distinct from <see cref="GetSmartAudioPlaylists"/>, which filters to <c>smart=1</c> server
+    /// side because the stock-playlist feature only ever manages rule-driven playlists. This one exists
+    /// for the metadata archive, and there the hand-built playlists are the ones that matter most: a
+    /// smart playlist is a query and will rebuild itself anywhere, whereas a manually curated track
+    /// list is human work that nothing can reconstruct.</para>
+    /// </summary>
+    Task<PlexPlaylist[]> GetAudioPlaylists(string token);
+
+    /// <summary>
+    /// The tracks of one playlist, in playlist order, with enough identity to be re-created elsewhere.
+    ///
+    /// <para>Only meaningful for a non-smart playlist: a smart playlist's membership is the live result
+    /// of its rules, so storing a snapshot of it would archive an answer where the question is the
+    /// durable thing.</para>
+    /// </summary>
+    Task<PlexPlaylistItem[]> GetPlaylistItems(string token, string ratingKey);
 
     /// <summary>Creates a smart audio playlist owned by <paramref name="token"/>'s account.</summary>
     Task<PlexPlaylist> CreateSmartPlaylist(

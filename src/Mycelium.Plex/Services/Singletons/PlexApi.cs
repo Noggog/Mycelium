@@ -202,6 +202,72 @@ public class PlexApi : IPlexApi
         return results.ToArray();
     }
 
+    /// <summary>
+    /// The whole library's *rated* tracks, read as one account. Same paged sweep as
+    /// <see cref="GetMusicTracks"/>, with two differences that matter: it goes out under the user's own
+    /// token, because <c>userRating</c> belongs to whoever asks; and it keeps identity (artist, album,
+    /// title, track number, file) rather than codecs, because these rows are meant to survive this
+    /// server.
+    /// </summary>
+    public async Task<PlexRatedTrack[]> GetRatedTracks(int library, string token)
+    {
+        const int pageSize = 5000;
+        var results = new List<PlexRatedTrack>();
+        var start = 0;
+        int? total = null;
+
+        while (total is null || start < total)
+        {
+            var url = $"{_endpointInfo.BaseUri}/library/sections/{library}/all?type=10"
+                      + $"&X-Plex-Container-Start={start}&X-Plex-Container-Size={pageSize}"
+                      + "&excludeElements=Genre,Image,Mood,Style,Collection";
+
+            var response = await httpClient.SendAsync(AsToken(HttpMethod.Get, url, token));
+            response.EnsureSuccessStatusCode();
+            var data = JObject.Parse(await response.Content.ReadAsStringAsync());
+
+            var container = data["MediaContainer"];
+            total ??= container?["totalSize"]?.Value<int>() ?? container?["size"]?.Value<int>() ?? 0;
+
+            var metadata = container?["Metadata"] as JArray;
+            var returned = metadata?.Count ?? 0;
+            if (returned == 0)
+            {
+                break;
+            }
+
+            foreach (var item in metadata!)
+            {
+                // Unrated tracks are the overwhelming majority and carry nothing worth keeping. Plex
+                // reports "not rated" as an absent field on some servers and as 0 on others; neither is
+                // a rating anyone gave.
+                var rating = item["userRating"]?.Value<double?>();
+                if (rating is null or <= 0)
+                {
+                    continue;
+                }
+
+                results.Add(new PlexRatedTrack
+                {
+                    RatingKey = int.TryParse(item["ratingKey"]?.ToString(), out var key) ? key : 0,
+                    Artist = item["grandparentTitle"]?.ToString(),
+                    Album = item["parentTitle"]?.ToString(),
+                    Title = item["title"]?.ToString(),
+                    TrackNumber = int.TryParse(item["index"]?.ToString(), out var index) ? index : null,
+                    File = item["Media"]?.FirstOrDefault()?["Part"]?.FirstOrDefault()?["file"]?.ToString(),
+                    UserRating = rating.Value,
+                });
+            }
+
+            start += returned;
+        }
+
+        _logger.LogInformation(
+            "Plex GetRatedTracks: {Count} rated track(s) in library {Library} for the calling account",
+            results.Count, library);
+        return results.ToArray();
+    }
+
     public async Task<PlexLibraryTrack[]> GetAlbumTracks(int albumRatingKey)
     {
         var url = $"{_endpointInfo.BaseUri}/library/metadata/{albumRatingKey}/children";
@@ -512,6 +578,39 @@ public record PlexLibraryTrack
     /// reported no part.
     /// </summary>
     public string? File { get; set; }
+}
+
+/// <summary>
+/// One rated track from a per-account library sweep. Unlike <see cref="PlexLibraryTrack"/> this
+/// carries identity rather than codecs, because it is meant to outlive the server it came from: a
+/// rating key is a local handle that a rebuilt Plex reissues, so the durable keys are the file path
+/// (the files are the library) and the artist/album/title triple that a person can read.
+/// </summary>
+public record PlexRatedTrack
+{
+    /// <summary>Plex's own handle. Useful within this server's lifetime; not an identity.</summary>
+    public int RatingKey { get; set; }
+
+    /// <summary>The crediting artist (<c>grandparentTitle</c>).</summary>
+    public string? Artist { get; set; }
+
+    /// <summary>The album (<c>parentTitle</c>).</summary>
+    public string? Album { get; set; }
+
+    public string? Title { get; set; }
+
+    /// <summary>Track number within the album (<c>index</c>), for ordering and disambiguation.</summary>
+    public int? TrackNumber { get; set; }
+
+    /// <summary>
+    /// The backing file, in Plex's own path namespace (see LibraryPathMap before touching it). The
+    /// most durable key available: the files outlive the server that indexed them.
+    /// </summary>
+    public string? File { get; set; }
+
+    /// <summary>Plex's 0-10 scale, halved to stars by the caller. Only rated tracks are returned, so
+    /// this is always a real rating.</summary>
+    public double UserRating { get; set; }
 }
 
 public record PlexMusicAlbum

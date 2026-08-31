@@ -33,6 +33,23 @@ public interface IPlexApi
     Task<PlexLibraryTrack[]> GetMusicTracks(int library);
 
     /// <summary>
+    /// Every track in the library that <paramref name="token"/>'s account has given a star rating,
+    /// carrying enough identity to mean something outside this Plex server: the artist, album, title
+    /// and track number, plus the backing file path.
+    ///
+    /// <para>Separate from <see cref="GetMusicTracks"/> because that read is deliberately untokenised
+    /// and drops <c>userRating</c> — ratings belong to whichever account asks, so a library-wide read
+    /// made as the app would report the owner's stars to everyone. Separate from
+    /// <see cref="GetArtistTracks"/> because that one answers "how does this user rate this artist"
+    /// and returns only a title and a number, which is enough to average and not enough to keep.</para>
+    ///
+    /// <para>Only rated tracks come back — in a typical library that is a small fraction of the whole,
+    /// so one paged sweep per account is cheaper than it sounds and far cheaper than a request per
+    /// artist.</para>
+    /// </summary>
+    Task<PlexRatedTrack[]> GetRatedTracks(int library, string token);
+
+    /// <summary>
     /// The tracks of one album, for reading its codecs without sweeping the whole library. ~14ms per
     /// call against a real server, so resolving a handful of newly-arrived albums is far cheaper than
     /// re-reading all ~82k tracks. Empty when the rating key no longer resolves.

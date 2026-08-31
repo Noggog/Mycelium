@@ -33,8 +33,11 @@ WORKDIR /app
 # when every track failed, and has no per-track quality downgrade — that landed on streamrip's dev
 # branch after 2.1.0). An unpinned install would change the download path on any image rebuild, so
 # bump this deliberately and re-check StreamripDownloader's verification when you do.
+# git is here for the metadata archive: the app commits a nightly snapshot of the data we own
+# (taste, acquisitions, identity pins) into a repository on a mounted volume. A real git rather than
+# an embedded library, so the archive stays an ordinary repo you can walk into and operate by hand.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg ca-certificates \
+    && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg ca-certificates git \
     && python3 -m venv /opt/streamrip \
     && /opt/streamrip/bin/pip install --no-cache-dir streamrip==2.1.0 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -42,10 +45,19 @@ RUN apt-get update \
 # STREAMRIP_BIN: where the backend finds `rip`. XDG_CONFIG_HOME: where streamrip reads its config
 # (the Deezer ARL lives in /config/streamrip/config.toml — a mounted volume, not in the image).
 # ASPNETCORE_HTTP_PORTS pins Kestrel to 8080.
+# The paths below are the container's own and are fixed here rather than asked for in compose: what
+# gets mounted at each is the deployment's business, and the app has no reason to care. A deployment
+# only has to bind a directory to the mount point.
+#   METADATA_REPO_PATH  the metadata archive's git repository. Declaring it here also keeps local dev
+#                       (which doesn't use this image) archive-free, since the backend reads an unset
+#                       path as "archiving off".
+#   MUSIC_DOWNLOAD_DIR  where downloads land — must be the storage Plex scans.
 ENV STREAMRIP_BIN=/opt/streamrip/bin/rip \
     XDG_CONFIG_HOME=/config \
+    METADATA_REPO_PATH=/archive \
+    MUSIC_DOWNLOAD_DIR=/music \
     ASPNETCORE_HTTP_PORTS=8080
-RUN mkdir -p /config /music /app/logs
+RUN mkdir -p /config /music /app/logs /archive
 
 COPY --from=build /app ./
 # The SPA is served as static files from wwwroot (see Program.cs UseStaticFiles + MapFallbackToFile).
