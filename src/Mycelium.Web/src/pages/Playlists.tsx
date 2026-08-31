@@ -278,7 +278,9 @@ const WHOLE_STAR_KEY: Record<string, string> = {
 // How this user rates in Plex. There is no way to ask Plex: half-star support is a per-client
 // capability — Plexamp offers it, Plex Web can only set whole stars — and no server or account
 // setting exposes which one someone actually uses. It matters because the lowest score a user can
-// give is the one that means "never play again", and Frontier has to leave that music alone.
+// give is the one that means "never play again", and Frontier has to leave that music alone — and
+// because the extra rungs move where Frontier's own lines fall: 2.5★ ("stuff to have on") is music
+// worth resurfacing after a year, where the whole-star scale's nearest rung is 2★, "meh".
 function RatingScale({ halfStars, busy }: { halfStars: boolean; busy: boolean }) {
   const patchSurvey = usePatchSurvey()
 

@@ -147,8 +147,9 @@ public static class SmartPlaylistCatalog
     /// <summary>
     /// The user's "never play again" rating — the lowest one they can express. 0.5★ (1 unit) for
     /// someone rating in half stars, 1★ (2 units) for someone whose client only offers whole ones.
-    /// This is the <em>only</em> number the scale changes, and Frontier's bottom two bands are built
-    /// from it: at or below the floor is rejected, above it is undecided.
+    /// Frontier's bottom two bands are built from it: at or below the floor is rejected, above it is
+    /// undecided. (The other number the scale moves is the one-year staleness lane — see
+    /// <see cref="StaleAfterOneYear"/> — and it moves for a different reason.)
     /// </summary>
     internal static int Floor(bool halfStars) => halfStars ? 1 : 2;
 
@@ -204,7 +205,8 @@ public static class SmartPlaylistCatalog
     /// <summary>
     /// The staleness clause both Frontier variants are built on, in the page's words. Deliberately the
     /// shorter truth: the rule lets anything at all back in after two years, but the line a reader
-    /// needs is when music they actually rated comes back around.
+    /// needs is when music they actually rated comes back around. "Heard" rather than "played" is
+    /// exact — the rule counts a skip as a hearing (see <see cref="FrontierRules"/>).
     /// </summary>
     private const string StaleDetail = "Not heard in 1+ years";
 
@@ -289,49 +291,85 @@ public static class SmartPlaylistCatalog
     }
 
     /// <summary>
+    /// The rating from which a track only has to age a <em>year</em> rather than two, in rating units:
+    /// 3★ on a whole-star scale, 2.5★ for someone rating in halves.
+    ///
+    /// <para>The idea is "music I said yes to", and where that line falls depends on what the user can
+    /// actually say. The rating key the app shows beside the scale question is the ground truth: on a
+    /// whole-star scale 2★ is "meh", the shrug below the yes, so the lane starts at 3★. A half-star
+    /// user has a rung in between — 2.5★, "stuff to have on, not too opinionated" — which is music
+    /// they do want played, just without an opinion about it, so their lane starts a half-step lower.
+    /// It is not simply <c>Floor + n</c>: the floor moves because the worst expressible score moves,
+    /// this moves because a whole extra rung exists.</para>
+    /// </summary>
+    private static int StaleAfterOneYear(bool halfStars) => halfStars ? 5 : 6;
+
+    /// <summary>
     /// The staleness and worth-hearing halves shared by both Frontier variants — "things you either
     /// haven't heard in a long time, or have barely played", weighted so that well-rated music has to
     /// age longer before it comes back around than unrated or poorly-rated music does.
     ///
     /// <para>Reproduced from a hand-built playlist, minus its two library-specific exclusions (moods
     /// tagged "interlude" and "delete"), which are personal housekeeping rather than part of the idea,
-    /// and with the one-year lane opened up to take in 3★ itself rather than starting above it.</para>
+    /// and with the one-year lane opened up to take in its own bottom rating rather than starting above
+    /// it.</para>
     ///
-    /// <para><b>The floor is the only thing the rating scale moves.</b> The bottom two bands are
-    /// written against <see cref="Floor"/> rather than a fixed rating, because "the worst score I can
-    /// give" is 0.5★ for one user and 1★ for another — and a track at that score should not be dragged
-    /// back out by a playlist whose whole premise is that you might still want to hear it. At half
-    /// stars this is exactly the hand-built original; at whole stars the rejected band widens to take
-    /// in 1★ and the undecided band above it narrows to match.</para>
+    /// <para><b>A skip counts as a play.</b> Plex keeps the two apart — finishing a track moves
+    /// <c>viewCount</c> and <c>lastViewedAt</c>, reaching for the next-track button moves
+    /// <c>skipCount</c> and <c>lastSkippedAt</c> instead — but for this playlist they mean the same
+    /// thing. Every clause below therefore comes in a pair, because the question each is really asking
+    /// is "has this been in front of you", and a skip is the most emphatic yes there is: the track got
+    /// its chance and was answered. Without the pairing, a track skipped past every week reads as
+    /// untouched for years and never stops coming back.</para>
+    ///
+    /// <para>The count pairs are a conjunction of the same bound on each field rather than a bound on
+    /// their sum, because Plex cannot add two fields. That is exact at the "never" bound — never played
+    /// and never skipped is exactly zero of both — and an over-estimate above it, which errs towards
+    /// leaving a track in a playlist whose whole premise is second chances. The date pairs are exact:
+    /// a track with no date in a field at all is read by Plex as older than any window, which is what
+    /// keeps never-heard music in a playlist about resurfacing it.</para>
+    ///
+    /// <para><b>What the rating scale moves.</b> The bottom two bands are written against
+    /// <see cref="Floor"/> rather than a fixed rating, because "the worst score I can give" is 0.5★ for
+    /// one user and 1★ for another — and a track at that score should not be dragged back out by a
+    /// playlist whose whole premise is that you might still want to hear it. At whole stars the
+    /// rejected band widens to take in 1★ and the undecided band above it narrows to match. The
+    /// one-year lane moves too, for its own reason: see <see cref="StaleAfterOneYear"/>.</para>
     /// </summary>
     private static PlexFilter[] FrontierRules(bool halfStars)
     {
         var floor = Floor(halfStars);
         return new PlexFilter[]
         {
-            // Stale enough to be worth resurfacing. Anything rated 3★ or better comes back after a
+            // Stale enough to be worth resurfacing. Anything the user said yes to comes back after a
             // year; anything at all comes back after two.
             PlexGroup.Any(
                 PlexGroup.All(
-                    new PlexCondition("track.userRating", PlexOp.GreaterThan, Above(6)),
-                    new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-1y")),
-                new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-2y")),
+                    new PlexCondition(
+                        "track.userRating", PlexOp.GreaterThan, Above(StaleAfterOneYear(halfStars))),
+                    new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-1y"),
+                    new PlexCondition("track.lastSkippedAt", PlexOp.LessThan, "-1y")),
+                PlexGroup.All(
+                    new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-2y"),
+                    new PlexCondition("track.lastSkippedAt", PlexOp.LessThan, "-2y"))),
             // ...and worth hearing: never rated, or rated in a band that says "undecided" rather than
             // "rejected", or rated highly enough that age is the only reason it fell off.
             PlexGroup.Any(
                 new PlexCondition("track.userRating", PlexOp.Is, "-1"),
                 // Above the floor but still under 2★: not rejected, just unconvincing — so it gets a
-                // few plays to make its case and then stops coming back.
+                // few outings to make its case and then stops coming back.
                 PlexGroup.All(
                     new PlexCondition("track.userRating", PlexOp.GreaterThan, floor.ToString()),
                     new PlexCondition("track.viewCount", PlexOp.LessThan, "5"),
+                    new PlexCondition("track.skipCount", PlexOp.LessThan, "5"),
                     new PlexCondition("track.userRating", PlexOp.LessThan, "4")),
                 new PlexCondition("track.userRating", PlexOp.GreaterThan, "3"),
-                // At or below the floor — rejected — but never actually played, so the verdict was
-                // passed on something nobody has heard. One chance, then it's gone for good.
+                // At or below the floor — rejected — but never actually heard, so the verdict was
+                // passed on something nobody has put on. One chance, then it's gone for good.
                 PlexGroup.All(
                     new PlexCondition("track.userRating", PlexOp.GreaterThan, "-1"),
                     new PlexCondition("track.viewCount", PlexOp.LessThan, "1"),
+                    new PlexCondition("track.skipCount", PlexOp.LessThan, "1"),
                     new PlexCondition("track.userRating", PlexOp.LessThan, (floor + 1).ToString()))),
         };
     }

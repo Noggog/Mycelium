@@ -188,36 +188,44 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// The staleness/worth-hearing rules both Frontier variants are built from. The one-year lane is
-    /// "3★ and up", which on Plex's strictly-greater operator is <c>&gt;&gt; 5</c> — one half-step below
-    /// the tier, so 3★ itself is in.
-    /// </summary>
-    /// <summary>
     /// The exclusion every buildable Deep Frontier carries — the artist half alone, which is what the
     /// helper's default supplies.
     /// </summary>
     private const string RejectExclusion = "&and=1&artist.mood!=700001";
 
+    /// <summary>
+    /// The staleness/worth-hearing rules both Frontier variants are built from, on a half-star scale.
+    /// The one-year lane is "2.5★ and up", which on Plex's strictly-greater operator is
+    /// <c>&gt;&gt; 4</c> — one half-step below the tier, so 2.5★ itself is in.
+    ///
+    /// <para>Every play clause is paired with the skip field beside it, because Frontier counts a skip
+    /// as a play: <c>lastSkippedAt</c> next to each <c>lastViewedAt</c>, <c>skipCount</c> next to each
+    /// <c>viewCount</c>. Pairing the two-year lane is what turns it from a bare condition into a
+    /// bracket of its own.</para>
+    /// </summary>
     private const string FrontierBody =
         "&push=1"
-        + "&push=1&track.userRating%3E%3E=5&and=1&track.lastViewedAt%3C%3C=-1y&pop=1"
-        + "&or=1&track.lastViewedAt%3C%3C=-2y"
+        + "&push=1&track.userRating%3E%3E=4"
+        + "&and=1&track.lastViewedAt%3C%3C=-1y&and=1&track.lastSkippedAt%3C%3C=-1y&pop=1"
+        + "&or=1&push=1&track.lastViewedAt%3C%3C=-2y&and=1&track.lastSkippedAt%3C%3C=-2y&pop=1"
         + "&pop=1"
         + "&and=1"
         + "&push=1"
         + "&track.userRating=-1"
-        + "&or=1&push=1&track.userRating%3E%3E=1&and=1&track.viewCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
+        + "&or=1&push=1&track.userRating%3E%3E=1&and=1&track.viewCount%3C%3C=5"
+        + "&and=1&track.skipCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
         + "&or=1&track.userRating%3E%3E=3"
-        + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1&and=1&track.userRating%3C%3C=2&pop=1"
+        + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1"
+        + "&and=1&track.skipCount%3C%3C=1&and=1&track.userRating%3C%3C=2&pop=1"
         + "&pop=1";
 
     /// <summary>
     /// Deep Frontier is a transcription of a playlist that already exists and works, so it is pinned to
-    /// the byte — with the two library-specific mood exclusions ("interlude", "delete") dropped and the
-    /// one-year lane lowered to take in 3★ itself.
+    /// the byte — with the two library-specific mood exclusions ("interlude", "delete") dropped, the
+    /// one-year lane lowered to take in 2.5★ itself, and skips counted alongside plays.
     /// </summary>
     [Fact]
-    public void Deep_frontier_is_the_hand_built_rules_with_the_one_year_lane_starting_at_three_stars()
+    public void Deep_frontier_is_the_hand_built_rules_with_the_one_year_lane_starting_at_two_and_a_half_stars()
     {
         PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId))
             .Should().Be("type=8&sort=titleSort" + FrontierBody + RejectExclusion);
@@ -425,28 +433,37 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// The rating scale moves exactly one number: the floor under which a rating means "never play
-    /// again". A whole-star user's worst score is 1★, so the rejected-but-never-played band widens to
-    /// take it in (<c>&lt;&lt; 3</c> rather than <c>&lt;&lt; 2</c>) and the undecided band above it
-    /// starts a step higher (<c>&gt;&gt; 2</c> rather than <c>&gt;&gt; 1</c>). Nothing else differs —
-    /// the staleness lane and the 2★+ clause are the same rules in both scales.
+    /// The rating scale moves two numbers, for two different reasons.
+    ///
+    /// <para>The floor, under which a rating means "never play again": a whole-star user's worst score
+    /// is 1★, so the rejected-but-never-heard band widens to take it in (<c>&lt;&lt; 3</c> rather than
+    /// <c>&lt;&lt; 2</c>) and the undecided band above it starts a step higher (<c>&gt;&gt; 2</c>
+    /// rather than <c>&gt;&gt; 1</c>).</para>
+    ///
+    /// <para>And the one-year staleness lane, which is "music I said yes to": that is 3★ here
+    /// (<c>&gt;&gt; 5</c>) because 2★ is the shrug below it, where a half-star user's 2.5★ is a real
+    /// score on the yes side and drops their lane to <c>&gt;&gt; 4</c>. Nothing else differs — the
+    /// 2★+ clause and the skip pairing are the same rules in both scales.</para>
     /// </summary>
     [Fact]
-    public void Whole_star_users_get_a_one_star_reject_floor()
+    public void Whole_star_users_get_a_one_star_reject_floor_and_a_three_star_one_year_lane()
     {
         PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: false))
             .Should().Be(
                 "type=8&sort=titleSort"
                 + "&push=1"
-                + "&push=1&track.userRating%3E%3E=5&and=1&track.lastViewedAt%3C%3C=-1y&pop=1"
-                + "&or=1&track.lastViewedAt%3C%3C=-2y"
+                + "&push=1&track.userRating%3E%3E=5"
+                + "&and=1&track.lastViewedAt%3C%3C=-1y&and=1&track.lastSkippedAt%3C%3C=-1y&pop=1"
+                + "&or=1&push=1&track.lastViewedAt%3C%3C=-2y&and=1&track.lastSkippedAt%3C%3C=-2y&pop=1"
                 + "&pop=1"
                 + "&and=1"
                 + "&push=1"
                 + "&track.userRating=-1"
-                + "&or=1&push=1&track.userRating%3E%3E=2&and=1&track.viewCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
+                + "&or=1&push=1&track.userRating%3E%3E=2&and=1&track.viewCount%3C%3C=5"
+                + "&and=1&track.skipCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
                 + "&or=1&track.userRating%3E%3E=3"
-                + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1&and=1&track.userRating%3C%3C=3&pop=1"
+                + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1"
+                + "&and=1&track.skipCount%3C%3C=1&and=1&track.userRating%3C%3C=3&pop=1"
                 + "&pop=1"
                 + RejectExclusion);
     }
