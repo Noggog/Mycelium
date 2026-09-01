@@ -179,6 +179,58 @@ public class ArchiveBuilderTests
     }
 
     [Fact]
+    public void A_rating_survives_even_when_the_track_listing_does_not_mention_it()
+    {
+        // The listing and the ratings come from separate Plex reads. If the listing fails — or simply
+        // disagrees about a name — keying songs off it alone would silently drop the ratings, which are
+        // the least reconstructable thing in here. Found the hard way: a real snapshot came back with
+        // every album songless because the listing sweep hadn't run.
+        var files = new ArchiveBuilder().Build(Input(
+            users: [User("sub-1", "noggog")],
+            artists: [Artist("American Head Charge", "The War of Art")],
+            libraryTracks: [],
+            trackRatings:
+            [
+                new JsonObject
+                {
+                    ["userId"] = "sub-1", ["artist"] = "American Head Charge",
+                    ["album"] = "The War of Art", ["title"] = "Just So You Know",
+                    ["trackNumber"] = 3L, ["file"] = "/m/ahc/03.flac", ["stars"] = 4.5,
+                },
+            ]));
+
+        var album = File(files, "Library/American Head Charge/The War of Art.yaml");
+        album.Should().Contain("title: \"Just So You Know\"").And.Contain("noggog: 4.5");
+    }
+
+    [Fact]
+    public void A_track_in_both_the_listing_and_the_ratings_is_listed_once()
+    {
+        var files = new ArchiveBuilder().Build(Input(
+            users: [User("sub-1", "noggog")],
+            artists: [Artist("A", "B")],
+            libraryTracks:
+            [
+                new JsonObject
+                {
+                    ["artist"] = "A", ["album"] = "B", ["title"] = "Song", ["file"] = "/m/1.flac",
+                },
+            ],
+            trackRatings:
+            [
+                new JsonObject
+                {
+                    ["userId"] = "sub-1", ["artist"] = "A", ["album"] = "B", ["title"] = "Song",
+                    ["file"] = "/m/1.flac", ["stars"] = 4.0,
+                },
+            ]));
+
+        var album = File(files, "Library/A/B.yaml");
+        album.Split('\n').Count(l => l.Contains("title: \"Song\"")).Should().Be(1);
+        album.Should().Contain("noggog: 4");
+    }
+
+    [Fact]
     public void Songs_are_listed_in_running_order()
     {
         var files = new ArchiveBuilder().Build(Input(
@@ -406,12 +458,52 @@ public class ArchiveBuilderTests
                 {
                     ["userId"] = "sub-1", ["title"] = "Driving", ["smart"] = false,
                     ["tracks"] = new JsonArray(
-                        new JsonObject { ["position"] = 1L, ["title"] = "Idioteque" },
-                        new JsonObject { ["position"] = 2L, ["title"] = "Roads" }),
+                        new JsonObject
+                        {
+                            ["position"] = 1L, ["artist"] = "Radiohead", ["album"] = "Kid A",
+                            ["title"] = "Idioteque", ["file"] = "/media/music/a.flac",
+                        },
+                        new JsonObject
+                        {
+                            ["position"] = 2L, ["artist"] = "Portishead", ["album"] = "Dummy",
+                            ["title"] = "Roads", ["file"] = "/media/music/b.flac",
+                        }),
                 },
             ]));
 
-        File(files, "playlists/kelsey.yaml").Should().Contain("Idioteque").And.Contain("Roads");
+        var playlists = File(files, "playlists/kelsey.yaml");
+        playlists.Should().Contain("Idioteque").And.Contain("Roads");
+        // Order is the running order, so the stored position adds nothing; the file path is the source
+        // server's namespace and wouldn't resolve anywhere else.
+        playlists.Should().NotContain("position").And.NotContain("/media/music");
+        playlists.IndexOf("Idioteque", StringComparison.Ordinal)
+            .Should().BeLessThan(playlists.IndexOf("Roads", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_playlist_track_is_identified_the_same_way_a_song_is()
+    {
+        // artist + album + title, so an entry can be found again on a system that never knew this one.
+        var files = new ArchiveBuilder().Build(Input(
+            users: [User("sub-1", "kelsey")],
+            playlists:
+            [
+                new JsonObject
+                {
+                    ["userId"] = "sub-1", ["title"] = "Driving", ["smart"] = false,
+                    ["tracks"] = new JsonArray(new JsonObject
+                    {
+                        ["artist"] = "Radiohead", ["album"] = "Kid A", ["title"] = "Idioteque",
+                    }),
+                },
+            ]));
+
+        File(files, "playlists/kelsey.yaml").Should().Contain(
+            """
+                - album: "Kid A"
+                  artist: "Radiohead"
+                  title: "Idioteque"
+            """.ReplaceLineEndings("\n"));
     }
 
     [Fact]

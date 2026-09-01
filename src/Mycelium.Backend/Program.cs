@@ -1025,7 +1025,11 @@ api.MapPost("/dev/archive/snapshot", async (MetadataArchiver archiver) =>
 api.MapPost("/dev/archive/harvest-stars", async (StarHarvester harvester) =>
     {
         var result = await harvester.HarvestAll();
-        return Results.Ok(new { users = result.Users, ratings = result.Ratings, skipped = result.Skipped });
+        return Results.Ok(new
+        {
+            users = result.Users, ratings = result.Ratings,
+            skipped = result.Skipped, tracks = result.Tracks,
+        });
     })
     .RequireAuthorization("DevUser")
     .WithName("DevHarvestStars");

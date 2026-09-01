@@ -230,6 +230,12 @@ public class ArchiveBuilder
     ///
     /// <para>The listing comes from the library-wide sweep and the ratings from the per-user ones,
     /// joined on the file path — the one identity a track keeps when the server is rebuilt.</para>
+    ///
+    /// <para>A rated track missing from the listing is carried anyway, built from what the rating
+    /// itself knows. The two come from separate reads, and the listing is the one more likely to fail
+    /// or to disagree about a name — so keying songs off it alone would let a partial failure silently
+    /// drop the ratings, which are the least reconstructable thing in the archive. Better an album
+    /// whose listing is short than one that quietly forgets what somebody thought of it.</para>
     /// </summary>
     private static IReadOnlyDictionary<string, JsonArray> SongsByAlbum(
         IReadOnlyList<JsonObject> libraryTracks,
@@ -256,10 +262,31 @@ public class ArchiveBuilder
             byUser[user] = stars.DeepClone();
         }
 
+        // The listing, plus any rated track it doesn't mention. Deduped by file, so a track present in
+        // both is listed once.
+        var tracks = new List<JsonObject>(libraryTracks);
+        var listed = libraryTracks
+            .Select(t => Str(t, "file"))
+            .Where(f => f is not null)
+            .ToHashSet(StringComparer.Ordinal)!;
+
+        foreach (var rating in trackRatings)
+        {
+            var file = Str(rating, "file");
+            if (file is null || !listed.Add(file))
+            {
+                continue;
+            }
+
+            // The rating rows carry artist, album, title and track number of their own, which is
+            // exactly what a song entry needs.
+            tracks.Add(rating);
+        }
+
         var byAlbum = new Dictionary<string, List<(int Track, string Title, JsonObject Row)>>(
             StringComparer.Ordinal);
 
-        foreach (var track in libraryTracks)
+        foreach (var track in tracks)
         {
             var artist = Str(track, "artist");
             var album = Str(track, "album");
@@ -457,9 +484,9 @@ public class ArchiveBuilder
             // thing; a smart playlist's membership is only their current answer and would go stale the
             // moment the library changed.
             Copy(playlist, row, "smart", "rules");
-            if (!Bool(playlist, "smart"))
+            if (!Bool(playlist, "smart") && playlist["tracks"] is JsonArray tracks)
             {
-                Copy(playlist, row, "tracks");
+                row["tracks"] = Entries(tracks);
             }
 
             var user = identities.GetValueOrDefault(subject, FileName(subject));
@@ -476,6 +503,24 @@ public class ArchiveBuilder
             .Select(pair => new ArchiveFile(
                 $"playlists/{pair.Key}.yaml", CanonicalYaml.Document(Sorted(pair.Value))))
             .ToList();
+    }
+
+    /// <summary>
+    /// A playlist's tracks, cut to what identifies a song anywhere: artist, album, title. The stored
+    /// position is implicit in the running order below it, and the file path is the source server's own
+    /// namespace — it wouldn't resolve on the system this archive is meant to be read by.
+    /// </summary>
+    private static JsonArray Entries(JsonArray tracks)
+    {
+        var array = new JsonArray();
+        foreach (var track in tracks.OfType<JsonObject>())
+        {
+            var entry = new JsonObject();
+            Copy(track, entry, "artist", "album", "title");
+            array.Add(entry);
+        }
+
+        return array;
     }
 
     // ---- helpers ----
