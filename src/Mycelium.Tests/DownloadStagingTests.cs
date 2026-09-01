@@ -184,6 +184,48 @@ public class DownloadStagingTests : IDisposable
         File.Exists(Path.Combine(library, "Artist", "Album", "cover.jpg")).Should().BeTrue();
     }
 
+    // ---- Promote: a dot-prefixed name is hidden on Linux, so Plex would never see the album ----
+
+    [Fact]
+    public void Promote_TrimsLeadingDotsSoTheAlbumIsNotHiddenFromPlex()
+    {
+        var library = Dir("music");
+        File_(Dir("preferred", "Metallica", "...And Justice for All"), "01. Metallica - Blackened.flac");
+
+        DownloadStaging.Promote(Dir("preferred"), library);
+
+        Directory.Exists(Path.Combine(library, "Metallica", "And Justice for All")).Should().BeTrue();
+        Directory.Exists(Path.Combine(library, "Metallica", "...And Justice for All")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Promote_TrimsLeadingDotsFromTrackFilesToo()
+    {
+        var library = Dir("music");
+        File_(Dir("preferred", "Artist", "Album"), ".01. Artist - Hidden.flac");
+
+        DownloadStaging.Promote(Dir("preferred"), library);
+
+        Names(library).Should().Equal("01. Artist - Hidden.flac");
+    }
+
+    [Fact]
+    public void Promote_LeavesInteriorDotsAlone()
+    {
+        var library = Dir("music");
+        File_(Dir("preferred", "Artist", "Vol. 2"), "01. Artist - One.flac");
+
+        DownloadStaging.Promote(Dir("preferred"), library);
+
+        Directory.Exists(Path.Combine(library, "Artist", "Vol. 2")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Unhide_KeepsANameThatIsNothingButDotsRatherThanEmptyingIt()
+    {
+        DownloadStaging.Unhide("...").Should().Be("...");
+    }
+
     // ---- Reset: a crashed previous attempt must not be counted as this run's tracks ----
 
     [Fact]

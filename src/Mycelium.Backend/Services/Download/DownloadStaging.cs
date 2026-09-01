@@ -202,25 +202,52 @@ public static class DownloadStaging
 
     /// <summary>
     /// Moves a verified staging tree's contents into the library root, merging into artist/album
-    /// folders that already exist rather than failing on them.
+    /// folders that already exist rather than failing on them, and <see cref="Unhide">un-hiding</see>
+    /// every name on the way in.
     /// </summary>
-    public static void Promote(string stagedDir, string libraryRoot) => MoveInto(stagedDir, libraryRoot);
+    public static void Promote(string stagedDir, string libraryRoot) =>
+        MoveInto(stagedDir, libraryRoot, unhide: true);
+
+    /// <summary>
+    /// The name to file something in the library under: the same name, with any leading dots removed.
+    ///
+    /// <para>An album whose title genuinely begins with one — "...And Justice for All", "...Like
+    /// Clockwork" — makes streamrip write a dot-prefixed folder, and on Linux that is a <i>hidden</i>
+    /// entry. Plex's scanner skips it for exactly the reason it skips our own
+    /// <see cref="StagingFolder"/>: the album downloads cleanly, verifies, promotes, and then never
+    /// appears in the library. Trimming the leading dot costs nothing — Plex reads the title from the
+    /// file tags, not the folder name — and is the difference between the album existing and not.</para>
+    ///
+    /// <para>Only leading dots go; dots elsewhere (the extension, "Vol. 2") are untouched, and a name
+    /// that is nothing but dots is left alone rather than trimmed away to an empty string.</para>
+    /// </summary>
+    public static string Unhide(string name)
+    {
+        var trimmed = name.TrimStart('.');
+        return trimmed.Length == 0 ? name : trimmed;
+    }
 
     /// <summary>
     /// Recursive move that merges rather than replaces. Deliberately file-by-file: Directory.Move
     /// refuses to cross a filesystem boundary, while File.Move falls back to copy+delete — so a
     /// library root that turns out to be a different mount than the staging parent still works.
+    ///
+    /// <paramref name="unhide"/> is on only for promotion into the library. Within staging the names
+    /// are left exactly as streamrip wrote them, because <see cref="Graft"/> pairs the passes by
+    /// filename and renaming mid-merge would break that match.
     /// </summary>
-    private static void MoveInto(string source, string destination)
+    private static void MoveInto(string source, string destination, bool unhide = false)
     {
         Directory.CreateDirectory(destination);
         foreach (var file in Directory.GetFiles(source))
         {
-            File.Move(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+            var name = Path.GetFileName(file);
+            File.Move(file, Path.Combine(destination, unhide ? Unhide(name) : name), overwrite: true);
         }
         foreach (var directory in Directory.GetDirectories(source))
         {
-            MoveInto(directory, Path.Combine(destination, Path.GetFileName(directory)));
+            var name = Path.GetFileName(directory);
+            MoveInto(directory, Path.Combine(destination, unhide ? Unhide(name) : name), unhide);
         }
     }
 }
