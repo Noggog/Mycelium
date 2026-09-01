@@ -325,6 +325,8 @@ public class ArchiveBuilderTests
         artist.Should().Contain("kelsey:").And.Contain("verdict: \"Liked\"");
         artist.Should().NotContain("lastSeenAt").And.NotContain("plexRatingKeys");
         artist.Should().NotContain("deezerFans").And.NotContain("imageUrl").And.NotContain("present");
+        // Genres are mirrored from the media server and rewritten on every sync — re-derivable, so out.
+        artist.Should().NotContain("genres").And.NotContain("Alternative");
     }
 
     [Fact]

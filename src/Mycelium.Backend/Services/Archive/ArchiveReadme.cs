@@ -30,7 +30,7 @@ repository plus the audio files would be enough to rebuild.
 ```
 Library/
   Radiohead/
-    metadata.yaml          the artist: genres, resolved identities, who likes them
+    metadata.yaml          the artist: resolved identities, and who likes them
     Kid A.yaml             the album: quality, who acquired it, its songs and their ratings
 users.yaml                 the people, and their linked media-server accounts
 decisions.yaml             blocked albums and manual match corrections

@@ -152,10 +152,11 @@ public class ArchiveBuilder
     {
         var row = new JsonObject { ["artist"] = name };
 
-        // `lastSeenAt`, `present`, `plexRatingKeys` and `albumKeys` are server-local and move on every
-        // sync; `deezerFans` is a popularity counter that drifts daily; `imageUrl` is a CDN link the
-        // enricher refills for free. None would mean anything on new hardware.
-        Copy(artist, row, "genres");
+        // Nothing of the catalog row itself is kept. `lastSeenAt`, `present`, `plexRatingKeys` and
+        // `albumKeys` are server-local and move on every sync; `deezerFans` is a popularity counter that
+        // drifts daily; `imageUrl` is a CDN link the enricher refills for free; and `genres` are
+        // mirrored from the media server, which clears and rewrites them on each pass. All of it is
+        // re-derivable, and none of it would mean anything on new hardware.
 
         // The identity pins are why this file is worth keeping: each is a human correcting a bad
         // automatic match, and the MusicBrainz id is the only identifier here stable forever.
