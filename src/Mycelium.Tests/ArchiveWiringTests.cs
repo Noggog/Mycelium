@@ -61,6 +61,8 @@ public class ArchiveWiringTests : IDisposable
     [InlineData(typeof(PlaylistHarvester))]
     [InlineData(typeof(IUserTrackRatingRepo))]
     [InlineData(typeof(IUserPlaylistRepo))]
+    // The library's track listing, which is what lets an album file carry a real one.
+    [InlineData(typeof(ILibraryTrackRepo))]
     public void Archive_services_resolve(Type service)
     {
         _container.Invoking(c => c.Resolve(service))

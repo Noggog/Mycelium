@@ -7,7 +7,8 @@ namespace Mycelium.Backend.Services.Singletons;
 /// <param name="Users">Accounts swept.</param>
 /// <param name="Ratings">Rows stored across all of them.</param>
 /// <param name="Skipped">Accounts with no Plex link, or whose sweep failed.</param>
-public record StarHarvestResult(int Users, int Ratings, int Skipped);
+/// <param name="Tracks">Tracks in the library listing, refreshed by the same pass.</param>
+public record StarHarvestResult(int Users, int Ratings, int Skipped, int Tracks = 0);
 
 /// <summary>
 /// Copies every user's Plex song ratings into Mongo, so they exist somewhere other than Plex.
@@ -31,6 +32,7 @@ public class StarHarvester
     private readonly IPlexLinkRepo _links;
     private readonly IPlexApi _plex;
     private readonly IUserTrackRatingRepo _ratings;
+    private readonly ILibraryTrackRepo _tracks;
     private readonly ILogger<StarHarvester> _logger;
 
     public StarHarvester(
@@ -38,12 +40,14 @@ public class StarHarvester
         IPlexLinkRepo links,
         IPlexApi plex,
         IUserTrackRatingRepo ratings,
+        ILibraryTrackRepo tracks,
         ILogger<StarHarvester> logger)
     {
         _users = users;
         _links = links;
         _plex = plex;
         _ratings = ratings;
+        _tracks = tracks;
         _logger = logger;
     }
 
@@ -60,7 +64,26 @@ public class StarHarvester
         catch (Exception ex)
         {
             _logger.LogError(ex, "Star harvest could not enumerate users/library; will retry next interval");
-            return new StarHarvestResult(0, 0, 0);
+            return new StarHarvestResult(0, 0, 0, 0);
+        }
+
+        // The library's own track listing, read once as the app rather than per user: which songs
+        // exist is a fact about the library, where a rating is a fact about a person. The archive needs
+        // it so an album file can carry a real track listing instead of only the songs someone rated.
+        var trackCount = 0;
+        try
+        {
+            var tracks = await _plex.GetMusicTracks(library.Key);
+            trackCount = await _tracks.ReplaceAll(tracks
+                .Where(t => !string.IsNullOrWhiteSpace(t.Artist) && !string.IsNullOrWhiteSpace(t.Album))
+                .Select(t => new LibraryTrack(t.Artist!, t.Album!, t.Title ?? "", t.TrackNumber, t.File))
+                .ToList());
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: the ratings below are the harder thing to reconstruct, so a failed listing
+            // must not cost us them too. The previous listing stays in place until the next pass.
+            _logger.LogError(ex, "Star harvest could not refresh the library track listing");
         }
 
         var swept = 0;
@@ -95,9 +118,9 @@ public class StarHarvester
         }
 
         _logger.LogInformation(
-            "Star harvest: stored {Ratings} rating(s) across {Users} account(s); {Skipped} skipped",
-            stored, swept, skipped);
-        return new StarHarvestResult(swept, stored, skipped);
+            "Star harvest: {Tracks} track(s) listed; {Ratings} rating(s) across {Users} account(s); {Skipped} skipped",
+            trackCount, stored, swept, skipped);
+        return new StarHarvestResult(swept, stored, skipped, trackCount);
     }
 
     /// <summary>

@@ -3,97 +3,78 @@ using System.Text.Json.Nodes;
 
 namespace Mycelium.Backend.Services.Archive;
 
-/// <summary>
-/// One file of the archive, as it should exist on disk.
-/// </summary>
-/// <param name="KeyFields">
-/// The fields that identify a record within this file — the same ones it is sorted by. Carried so the
-/// change summary can tell an edited record from a removal plus an addition, which raw line counts
-/// can't. Empty for files that aren't record-oriented (the manifest).
-/// </param>
-public record ArchiveFile(string RelativePath, string Contents, IReadOnlyList<string> KeyFields);
+/// <summary>One file of the archive, as it should exist on disk.</summary>
+public record ArchiveFile(string RelativePath, string Contents);
 
 /// <summary>
 /// The raw collection dumps a snapshot is built from. Passed in rather than read here so the whole
-/// shaping step is a pure function — the interesting decisions (what to keep, how to key it, how to
-/// sort it) are then testable with plain object literals and no database.
+/// shaping step is a pure function — the interesting decisions (what to keep, how to lay it out) are
+/// then testable with plain object literals and no database.
 /// </summary>
 public record ArchiveInput(
     IReadOnlyList<JsonObject> Users,
     IReadOnlyList<JsonObject> PlexLinks,
     IReadOnlyList<JsonObject> Artists,
     IReadOnlyList<JsonObject> ArtistVerdicts,
-    IReadOnlyList<JsonObject> AlbumVerdicts,
     IReadOnlyList<JsonObject> Purchases,
     IReadOnlyList<JsonObject> Blocks,
     IReadOnlyList<JsonObject> MatchOverrides,
     IReadOnlyList<JsonObject> TrackRatings,
-    IReadOnlyList<JsonObject> Playlists);
+    IReadOnlyList<JsonObject> Playlists,
+    IReadOnlyList<JsonObject> LibraryTracks);
 
 /// <summary>
-/// Turns collection dumps into the archive's file tree.
+/// Lays the archive out as the library itself: a directory per artist, a file per album.
 ///
-/// <para>Two rules run through everything here. <b>Keep what a person decided; drop what a job can
-/// rebuild.</b> A verdict, a block, a pinned Deezer id and an acquisition are facts nothing can
-/// reconstruct once lost. A similarity edge, a recommendation score, a Deezer fan count and a Plex
-/// rating key are all re-derivable, and archiving them would rewrite most of the tree nightly and
-/// bury the handful of lines that actually mattered.</para>
+/// <code>
+/// Library/
+///   Radiohead/
+///     metadata.json      identity, genres, who likes the artist
+///     Kid A.json         quality, who brought it in, who likes it, its songs and their ratings
+/// </code>
 ///
-/// <para><b>Key on what survives a rebuild.</b> Per-user files are named and sorted by username, not
-/// by the OIDC subject they're stored under: subjects are reissued if the identity provider is ever
-/// rebuilt, which would silently orphan every rating in the system. The subject is kept as a field so
-/// a restore into the same provider stays exact, and a restore into a new one is still possible by
-/// hand.</para>
+/// <para>The shape is the point. A snapshot answers "what did the library look like on this day", and
+/// everything true of one album sits in one file — so a diff reads as "Kelsey rated three songs on
+/// <i>Kid A</i>" rather than as a line moving inside a 3,000-line blob. It also means the archive
+/// browses like the thing it describes, which matters when the reader is a person, or a migration
+/// script for whatever replaces Plex years from now.</para>
+///
+/// <para>Two rules decide the contents. <b>Keep what a person decided; drop what a job can rebuild</b>
+/// — verdicts, ratings, acquisitions and hand-pinned identities are irreplaceable, while similarity
+/// graphs, recommendation scores and server-local ids are not, and archiving them would rewrite the
+/// tree nightly. And <b>key on what survives a rebuild</b>: people by username, tracks by file path,
+/// artists by MusicBrainz id where one is known.</para>
 /// </summary>
 public class ArchiveBuilder
 {
-    /// <summary>
-    /// Bumped only when the shape of the files changes in a way a reader has to know about. Recorded
-    /// in the manifest so a future importer can tell what it's looking at.
-    /// </summary>
-    public const int SchemaVersion = 1;
+    private const string LibraryRoot = "Library";
+    private const string ArtistMetadata = "metadata.yaml";
 
-    /// <summary>
-    /// Separates key fields when they're joined into a record's identity. A unit separator rather than
-    /// a space, so an artist called "Kids" and an album called "See" can't collide with an artist
-    /// called "Kids See".
-    /// </summary>
+    /// <summary>Joins the parts of a sort key. A separator no title will contain.</summary>
     private const char KeySeparator = '\u001f';
 
     public IReadOnlyList<ArchiveFile> Build(ArchiveInput input)
     {
-        var files = new List<ArchiveFile>();
-
-        // Subject -> archive identity. Everything per-user routes through this, so a user who somehow
-        // has taste rows but no `users` document still lands somewhere sensible rather than vanishing.
         var identities = Identities(input.Users);
+        var files = new List<ArchiveFile>
+        {
+            new("users.yaml", CanonicalYaml.Document(Users(input, identities))),
+            new("decisions.yaml", CanonicalYaml.Document(Decisions(input, identities))),
+        };
 
-        files.Add(Jsonl("users.jsonl", Users(input.Users, input.PlexLinks, identities), "username"));
-        files.Add(Jsonl("inventory.jsonl", Inventory(input.Artists), "artist"));
-        files.Add(Jsonl("downloads.jsonl", Downloads(input.Purchases), "key"));
-        files.Add(Jsonl("decisions.jsonl", Decisions(input.Blocks, input.MatchOverrides), "kind", "artist", "album"));
-
-        files.AddRange(Taste(input.ArtistVerdicts, input.AlbumVerdicts, identities));
-        files.AddRange(Stars(input.TrackRatings, identities));
+        files.AddRange(Library(input, identities));
         files.AddRange(Playlists(input.Playlists, identities));
-
-        files.Add(Manifest(files));
         return files;
     }
 
     // ---- users ----
 
-    private static IEnumerable<JsonObject> Users(
-        IReadOnlyList<JsonObject> users,
-        IReadOnlyList<JsonObject> links,
-        IReadOnlyDictionary<string, string> identities)
+    private static JsonArray Users(ArchiveInput input, IReadOnlyDictionary<string, string> identities)
     {
-        var linkBySubject = links
-            .Where(l => Str(l, "_id") is not null)
-            .GroupBy(l => Str(l, "_id")!, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var linkBySubject = ByKey(input.PlexLinks, "_id");
+        var rows = new List<(string Sort, JsonObject Row)>();
 
-        foreach (var user in users)
+        foreach (var user in input.Users)
         {
             var subject = Str(user, "_id");
             if (subject is null)
@@ -101,216 +82,365 @@ public class ArchiveBuilder
                 continue;
             }
 
-            // `lastLoginAt` and `email` are both deliberately absent. The first changes every time
-            // anyone opens the app, which would commit noise nightly for every active user; the second
-            // isn't needed to restore anything (username is the key) and only makes the repo more
-            // sensitive than it has to be.
-            var row = new JsonObject
-            {
-                ["username"] = identities.GetValueOrDefault(subject, subject),
-                ["subject"] = subject,
-            };
+            var username = identities.GetValueOrDefault(subject, FileName(subject));
 
+            // No `subject`, no `email`, no `lastLoginAt`. The first is an identity-provider detail that
+            // means nothing outside the provider that issued it; the second identifies nobody here and
+            // only raises the cost of a leak; the third changes whenever someone opens the app and
+            // would commit noise nightly.
+            var row = new JsonObject { ["username"] = username };
             Copy(user, row, "displayName", "firstSeenAt", "maxQuality");
 
-            // The fact of a Plex link, never the token. `serverToken` is a live credential; a leaked
-            // one is forever, and re-linking is a 30-second PIN flow.
+            // The fact of a Plex link, never its token — that is a live credential, and git is forever.
             if (linkBySubject.TryGetValue(subject, out var link))
             {
-                Copy(link, row, "accountId", "linkedAt");
-                Rename(row, "accountId", "plexAccountId");
-                Rename(row, "linkedAt", "plexLinkedAt");
-                Put(row, "plexUsername", link["username"]);
+                var plex = new JsonObject();
+                Put(plex, "username", link["username"]);
+                Put(plex, "accountId", link["accountId"]);
+                Put(plex, "linkedAt", link["linkedAt"]);
+                row["plex"] = plex;
             }
 
-            yield return row;
+            rows.Add((username, row));
         }
+
+        return Sorted(rows);
     }
 
-    // ---- inventory ----
+    // ---- library ----
 
-    private static IEnumerable<JsonObject> Inventory(IReadOnlyList<JsonObject> artists)
+    private static IEnumerable<ArchiveFile> Library(
+        ArchiveInput input, IReadOnlyDictionary<string, string> identities)
     {
+        var files = new List<ArchiveFile>();
+
+        var artists = input.Artists.Where(a => Str(a, "_id") is not null).ToList();
+        var artistPaths = ArchivePaths.ForNames(artists.Select(a => Str(a, "_id")!));
+
+        var artistRatings = ArtistVerdicts(input.ArtistVerdicts, identities);
+        var acquisitions = Acquisitions(input.Purchases);
+        var songs = SongsByAlbum(input.LibraryTracks, input.TrackRatings, identities);
+
         foreach (var artist in artists)
         {
-            var name = Str(artist, "_id");
-            if (name is null)
+            var name = Str(artist, "_id")!;
+            var directory = $"{LibraryRoot}/{artistPaths[name]}";
+
+            files.Add(new ArchiveFile(
+                $"{directory}/{ArtistMetadata}",
+                CanonicalYaml.Document(ArtistFile(artist, name, artistRatings))));
+
+            var albums = Strings(artist, "albums");
+            var quality = AlbumQuality(artist);
+            var albumPaths = ArchivePaths.ForNames(albums);
+
+            foreach (var album in albums)
+            {
+                files.Add(new ArchiveFile(
+                    $"{directory}/{albumPaths[album]}.yaml",
+                    CanonicalYaml.Document(AlbumFile(name, album, quality, acquisitions, songs))));
+            }
+        }
+
+        return files;
+    }
+
+    private static JsonObject ArtistFile(
+        JsonObject artist,
+        string name,
+        IReadOnlyDictionary<string, JsonObject> artistRatings)
+    {
+        var row = new JsonObject { ["artist"] = name };
+
+        // `lastSeenAt`, `present`, `plexRatingKeys` and `albumKeys` are server-local and move on every
+        // sync; `deezerFans` is a popularity counter that drifts daily; `imageUrl` is a CDN link the
+        // enricher refills for free. None would mean anything on new hardware.
+        Copy(artist, row, "genres");
+
+        // The identity pins are why this file is worth keeping: each is a human correcting a bad
+        // automatic match, and the MusicBrainz id is the only identifier here stable forever.
+        var musicBrainz = Identity(
+            artist, "musicBrainzMbid", "mbid", "musicBrainzName",
+            "musicBrainzOverride", "musicBrainzUnlinked", "musicBrainzDisambiguation", null);
+        if (musicBrainz.Count > 0)
+        {
+            row["musicBrainz"] = musicBrainz;
+        }
+
+        var deezer = Identity(
+            artist, "deezerId", "id", "deezerName",
+            "deezerOverride", "deezerUnlinked", null, "deezerLink");
+        if (deezer.Count > 0)
+        {
+            row["deezer"] = deezer;
+        }
+
+        if (artistRatings.TryGetValue(Fold(name), out var ratings))
+        {
+            row["ratings"] = ratings.DeepClone();
+        }
+
+        return row;
+    }
+
+    private static JsonObject AlbumFile(
+        string artist,
+        string album,
+        IReadOnlyDictionary<string, string> quality,
+        IReadOnlyDictionary<string, string> acquisitions,
+        IReadOnlyDictionary<string, JsonArray> songs)
+    {
+        var row = new JsonObject
+        {
+            ["album"] = album,
+            ["artist"] = artist,
+        };
+
+        if (quality.TryGetValue(album, out var tier))
+        {
+            row["quality"] = tier;
+        }
+
+        var key = AlbumKey(artist, album);
+
+        // Who brought this record in — and only that. The purchase row it comes from also knows when it
+        // landed and at what tier, but the first is already implicit in the commit that added this file
+        // and the second is the `quality` above; repeating either would be two fields to keep in step.
+        //
+        // No album-level verdicts here. A thumbs-up on an album in Mycelium means "fetch this", not
+        // "this is good" — for an album the library already holds, the acquisition below is what that
+        // decision actually produced.
+        if (acquisitions.TryGetValue(key, out var by))
+        {
+            row["acquiredBy"] = by;
+        }
+
+        if (songs.TryGetValue(key, out var tracks))
+        {
+            row["songs"] = tracks.DeepClone();
+        }
+
+        return row;
+    }
+
+    // ---- songs ----
+
+    /// <summary>
+    /// Album key -> its tracks, each carrying whatever star ratings people have given it.
+    ///
+    /// <para>The listing comes from the library-wide sweep and the ratings from the per-user ones,
+    /// joined on the file path — the one identity a track keeps when the server is rebuilt.</para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, JsonArray> SongsByAlbum(
+        IReadOnlyList<JsonObject> libraryTracks,
+        IReadOnlyList<JsonObject> trackRatings,
+        IReadOnlyDictionary<string, string> identities)
+    {
+        var ratings = new Dictionary<string, SortedDictionary<string, JsonNode?>>(StringComparer.Ordinal);
+        foreach (var rating in trackRatings)
+        {
+            var subject = Str(rating, "userId");
+            var file = Str(rating, "file");
+            if (subject is null || file is null || !rating.TryGetPropertyValue("stars", out var stars)
+                || stars is null)
             {
                 continue;
             }
 
-            var row = new JsonObject { ["artist"] = name };
-
-            // What we hold, and at what quality. Everything else the catalog row carries is Plex- or
-            // Deezer-local churn: `lastSeenAt` and `present` move on every sync, `plexRatingKeys` and
-            // `albumKeys` are server-local handles re-captured each time and meaningless on new
-            // hardware, `deezerFans` is a popularity counter that drifts daily, and `imageUrl` is a CDN
-            // link the enricher refills for free.
-            Copy(artist, row, "albums", "albumQuality", "genres");
-
-            // The identity pins are the whole reason this file is worth keeping. Each one is a human
-            // correcting a bad automatic match, and nothing can re-derive that judgement.
-            Copy(artist, row,
-                "deezerId", "deezerName", "deezerLink", "deezerOverride", "deezerUnlinked",
-                "musicBrainzMbid", "musicBrainzName", "musicBrainzDisambiguation",
-                "musicBrainzOverride", "musicBrainzUnlinked");
-
-            yield return row;
-        }
-    }
-
-    // ---- taste ----
-
-    private static IEnumerable<ArchiveFile> Taste(
-        IReadOnlyList<JsonObject> artistVerdicts,
-        IReadOnlyList<JsonObject> albumVerdicts,
-        IReadOnlyDictionary<string, string> identities)
-    {
-        var byUser = new Dictionary<string, List<JsonObject>>(StringComparer.Ordinal);
-
-        void Add(string subject, JsonObject row)
-        {
             var user = identities.GetValueOrDefault(subject, FileName(subject));
-            if (!byUser.TryGetValue(user, out var rows))
+            if (!ratings.TryGetValue(file, out var byUser))
             {
-                byUser[user] = rows = new List<JsonObject>();
+                ratings[file] = byUser = new SortedDictionary<string, JsonNode?>(StringComparer.Ordinal);
             }
 
-            rows.Add(row);
+            byUser[user] = stars.DeepClone();
         }
 
-        foreach (var verdict in artistVerdicts)
+        var byAlbum = new Dictionary<string, List<(int Track, string Title, JsonObject Row)>>(
+            StringComparer.Ordinal);
+
+        foreach (var track in libraryTracks)
+        {
+            var artist = Str(track, "artist");
+            var album = Str(track, "album");
+            if (artist is null || album is null)
+            {
+                continue;
+            }
+
+            // Title and ratings only. The track number is implicit in the running order below, and the
+            // file path is this server's own namespace — it wouldn't resolve on the system this archive
+            // is meant to be read by, where artist/album/title is the portable way to find a song.
+            var row = new JsonObject();
+            Copy(track, row, "title");
+
+            if (Str(track, "file") is { } file && ratings.TryGetValue(file, out var byUser))
+            {
+                var map = new JsonObject();
+                foreach (var (user, stars) in byUser)
+                {
+                    map[user] = stars?.DeepClone();
+                }
+
+                row["ratings"] = map;
+            }
+
+            var key = AlbumKey(artist, album);
+            if (!byAlbum.TryGetValue(key, out var list))
+            {
+                byAlbum[key] = list = [];
+            }
+
+            list.Add((Int(track, "trackNumber") ?? int.MaxValue, Str(track, "title") ?? "", row));
+        }
+
+        return byAlbum.ToDictionary(
+            pair => pair.Key,
+            // Running order, with the title as tiebreak so a disc with no track numbers still lands in
+            // a stable sequence rather than shuffling between snapshots.
+            pair =>
+            {
+                var array = new JsonArray();
+                foreach (var entry in pair.Value
+                             .OrderBy(t => t.Track)
+                             .ThenBy(t => t.Title, StringComparer.OrdinalIgnoreCase)
+                             .ThenBy(t => t.Title, StringComparer.Ordinal))
+                {
+                    array.Add(entry.Row);
+                }
+
+                return array;
+            },
+            StringComparer.Ordinal);
+    }
+
+    // ---- verdicts ----
+
+    private static IReadOnlyDictionary<string, JsonObject> ArtistVerdicts(
+        IReadOnlyList<JsonObject> verdicts, IReadOnlyDictionary<string, string> identities)
+    {
+        var byArtist = new Dictionary<string, SortedDictionary<string, JsonObject>>(StringComparer.Ordinal);
+
+        foreach (var verdict in verdicts)
         {
             var subject = Str(verdict, "userId");
             var artist = Str(verdict, "artist");
             var status = Str(verdict, "status");
 
-            // Pending rows are the recommendation queue, not taste — the replenisher rebuilds them
-            // from the similarity graph, so archiving them would churn the file constantly while
-            // preserving nothing anybody chose.
+            // Pending rows are the recommendation queue, not taste: the replenisher rebuilds them from
+            // the similarity graph, so archiving them would churn constantly while preserving nothing
+            // anyone chose.
             if (subject is null || artist is null || status is null || status == "Pending")
             {
                 continue;
             }
 
-            var row = new JsonObject
+            var user = identities.GetValueOrDefault(subject, FileName(subject));
+            if (!byArtist.TryGetValue(Fold(artist), out var byUser))
             {
-                ["kind"] = "artist",
-                ["artist"] = artist,
-                ["status"] = status,
-            };
-
-            Copy(verdict, row, "decidedAt", "snoozeUntil");
-
-            // The two confirm flags collapse to one: a row has a single verdict, so only the flag
-            // matching it can be meaningful. `score`/`sources`/`depth`/`addedAt` are queue mechanics
-            // and `reconsider` is a cached read of Plex stars — all re-derived, none archived.
-            var confirmed = status switch
-            {
-                "Liked" => Bool(verdict, "likeConfirmed"),
-                "Disliked" => Bool(verdict, "dislikeConfirmed"),
-                _ => false,
-            };
-
-            if (confirmed)
-            {
-                row["confirmed"] = true;
+                byArtist[Fold(artist)] = byUser =
+                    new SortedDictionary<string, JsonObject>(StringComparer.Ordinal);
             }
 
-            Add(subject, row);
+            byUser[user] = Verdict(verdict, status);
         }
 
-        foreach (var verdict in albumVerdicts)
-        {
-            var subject = Str(verdict, "userId");
-            var artist = Str(verdict, "artist");
-            var album = Str(verdict, "album");
-            var status = Str(verdict, "status");
-            if (subject is null || artist is null || album is null || status is null)
-            {
-                continue;
-            }
-
-            var row = new JsonObject
-            {
-                ["kind"] = "album",
-                ["artist"] = artist,
-                ["album"] = album,
-                ["status"] = status,
-            };
-
-            Copy(verdict, row, "decidedAt", "snoozeUntil");
-            Add(subject, row);
-        }
-
-        // Sorted by artist first so everything one person thinks about an act sits together, with the
-        // artist-level verdict ahead of its albums.
-        return byUser
-            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => Jsonl($"taste/{pair.Key}.jsonl", pair.Value, "artist", "kind", "album"))
-            .ToList();
+        return Collapse(byArtist);
     }
 
-    // ---- stars ----
+    private static JsonObject Verdict(JsonObject source, string status)
+    {
+        var row = new JsonObject { ["verdict"] = status };
+        Copy(source, row, "decidedAt", "snoozeUntil");
+
+        // The two directional flags collapse to one, since a row only carries a single verdict.
+        // "I meant it" is a hand-made decision nothing can re-derive.
+        var confirmed = status switch
+        {
+            "Liked" => Bool(source, "likeConfirmed"),
+            "Disliked" => Bool(source, "dislikeConfirmed"),
+            _ => false,
+        };
+
+        if (confirmed)
+        {
+            row["confirmed"] = true;
+        }
+
+        return row;
+    }
+
+    // ---- acquisitions ----
 
     /// <summary>
-    /// Per-user song ratings, harvested out of Plex into Mongo by <c>StarHarvester</c> and archived
-    /// from there like everything else.
-    ///
-    /// <para>These are one of only two things (playlists being the other) that exist nowhere but the
-    /// Plex server, which is precisely why they're worth committing. Each row keeps the file path,
-    /// because that is the identity a rating can be re-attached by on a system that has never heard of
-    /// this Plex server — rating keys don't survive a rebuild, and files do.</para>
+    /// Album key -> who asked for it. Only rows that actually name someone: most acquisitions were
+    /// automatic (downloaded off a like rather than a button press) and have nobody to credit, and an
+    /// empty field on those would say nothing at length.
     /// </summary>
-    private static IEnumerable<ArchiveFile> Stars(
-        IReadOnlyList<JsonObject> ratings,
-        IReadOnlyDictionary<string, string> identities)
+    private static IReadOnlyDictionary<string, string> Acquisitions(IReadOnlyList<JsonObject> purchases)
     {
-        var byUser = new Dictionary<string, List<JsonObject>>(StringComparer.Ordinal);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var rating in ratings)
+        foreach (var purchase in purchases)
         {
-            var subject = Str(rating, "userId");
-            if (subject is null)
+            var artist = Str(purchase, "artist");
+            var album = Str(purchase, "album");
+            var by = Str(purchase, "addedBy");
+            if (artist is null || album is null || by is null)
             {
                 continue;
             }
 
-            var row = new JsonObject();
-            Copy(rating, row, "artist", "album", "title", "trackNumber", "file", "stars");
-
-            var user = identities.GetValueOrDefault(subject, FileName(subject));
-            if (!byUser.TryGetValue(user, out var rows))
-            {
-                byUser[user] = rows = new List<JsonObject>();
-            }
-
-            rows.Add(row);
+            result[AlbumKey(artist, album)] = by;
         }
 
-        // Keyed by file as well as by the readable triple: a library can hold two tracks with the same
-        // title on the same album, and without the path they'd collapse into one another.
-        return byUser
-            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => Jsonl($"stars/{pair.Key}.jsonl", pair.Value, "artist", "album", "title", "file"))
-            .ToList();
+        return result;
+    }
+
+    // ---- decisions ----
+
+    /// <summary>
+    /// Blocks and manual match corrections. Outside <c>Library/</c> deliberately: a block is usually
+    /// about a record the library does <em>not</em> have, so there is no album file for it to live in.
+    /// </summary>
+    private static JsonArray Decisions(ArchiveInput input, IReadOnlyDictionary<string, string> identities)
+    {
+        var rows = new List<(string Sort, JsonObject Row)>();
+
+        foreach (var block in input.Blocks)
+        {
+            var row = new JsonObject { ["kind"] = "block" };
+            Copy(block, row, "artist", "album", "scope", "createdAt", "retryAfter");
+
+            // The block endpoint stores the OIDC subject where the purchase rows store a username, so
+            // left alone this is an opaque hash — and meaningless once the identity provider is rebuilt.
+            // A value matching no known subject is kept as-is: older rows may already hold a name.
+            if (Str(block, "blockedBy") is { } by)
+            {
+                row["blockedBy"] = identities.TryGetValue(by, out var name) ? name : by;
+            }
+
+            rows.Add((SortKey("block", Str(block, "artist"), Str(block, "album")), row));
+        }
+
+        foreach (var over in input.MatchOverrides)
+        {
+            var row = new JsonObject { ["kind"] = "match" };
+            Put(row, "artist", over["matchArtist"]);
+            Put(row, "album", over["deezerTitle"]);
+            Copy(over, row, "libraryTitle", "createdAt");
+            rows.Add((SortKey("match", Str(over, "matchArtist"), Str(over, "deezerTitle")), row));
+        }
+
+        return Sorted(rows);
     }
 
     // ---- playlists ----
 
-    /// <summary>
-    /// Per-user playlists, harvested out of Plex into Mongo by <c>PlaylistHarvester</c>.
-    ///
-    /// <para>Smart playlists archive as their rules and hand-built ones as their ordered tracks — the
-    /// harvester already made that split, and it is preserved here rather than flattened, because the
-    /// two are durable in different places. A smart playlist's membership would go stale the moment
-    /// the library changed; a curated one's *is* the playlist.</para>
-    /// </summary>
     private static IEnumerable<ArchiveFile> Playlists(
-        IReadOnlyList<JsonObject> playlists,
-        IReadOnlyDictionary<string, string> identities)
+        IReadOnlyList<JsonObject> playlists, IReadOnlyDictionary<string, string> identities)
     {
-        var byUser = new Dictionary<string, List<JsonObject>>(StringComparer.Ordinal);
+        var byUser = new Dictionary<string, List<(string Sort, JsonObject Row)>>(StringComparer.Ordinal);
 
         foreach (var playlist in playlists)
         {
@@ -322,139 +452,47 @@ public class ArchiveBuilder
             }
 
             var row = new JsonObject { ["title"] = title };
-            Copy(playlist, row, "smart", "rules", "tracks");
+
+            // Smart playlists keep their rules, hand-built ones their tracks. The rules are the durable
+            // thing; a smart playlist's membership is only their current answer and would go stale the
+            // moment the library changed.
+            Copy(playlist, row, "smart", "rules");
+            if (!Bool(playlist, "smart"))
+            {
+                Copy(playlist, row, "tracks");
+            }
 
             var user = identities.GetValueOrDefault(subject, FileName(subject));
             if (!byUser.TryGetValue(user, out var rows))
             {
-                byUser[user] = rows = new List<JsonObject>();
+                byUser[user] = rows = [];
             }
 
-            rows.Add(row);
+            rows.Add((title, row));
         }
 
         return byUser
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => Jsonl($"playlists/{pair.Key}.jsonl", pair.Value, "title"))
+            .Select(pair => new ArchiveFile(
+                $"playlists/{pair.Key}.yaml", CanonicalYaml.Document(Sorted(pair.Value))))
             .ToList();
     }
 
-    // ---- downloads ----
-
-    private static IEnumerable<JsonObject> Downloads(IReadOnlyList<JsonObject> purchases)
-    {
-        foreach (var purchase in purchases)
-        {
-            var id = Str(purchase, "_id");
-            if (id is null)
-            {
-                continue;
-            }
-
-            var row = new JsonObject { ["key"] = id };
-
-            // This file is the only durable record of what came into the library and who asked for it:
-            // Mongo keeps just the current row and the reconcile is allowed to delete it, so the git
-            // history *is* the download history. `score`/`sources`/`imageUrl` are recommendation
-            // machinery that moves on its own and would obscure that.
-            Copy(purchase, row,
-                "kind", "artist", "album", "albumArtist", "status",
-                "requestedAt", "sentAt", "deezerAlbumId", "addedBy", "manual",
-                "targetQuality", "acquiredQuality", "ownedQuality", "failure");
-
-            yield return row;
-        }
-    }
-
-    // ---- decisions ----
-
-    private static IEnumerable<JsonObject> Decisions(
-        IReadOnlyList<JsonObject> blocks,
-        IReadOnlyList<JsonObject> overrides)
-    {
-        foreach (var block in blocks)
-        {
-            var row = new JsonObject { ["kind"] = "block" };
-            Copy(block, row, "artist", "album", "scope", "blockedBy", "createdAt", "retryAfter");
-            yield return row;
-        }
-
-        foreach (var over in overrides)
-        {
-            // Filed under the same artist/album key fields as a block, so the two sort together and a
-            // reader sees every standing decision about a record in one place.
-            var row = new JsonObject { ["kind"] = "match" };
-            Put(row, "artist", over["matchArtist"]);
-            Put(row, "album", over["deezerTitle"]);
-            Copy(over, row, "libraryTitle", "createdAt");
-            yield return row;
-        }
-    }
-
-    // ---- manifest ----
-
-    /// <summary>
-    /// Schema version and per-file record counts — and pointedly no "generated at" stamp. A timestamp
-    /// in a tracked file would change on every run, so every night would produce a commit and the
-    /// commit-only-on-change rule that keeps this history readable would quietly stop working.
-    /// </summary>
-    private static ArchiveFile Manifest(IReadOnlyList<ArchiveFile> files)
-    {
-        var builder = new StringBuilder();
-        builder.Append("{\n  \"schemaVersion\": ").Append(SchemaVersion).Append(",\n  \"files\": {\n");
-
-        var counted = files.OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToList();
-        for (var i = 0; i < counted.Count; i++)
-        {
-            builder.Append("    \"").Append(counted[i].RelativePath).Append("\": ").Append(LineCount(counted[i]));
-            builder.Append(i == counted.Count - 1 ? "\n" : ",\n");
-        }
-
-        builder.Append("  }\n}\n");
-        return new ArchiveFile("MANIFEST.json", builder.ToString(), Array.Empty<string>());
-    }
-
-    private static int LineCount(ArchiveFile file) =>
-        file.Contents.Length == 0 ? 0 : file.Contents.TrimEnd('\n').Split('\n').Length;
-
     // ---- helpers ----
 
-    private static ArchiveFile Jsonl(string path, IEnumerable<JsonObject> records, params string[] keyFields)
-    {
-        var builder = new StringBuilder();
-        foreach (var record in records
-                     .OrderBy(r => KeyOf(r, keyFields), StringComparer.OrdinalIgnoreCase)
-                     // Ordinal tiebreak so two names differing only in case can't swap places between
-                     // runs. Case-insensitive first because that is the order a person expects to read.
-                     .ThenBy(r => KeyOf(r, keyFields), StringComparer.Ordinal))
-        {
-            builder.Append(CanonicalJson.Line(record)).Append('\n');
-        }
-
-        return new ArchiveFile(path, builder.ToString(), keyFields);
-    }
-
     /// <summary>
-    /// A record's identity within its file: its key fields joined. Doubles as the sort key, so a file's
-    /// order and its notion of "the same record" can never disagree.
-    /// </summary>
-    public static string KeyOf(JsonObject record, IReadOnlyList<string> keyFields) =>
-        string.Join(KeySeparator, keyFields.Select(f => Str(record, f) ?? ""));
-
-    /// <summary>
-    /// Subject -> the name this user is filed under. Collisions are broken by appending the subject:
-    /// two accounts whose usernames reduce to the same thing must not silently share one file and
-    /// overwrite each other's history.
+    /// Subject -> the name this person is filed under. Collisions are broken by appending part of the
+    /// subject: two accounts whose usernames reduce to the same thing must not silently merge.
     /// </summary>
     private static IReadOnlyDictionary<string, string> Identities(IReadOnlyList<JsonObject> users)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         var taken = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        // Ordered by subject so the winner of a collision is the same on every run.
         var candidates = users
             .Select(u => (Subject: Str(u, "_id"), Name: Str(u, "username")))
             .Where(u => u.Subject is not null)
+            // Ordered by subject so a collision resolves the same way on every run.
             .OrderBy(u => u.Subject, StringComparer.Ordinal);
 
         foreach (var (subject, username) in candidates)
@@ -462,7 +500,7 @@ public class ArchiveBuilder
             var name = FileName(username ?? subject!);
             if (taken.TryGetValue(name, out var owner) && owner != subject)
             {
-                name = $"{name}-{FileName(subject!)}";
+                name = $"{name}-{FileName(subject!)[..Math.Min(6, FileName(subject!).Length)]}";
             }
 
             taken[name] = subject!;
@@ -473,12 +511,9 @@ public class ArchiveBuilder
     }
 
     /// <summary>
-    /// A username reduced to something safe to put in a path, on any filesystem.
-    ///
-    /// <para>Intentionally its own rule rather than a call to <c>ArtistTag</c>'s sanitizer, which
-    /// produces Plex mood tags. These two look alike today but answer to different masters: a tag can
-    /// be re-derived and rewritten at will, whereas a filename that changes orphans everything git
-    /// knows about that user's history. This one must stay put.</para>
+    /// A username reduced to something safe in a path. Its own rule rather than a call to
+    /// <c>ArtistTag</c>'s sanitizer, which produces Plex mood tags: those can be re-derived at will,
+    /// whereas a filename that changes orphans everything git knows about that person's history.
     /// </summary>
     private static string FileName(string username)
     {
@@ -497,6 +532,116 @@ public class ArchiveBuilder
         return builder.Length == 0 ? "unknown" : builder.ToString();
     }
 
+    private static JsonObject Identity(
+        JsonObject artist, string idField, string idName, string nameField,
+        string overrideField, string unlinkedField, string? disambiguationField, string? linkField)
+    {
+        var identity = new JsonObject();
+        Put(identity, idName, artist[idField]);
+        Put(identity, "name", artist[nameField]);
+
+        if (linkField is not null)
+        {
+            Put(identity, "link", artist[linkField]);
+        }
+
+        if (disambiguationField is not null)
+        {
+            Put(identity, "disambiguation", artist[disambiguationField]);
+        }
+
+        // Only written when true: a `false` on every artist would be thousands of lines saying nothing.
+        if (Bool(artist, overrideField))
+        {
+            identity["pinned"] = true;
+        }
+
+        if (Bool(artist, unlinkedField))
+        {
+            identity["unlinked"] = true;
+        }
+
+        return identity;
+    }
+
+    private static IReadOnlyDictionary<string, string> AlbumQuality(JsonObject artist)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (artist["albumQuality"] is not JsonArray entries)
+        {
+            return result;
+        }
+
+        foreach (var entry in entries.OfType<JsonObject>())
+        {
+            if (Str(entry, "title") is { } title && Str(entry, "quality") is { } quality)
+            {
+                result[title] = quality;
+            }
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyDictionary<string, JsonObject> Collapse(
+        Dictionary<string, SortedDictionary<string, JsonObject>> source)
+    {
+        var result = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var (key, byUser) in source)
+        {
+            if (byUser.Count == 0)
+            {
+                continue;
+            }
+
+            var map = new JsonObject();
+            foreach (var (user, value) in byUser)
+            {
+                map[user] = value.DeepClone();
+            }
+
+            result[key] = map;
+        }
+
+        return result;
+    }
+
+    private static JsonArray Sorted(List<(string Sort, JsonObject Row)> rows)
+    {
+        var array = new JsonArray();
+        foreach (var entry in rows
+                     .OrderBy(r => r.Sort, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(r => r.Sort, StringComparer.Ordinal))
+        {
+            array.Add(entry.Row);
+        }
+
+        return array;
+    }
+
+    private static string SortKey(params string?[] parts) =>
+        string.Join(KeySeparator, parts.Select(p => p ?? ""));
+
+    private static string AlbumKey(string artist, string album) =>
+        $"{Fold(artist)}{KeySeparator}{Fold(album)}";
+
+    private static string Fold(string value) => value.ToLowerInvariant();
+
+    private static Dictionary<string, JsonObject> ByKey(IReadOnlyList<JsonObject> rows, string field) =>
+        rows.Where(r => Str(r, field) is not null)
+            .GroupBy(r => Str(r, field)!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+    private static List<string> Strings(JsonObject source, string field) =>
+        source[field] is JsonArray array
+            ? array.OfType<JsonValue>()
+                .Select(v => v.TryGetValue<string>(out var s) ? s : null)
+                .Where(s => s is not null)
+                .Select(s => s!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList()
+            : [];
+
     private static void Copy(JsonObject source, JsonObject target, params string[] fields)
     {
         foreach (var field in fields)
@@ -506,16 +651,6 @@ public class ArchiveBuilder
                 Put(target, field, value);
             }
         }
-    }
-
-    private static void Rename(JsonObject target, string from, string to)
-    {
-        if (target.TryGetPropertyValue(from, out var value) && value is not null)
-        {
-            target[to] = value.DeepClone();
-        }
-
-        target.Remove(from);
     }
 
     private static void Put(JsonObject target, string field, JsonNode? value)
@@ -534,6 +669,12 @@ public class ArchiveBuilder
         record.TryGetPropertyValue(field, out var value) && value is JsonValue v
         && v.TryGetValue<string>(out var s)
             ? s
+            : null;
+
+    private static int? Int(JsonObject record, string field) =>
+        record.TryGetPropertyValue(field, out var value) && value is JsonValue v
+        && v.TryGetValue<long>(out var n)
+            ? (int)n
             : null;
 
     private static bool Bool(JsonObject record, string field) =>

@@ -191,6 +191,12 @@ public class PlexApi : IPlexApi
                     AlbumRatingKey = int.TryParse(item["parentRatingKey"]?.ToString(), out var key) ? key : 0,
                     AudioCodec = item["Media"]?.FirstOrDefault()?["audioCodec"]?.ToString(),
                     File = item["Media"]?.FirstOrDefault()?["Part"]?.FirstOrDefault()?["file"]?.ToString(),
+                    // Identity, for the metadata archive's per-album track listing. Free here — the
+                    // payload already carries it, and this sweep already reads every track.
+                    Artist = item["grandparentTitle"]?.ToString(),
+                    Album = item["parentTitle"]?.ToString(),
+                    Title = item["title"]?.ToString(),
+                    TrackNumber = int.TryParse(item["index"]?.ToString(), out var index) ? index : null,
                 });
             }
 
@@ -578,6 +584,17 @@ public record PlexLibraryTrack
     /// reported no part.
     /// </summary>
     public string? File { get; set; }
+
+    /// <summary>The crediting artist (<c>grandparentTitle</c>). For the archive's track listing.</summary>
+    public string? Artist { get; set; }
+
+    /// <summary>The album (<c>parentTitle</c>).</summary>
+    public string? Album { get; set; }
+
+    public string? Title { get; set; }
+
+    /// <summary>Track number within the album (<c>index</c>); null when Plex didn't report one.</summary>
+    public int? TrackNumber { get; set; }
 }
 
 /// <summary>

@@ -43,7 +43,11 @@ public sealed class MetadataArchiverTests : IDisposable
 
     private static FakeArchiveDump Dump() => new FakeArchiveDump()
         .Set("users", new JsonObject { ["_id"] = "sub-1", ["username"] = "kelsey" })
-        .Set("artists", new JsonObject { ["_id"] = "Radiohead", ["present"] = true });
+        .Set("artists", new JsonObject
+        {
+            ["_id"] = "Radiohead",
+            ["albums"] = new JsonArray("Kid A"),
+        });
 
     private string Git(params string[] args) => RunGit(_repo, args);
 
@@ -77,9 +81,10 @@ public sealed class MetadataArchiverTests : IDisposable
         result.Outcome.Should().Be(GitOutcome.Committed);
         result.CommitSha.Should().NotBeNullOrWhiteSpace();
 
-        File.Exists(Path.Combine(_repo, "inventory.jsonl")).Should().BeTrue();
-        File.Exists(Path.Combine(_repo, "users.jsonl")).Should().BeTrue();
-        File.Exists(Path.Combine(_repo, "MANIFEST.json")).Should().BeTrue();
+        File.Exists(Path.Combine(_repo, "users.yaml")).Should().BeTrue();
+        File.Exists(Path.Combine(_repo, "decisions.yaml")).Should().BeTrue();
+        File.Exists(Path.Combine(_repo, "Library", "Radiohead", "metadata.yaml")).Should().BeTrue();
+        File.Exists(Path.Combine(_repo, "Library", "Radiohead", "Kid A.yaml")).Should().BeTrue();
 
         Git("log", "--oneline").Should().Contain("snapshot");
     }
@@ -107,7 +112,7 @@ public sealed class MetadataArchiverTests : IDisposable
         dump.Set("userQueue", new JsonObject
         {
             ["userId"] = "sub-1",
-            ["artist"] = "Portishead",
+            ["artist"] = "Radiohead",
             ["status"] = "Liked",
         });
 
@@ -115,7 +120,8 @@ public sealed class MetadataArchiverTests : IDisposable
 
         result.Outcome.Should().Be(GitOutcome.Committed);
         Git("log", "--oneline").Trim().Split('\n').Should().HaveCount(2);
-        File.ReadAllText(Path.Combine(_repo, "taste", "kelsey.jsonl")).Should().Contain("Portishead");
+        File.ReadAllText(Path.Combine(_repo, "Library", "Radiohead", "metadata.yaml"))
+            .Should().Contain("kelsey").And.Contain("Liked");
     }
 
     [Fact]
@@ -126,38 +132,45 @@ public sealed class MetadataArchiverTests : IDisposable
 
         dump.Set("purchases", new JsonObject
         {
-            ["_id"] = "album:radiohead kid a",
             ["artist"] = "Radiohead",
             ["album"] = "Kid A",
-            ["status"] = "InLibrary",
             ["addedBy"] = "kelsey",
+            ["sentAt"] = "2026-08-25T08:31:00Z",
         });
         await Archiver(dump).Snapshot();
 
         // git log is meant to be the readable history, not a list of identical subjects.
-        Git("log", "-1", "--pretty=%s").Should().Contain("1 download");
-        Git("log", "-1", "--pretty=%b").Should().Contain("downloads.jsonl");
+        Git("log", "-1", "--pretty=%s").Should().Contain("1 album");
+        Git("log", "-1", "--pretty=%b").Should().Contain("Library/Radiohead/Kid A.yaml");
     }
 
     [Fact]
-    public async Task A_users_file_that_stops_being_produced_is_removed()
+    public async Task An_album_that_leaves_the_library_leaves_the_archive()
     {
-        // A deleted account should leave the archive, not linger for ever. The removal is still in the
-        // history, which is the point of keeping it in git.
-        var dump = Dump().Set("userQueue", new JsonObject
-        {
-            ["userId"] = "sub-1",
-            ["artist"] = "Portishead",
-            ["status"] = "Liked",
-        });
+        // A record sold or deleted should stop appearing. The removal is still in the history, which is
+        // the point of keeping this in git.
+        var dump = Dump();
         await Archiver(dump).Snapshot();
-        File.Exists(Path.Combine(_repo, "taste", "kelsey.jsonl")).Should().BeTrue();
+        File.Exists(Path.Combine(_repo, "Library", "Radiohead", "Kid A.yaml")).Should().BeTrue();
 
-        dump.Set("userQueue");
-        dump.Set("users");
+        dump.Set("artists", new JsonObject { ["_id"] = "Radiohead", ["albums"] = new JsonArray() });
         await Archiver(dump).Snapshot();
 
-        File.Exists(Path.Combine(_repo, "taste", "kelsey.jsonl")).Should().BeFalse();
+        File.Exists(Path.Combine(_repo, "Library", "Radiohead", "Kid A.yaml")).Should().BeFalse();
+        // ...but the artist stays: their identity pins and everyone's verdicts still matter.
+        File.Exists(Path.Combine(_repo, "Library", "Radiohead", "metadata.yaml")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_artist_who_leaves_entirely_takes_their_directory_with_them()
+    {
+        var dump = Dump();
+        await Archiver(dump).Snapshot();
+
+        dump.Set("artists");
+        await Archiver(dump).Snapshot();
+
+        Directory.Exists(Path.Combine(_repo, "Library", "Radiohead")).Should().BeFalse();
     }
 
     [Fact]
@@ -167,9 +180,9 @@ public sealed class MetadataArchiverTests : IDisposable
         await Archiver(Dump()).Snapshot();
 
         var readme = File.ReadAllText(Path.Combine(_repo, "README.md"));
-        readme.Should().Contain("JSON Lines");
+        readme.Should().Contain("Library/");
         readme.Should().Contain("username");
-        readme.Should().Contain("musicBrainzMbid");
+        readme.Should().Contain("MusicBrainz");
         readme.Should().Contain("Keep it private");
     }
 

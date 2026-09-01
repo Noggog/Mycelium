@@ -14,11 +14,12 @@ public class StarHarvesterTests
     private readonly IPlexLinkRepo _links = Substitute.For<IPlexLinkRepo>();
     private readonly IPlexApi _plex = Substitute.For<IPlexApi>();
     private readonly IUserTrackRatingRepo _ratings = Substitute.For<IUserTrackRatingRepo>();
+    private readonly ILibraryTrackRepo _tracks = Substitute.For<ILibraryTrackRepo>();
 
     private const int Library = 7;
 
     private StarHarvester Harvester() => new(
-        _users, _links, _plex, _ratings, NullLogger<StarHarvester>.Instance);
+        _users, _links, _plex, _ratings, _tracks, NullLogger<StarHarvester>.Instance);
 
     public StarHarvesterTests()
     {
@@ -122,6 +123,58 @@ public class StarHarvesterTests
         await _ratings.Received(1).ReplaceForUser("kelsey", Arg.Any<IReadOnlyList<TrackRating>>());
         result.Users.Should().Be(1);
         result.Skipped.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task The_library_track_listing_is_refreshed_once_not_once_per_user()
+    {
+        // Which songs exist is a fact about the library; only the ratings are per person. Reading it
+        // per user would multiply the most expensive call in the app by the number of accounts.
+        Linked("kelsey", "justin");
+        _plex.GetMusicTracks(Library).Returns([
+            new PlexLibraryTrack
+            {
+                Artist = "Radiohead", Album = "Kid A", Title = "Idioteque",
+                TrackNumber = 8, File = "/music/kida/08.flac",
+            },
+        ]);
+        _plex.GetRatedTracks(Library, Arg.Any<string>()).Returns([]);
+
+        await Harvester().HarvestAll();
+
+        await _plex.Received(1).GetMusicTracks(Library);
+        await _tracks.Received(1).ReplaceAll(Arg.Is<IReadOnlyList<LibraryTrack>>(t =>
+            t.Single().Artist == "Radiohead" && t.Single().Title == "Idioteque"
+            && t.Single().File == "/music/kida/08.flac"));
+    }
+
+    [Fact]
+    public async Task A_track_with_no_artist_or_album_is_left_out_of_the_listing()
+    {
+        // It has nowhere to go in the archive, which files everything under Library/Artist/Album.
+        Linked("kelsey");
+        _plex.GetMusicTracks(Library).Returns([
+            new PlexLibraryTrack { Title = "Orphan", File = "/music/x.flac" },
+        ]);
+        _plex.GetRatedTracks(Library, Arg.Any<string>()).Returns([]);
+
+        await Harvester().HarvestAll();
+
+        await _tracks.Received(1).ReplaceAll(Arg.Is<IReadOnlyList<LibraryTrack>>(t => t.Count == 0));
+    }
+
+    [Fact]
+    public async Task A_failed_listing_does_not_cost_us_the_ratings()
+    {
+        // Ratings are the harder thing to reconstruct, so they must not ride on the listing succeeding.
+        Linked("kelsey");
+        _plex.GetMusicTracks(Library).Returns<PlexLibraryTrack[]>(_ => throw new HttpRequestException("down"));
+        _plex.GetRatedTracks(Library, TokenFor("kelsey")).Returns([Track(10)]);
+
+        var result = await Harvester().HarvestAll();
+
+        await _ratings.Received(1).ReplaceForUser("kelsey", Arg.Any<IReadOnlyList<TrackRating>>());
+        result.Users.Should().Be(1);
     }
 
     [Fact]

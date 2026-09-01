@@ -32,7 +32,6 @@ public class MetadataArchiver
     private const string PlexLinks = "plexLinks";
     private const string Artists = "artists";
     private const string ArtistVerdicts = "userQueue";
-    private const string AlbumVerdicts = "userAlbumRatings";
     private const string Purchases = "purchases";
     private const string Blocks = "blockedAlbums";
     private const string MatchOverrides = "albumMatchOverrides";
@@ -47,12 +46,18 @@ public class MetadataArchiver
     /// <summary>Playlists, harvested out of Plex by <c>PlaylistHarvester</c>. Same reasoning.</summary>
     private const string Playlists = "userPlaylists";
 
+    /// <summary>The library's track listing, so an album file can carry a real one.</summary>
+    private const string LibraryTracks = "libraryTracks";
+
     /// <summary>
     /// Directories the archive owns outright, so a file that stops being produced (a user who was
     /// deleted, say) is removed rather than left behind for ever. Anything else in the repository —
     /// a README, notes, whatever else you put there — is left alone.
     /// </summary>
-    private static readonly string[] ManagedDirectories = ["taste", "stars", "playlists"];
+    private static readonly string[] ManagedDirectories = ["Library", "playlists"];
+
+    /// <summary>Top-level files the archive owns. Anything else in the repository is left alone.</summary>
+    private static readonly string[] ManagedFiles = ["users.yaml", "decisions.yaml"];
 
     private readonly IArchiveDump _dump;
     private readonly IGitRepository _git;
@@ -94,12 +99,12 @@ public class MetadataArchiver
                 await _dump.Dump(PlexLinks),
                 await _dump.Dump(Artists),
                 await _dump.Dump(ArtistVerdicts),
-                await _dump.Dump(AlbumVerdicts),
                 await _dump.Dump(Purchases),
                 await _dump.Dump(Blocks),
                 await _dump.Dump(MatchOverrides),
                 await _dump.Dump(TrackRatings),
-                await _dump.Dump(Playlists));
+                await _dump.Dump(Playlists),
+                await _dump.Dump(LibraryTracks));
 
             var files = _builder.Build(input);
 
@@ -109,15 +114,13 @@ public class MetadataArchiver
             // record rather than a pile of JSON.
             WriteReadmeIfAbsent();
 
-            // Read before writing, so the summary describes the change rather than the result.
-            var deltas = files
-                .Select(file => ArchiveDelta.Compare(file, ReadExisting(file.RelativePath)))
-                .ToList();
+            // Compared before writing, so the summary describes the change rather than the result.
+            var changes = Changes(files);
 
             Write(files);
-            Prune(files);
+            changes.AddRange(Prune(files));
 
-            var message = ArchiveDelta.CommitMessage(DateOnly.FromDateTime(DateTime.Now), deltas);
+            var message = ArchiveDelta.CommitMessage(DateOnly.FromDateTime(DateTime.Now), changes);
             var commit = await _git.CommitAll(message);
 
             switch (commit.Outcome)
@@ -127,9 +130,9 @@ public class MetadataArchiver
                     break;
                 case GitOutcome.Committed:
                     _logger.LogInformation(
-                        "Metadata archive: committed {Sha} ({Summary}); pushed={Pushed}",
+                        "Metadata archive: committed {Sha} ({Count} file(s) changed); pushed={Pushed}",
                         commit.CommitSha?[..Math.Min(8, commit.CommitSha.Length)],
-                        Summarize(deltas), commit.Pushed);
+                        changes.Count, commit.Pushed);
                     break;
                 default:
                     _logger.LogError("Metadata archive: commit failed — {Error}", commit.Error);
@@ -195,29 +198,38 @@ public class MetadataArchiver
     /// say. Scoped to the directories the archive owns plus its own top-level files, so anything else
     /// in the repository is never touched.
     /// </summary>
-    private void Prune(IReadOnlyList<ArchiveFile> files)
+    private List<ArchiveChange> Prune(IReadOnlyList<ArchiveFile> files)
     {
         var produced = files
             .Select(f => Path.Combine(_config.RepoPath!, f.RelativePath))
             .ToHashSet(StringComparer.Ordinal);
 
         var candidates = new List<string>();
-        candidates.AddRange(Directory.EnumerateFiles(_config.RepoPath!, "*.jsonl", SearchOption.TopDirectoryOnly));
+        foreach (var name in ManagedFiles)
+        {
+            var path = Path.Combine(_config.RepoPath!, name);
+            if (File.Exists(path))
+            {
+                candidates.Add(path);
+            }
+        }
 
         foreach (var directory in ManagedDirectories)
         {
             var path = Path.Combine(_config.RepoPath!, directory);
             if (Directory.Exists(path))
             {
-                candidates.AddRange(Directory.EnumerateFiles(path, "*.jsonl", SearchOption.AllDirectories));
+                candidates.AddRange(Directory.EnumerateFiles(path, "*.yaml", SearchOption.AllDirectories));
             }
         }
 
+        var removed = new List<ArchiveChange>();
         foreach (var stale in candidates.Where(c => !produced.Contains(c)))
         {
             try
             {
                 File.Delete(stale);
+                removed.Add(new ArchiveChange(Relative(stale), FileChange.Removed));
                 _logger.LogInformation("Metadata archive: removed stale file {File}", stale);
             }
             catch (Exception ex)
@@ -225,13 +237,60 @@ public class MetadataArchiver
                 _logger.LogWarning(ex, "Metadata archive: could not remove stale file {File}", stale);
             }
         }
+
+        // An artist whose last album went away leaves an empty directory behind, which git won't track
+        // but which clutters the tree for anyone browsing it.
+        foreach (var directory in ManagedDirectories)
+        {
+            var root = Path.Combine(_config.RepoPath!, directory);
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (var child in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                         .OrderByDescending(d => d.Length))
+            {
+                try
+                {
+                    if (!Directory.EnumerateFileSystemEntries(child).Any())
+                    {
+                        Directory.Delete(child);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Metadata archive: could not remove empty directory {Dir}", child);
+                }
+            }
+        }
+
+        return removed;
     }
 
-    private static string Summarize(IReadOnlyList<FileDelta> deltas)
+    private string Relative(string absolute) =>
+        Path.GetRelativePath(_config.RepoPath!, absolute).Replace('\\', '/');
+
+    /// <summary>
+    /// Which of the files about to be written differ from what is already on disk. Whole-file
+    /// comparison, which is all that's needed now every record is its own document.
+    /// </summary>
+    private List<ArchiveChange> Changes(IReadOnlyList<ArchiveFile> files)
     {
-        var added = deltas.Sum(d => d.Added);
-        var changed = deltas.Sum(d => d.Changed);
-        var removed = deltas.Sum(d => d.Removed);
-        return $"+{added} ~{changed} -{removed}";
+        var changes = new List<ArchiveChange>();
+        foreach (var file in files)
+        {
+            var existing = ReadExisting(file.RelativePath);
+            if (existing is null)
+            {
+                changes.Add(new ArchiveChange(file.RelativePath, FileChange.Added));
+            }
+            else if (!string.Equals(existing, file.Contents, StringComparison.Ordinal))
+            {
+                changes.Add(new ArchiveChange(file.RelativePath, FileChange.Modified));
+            }
+        }
+
+        return changes;
     }
 }
