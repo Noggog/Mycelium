@@ -89,20 +89,28 @@ export function pulseMycelium(
 
 const APPROVE_FLARE = [255, 209, 148] as const // warm gold
 const REJECT_FLARE = [255, 105, 102] as const // red-salmon
+const INDIFFERENT_FLARE = [150, 160, 172] as const // cool slate
 
 /**
- * The standard approve/reject feedback, fired at the last known cursor position:
+ * The standard verdict feedback, fired at the last known cursor position:
  * approve swirls the nearby spores and sends a warm gold flare down the mycelium;
  * reject scatters the spores and sends a red flare. Shared by every decision
  * surface (Discover, the artist page, …) so the reaction is consistent. Pass a
  * cleared/neutral toggle through as `null` to skip the feedback.
+ *
+ * Indifferent gets the flare and nothing else — no vortex, no scatter. It is a
+ * real decision, so it has to answer, but the spores are what make approve and
+ * reject feel like taking a side, and a shrug that shoved them around would
+ * overclaim. A dim slate pulse is the whole reaction, which is the point.
  */
-export function rateFeedback(verdict: 'up' | 'down' | null) {
+export function rateFeedback(verdict: 'up' | 'down' | 'indifferent' | null) {
   if (!verdict) return
   const { x, y } = lastPointer()
   if (verdict === 'up') {
     vortex(x, y, 1)
     pulseMycelium(x, y, APPROVE_FLARE)
+  } else if (verdict === 'indifferent') {
+    pulseMycelium(x, y, INDIFFERENT_FLARE)
   } else {
     disturbSpores(x, y, 1.4)
     pulseMycelium(x, y, REJECT_FLARE)

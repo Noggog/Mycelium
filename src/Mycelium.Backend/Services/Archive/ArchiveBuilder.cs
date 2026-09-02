@@ -381,12 +381,13 @@ public class ArchiveBuilder
         var row = new JsonObject { ["verdict"] = status };
         Copy(source, row, "decidedAt", "snoozeUntil");
 
-        // The two directional flags collapse to one, since a row only carries a single verdict.
+        // The three per-verdict flags collapse to one, since a row only carries a single verdict.
         // "I meant it" is a hand-made decision nothing can re-derive.
         var confirmed = status switch
         {
             "Liked" => Bool(source, "likeConfirmed"),
             "Disliked" => Bool(source, "dislikeConfirmed"),
+            "Indifferent" => Bool(source, "indifferentConfirmed"),
             _ => false,
         };
 

@@ -107,10 +107,18 @@ as a failed button.
 The credential linked in the dev panel is the *server owner's* and stays the app's identity for
 library metadata — the mood tags a thumb writes are shared state and need the owner's rights, so link
 it as the owner. That covers both levels: an
-artist thumb stamps `<user>_liked` on the artist (metadata type 8), and a thumb on a *collection* — a
-compilation or soundtrack, credited to an umbrella rather than an act — stamps the same tag on the
-**album** (type 9), since "Various Artists" is nothing anyone has taste about. The stock "My Library"
-smart playlist matches either.
+artist thumb stamps `<user>_liked` (or `_disliked`, or `_indifferent`) on the artist (metadata type 8),
+and a thumb on a *collection* — a compilation or soundtrack, credited to an umbrella rather than an
+act — stamps the same tag on the **album** (type 9), since "Various Artists" is nothing anyone has
+taste about. The stock "My Library" smart playlist matches either.
+
+An artist carries at most one verdict tag: a new one goes on and every other comes off
+(`ArtistTag.OtherVerdictTags`). `_indifferent` is the odd one out in that it is written but referenced
+by no playlist rule — Deep Frontier subtracts only `_disliked`, so a shrugged-at band stays in rotation
+by construction, which is the whole point of the verdict. It is written anyway so Plex can tell "I
+shrugged at this" from "never rated", and so the dev panel's wipe-and-reapply round-trips the full set.
+Collections take two verdicts, not three: indifference is an artist verdict, and the album routes
+answer 400 rather than folding it into a dislike.
 
 A third marker rides the same field: `<user>_recommended`, on artists the library **already has** that
 the user's liked bands point at and they haven't thumbed yet — the "Recommended" section of the

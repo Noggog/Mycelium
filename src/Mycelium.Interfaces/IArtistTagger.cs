@@ -14,10 +14,11 @@ public interface IArtistTagger
     /// <paramref name="add"/> is present (when non-null) and every tag in <paramref name="remove"/> is
     /// absent, leaving all other tags (other users' verdicts, hand-applied tags) untouched.
     ///
-    /// <para>A rating passes the new verdict tag as <paramref name="add"/> and the opposite verdict's tag
-    /// in <paramref name="remove"/>, so the latest verdict is the one left on the artist (a like→dislike
-    /// flip drops "_liked" and leaves "_disliked"). A cleared/undone rating passes add=null and both
-    /// verdict tags in <paramref name="remove"/>, stripping whichever was set.</para>
+    /// <para>A rating passes the new verdict tag as <paramref name="add"/> and <em>every other</em>
+    /// verdict tag in <paramref name="remove"/> (see <see cref="ArtistTag.OtherVerdictTags"/>), so the
+    /// latest verdict is the only one left on the artist (a like→dislike flip drops "_liked" and leaves
+    /// "_disliked"). A cleared/undone rating passes add=null and all of them in
+    /// <paramref name="remove"/>, stripping whichever was set.</para>
     ///
     /// <para>Best-effort: failures are logged, never thrown — tagging is a side effect of rating and must
     /// not fail the rating itself.</para>
@@ -30,8 +31,10 @@ public interface IArtistTagger
 /// difference between them is what the tag <em>means</em>:
 ///
 /// <list type="bullet">
-/// <item><b>Verdict</b> — "&lt;username&gt;_liked" / "&lt;username&gt;_disliked" (<see cref="For"/>).
-/// Current rating state: it flips when the user flips their thumb and disappears when they clear it.</item>
+/// <item><b>Verdict</b> — "&lt;username&gt;_liked" / "&lt;username&gt;_disliked" /
+/// "&lt;username&gt;_indifferent" (<see cref="For"/>). Current rating state: it flips when the user
+/// flips their thumb and disappears when they clear it. At most one is ever on an artist, which is
+/// what <see cref="OtherVerdictTags"/> is for.</item>
 /// <item><b>Credit</b> — "&lt;username&gt;_added" (<see cref="Added"/>). A record of history, not of
 /// taste: this is the person who asked for the record and put it in the library. It is written once,
 /// when the download finally lands, and is never rewritten or removed — someone who later sours on a
@@ -49,17 +52,57 @@ public interface IArtistTagger
 /// </summary>
 public static class ArtistTag
 {
+    /// <summary>
+    /// The verdict tag for one status, or null when there isn't one — no usable username, or a status
+    /// that isn't a verdict at all.
+    ///
+    /// <para><b>Why the default is null and not a tag.</b> This used to read
+    /// <c>status == Liked ? "liked" : "disliked"</c>, which is fine for exactly two verdicts and a trap
+    /// for any third: every other status — <see cref="DiscoveryStatus.Pending"/>,
+    /// <see cref="DiscoveryStatus.Snoozed"/>, and now <see cref="DiscoveryStatus.Indifferent"/> before
+    /// it had a case — folded silently into "disliked". Nothing fails when that happens; the band just
+    /// quietly drops out of the Deep Frontier playlist months later. Every caller already null-checks
+    /// the result (a blank username has always produced one), so returning null for a non-verdict is
+    /// the change that makes this safe by construction rather than by each caller remembering to
+    /// pre-filter.</para>
+    /// </summary>
     public static string? For(string? username, DiscoveryStatus status)
     {
-        var prefix = Sanitize(username);
-        if (prefix.Length == 0)
+        var verdict = status switch
+        {
+            DiscoveryStatus.Liked => "liked",
+            DiscoveryStatus.Disliked => "disliked",
+            DiscoveryStatus.Indifferent => "indifferent",
+            // Pending/Snoozed are not verdicts — there is no tag to write, and writing one anyway is
+            // exactly the bug this method used to have.
+            _ => null,
+        };
+        if (verdict is null)
         {
             return null;
         }
 
-        var verdict = status == DiscoveryStatus.Liked ? "liked" : "disliked";
-        return $"{prefix}_{verdict}";
+        var prefix = Sanitize(username);
+        return prefix.Length == 0 ? null : $"{prefix}_{verdict}";
     }
+
+    /// <summary>
+    /// The verdict tags that must come <em>off</em> when <paramref name="current"/> goes on — every
+    /// verdict tag but that one. Pass null for a cleared rating, which strips all of them.
+    ///
+    /// <para>The invariant this exists to hold is "an artist carries at most one verdict tag". That was
+    /// once expressible as "add the new one, remove the opposite", and with three verdicts it isn't:
+    /// an Indifferent&#8594;Liked flip has two tags to strip, not one. Every call site that computed an
+    /// "opposite" by ternary was a place where the third tag would have been left behind — and a
+    /// leftover verdict tag fails nothing loudly, it just makes a smart playlist match music the user
+    /// has moved on from.</para>
+    /// </summary>
+    public static string[] OtherVerdictTags(string? username, DiscoveryStatus? current) =>
+        new[] { DiscoveryStatus.Liked, DiscoveryStatus.Disliked, DiscoveryStatus.Indifferent }
+            .Where(s => s != current)
+            .Select(s => For(username, s))
+            .OfType<string>()
+            .ToArray();
 
     /// <summary>
     /// The permanent "this is who brought the record in" credit — "&lt;username&gt;_added". Stamped on
@@ -73,7 +116,8 @@ public static class ArtistTag
     }
 
     /// <summary>
-    /// Whether a tag is a taste verdict of ours — the "_liked"/"_disliked" suffix namespace. This is
+    /// Whether a tag is a taste verdict of ours — the "_liked"/"_disliked"/"_indifferent" suffix
+    /// namespace. This is
     /// the set the dev wipe strips, because it's the set that can be rebuilt afterwards from the stored
     /// ratings; provider moods, hand-applied tags and the "_added" credits are left alone. Coarse on
     /// purpose: any name with that suffix is treated as ours (we can't enumerate every username that
@@ -82,7 +126,8 @@ public static class ArtistTag
     public static bool IsVerdict(string? label) =>
         label != null
         && (label.EndsWith("_liked", StringComparison.OrdinalIgnoreCase)
-            || label.EndsWith("_disliked", StringComparison.OrdinalIgnoreCase));
+            || label.EndsWith("_disliked", StringComparison.OrdinalIgnoreCase)
+            || label.EndsWith("_indifferent", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Whether a tag is an "added" credit — the "_added" suffix namespace.</summary>
     public static bool IsAdded(string? label) =>

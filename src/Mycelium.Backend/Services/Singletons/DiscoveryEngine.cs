@@ -63,6 +63,10 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     private readonly IAlbumBlockRepo _blocks;
     private readonly MissingAlbumRefresher _albumRefresher;
     private readonly UserQualityService _qualities;
+    // Only for reading back which way a flagged Indifferent row cuts (ArguesForLike). The sweep does
+    // the judging; this is the one verdict whose *direction* isn't recoverable from the row's status
+    // alone, so serving its two feed sections needs the same threshold the sweep flagged it against.
+    private readonly ReconsiderPolicy _reconsider;
     private readonly ILogger<DiscoveryEngine> _logger;
 
     public DiscoveryEngine(
@@ -75,6 +79,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
         IAlbumBlockRepo blocks,
         MissingAlbumRefresher albumRefresher,
         UserQualityService qualities,
+        ReconsiderPolicy reconsider,
         ILogger<DiscoveryEngine> logger)
     {
         _queue = queue;
@@ -86,6 +91,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
         _blocks = blocks;
         _albumRefresher = albumRefresher;
         _qualities = qualities;
+        _reconsider = reconsider;
         _logger = logger;
     }
 
@@ -161,6 +167,8 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
         FeedKind.SeedLibraryArtist => LibraryItemsBySection(userId, recommended: false),
         FeedKind.ReconsiderArtist => ReconsiderItems(userId),
         FeedKind.SecondThoughtsArtist => SecondThoughtsItems(userId),
+        FeedKind.IndifferentLikeArtist => IndifferentItems(userId, arguesForLike: true),
+        FeedKind.IndifferentDislikeArtist => IndifferentItems(userId, arguesForLike: false),
         FeedKind.MissingAlbum => MissingAlbumItems(userId),
         FeedKind.UpgradeAlbum => UpgradeAlbumItems(userId),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown feed kind"),
@@ -300,6 +308,39 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
             FeedKind.SecondThoughtsArtist, r.Artist, null, r.ImageUrl,
             0, Array.Empty<string>(), null, Reconsider: r.Signal))
         .ToList();
+
+    /// <summary>
+    /// One side of the indifferent second-guessing: artists the user shrugged at whose own song ratings
+    /// say otherwise, split by which way they say it.
+    ///
+    /// <para><b>Why the split is a single boolean.</b> The sweep flags an indifferent row when the
+    /// ratings clear <em>either</em> threshold, and the row itself records only the average — not which
+    /// threshold it cleared. Asking "is it above MinAverage?" partitions the flagged set; asking two
+    /// independent questions ("above min?" and "below max?") would not, because a row flagged under one
+    /// set of thresholds and read after they were retuned can satisfy neither. Such a row would then
+    /// appear in no feed section at all while still sitting flagged in Mongo — invisible to the user and
+    /// unclearable from the UI. See <see cref="ReconsiderPolicy.ArguesForLike"/>.</para>
+    ///
+    /// <para>Each side is ordered most-contradicted-first, which is opposite ends of the same scale:
+    /// the higher the average the more it looks like a like, the lower the more like a dislike.</para>
+    /// </summary>
+    private async Task<List<FeedItem>> IndifferentItems(string userId, bool arguesForLike)
+    {
+        var flagged = (await _queue.GetReconsiderable(userId, DiscoveryStatus.Indifferent))
+            .Where(r => _reconsider.ArguesForLike(r.Signal) == arguesForLike);
+
+        var ordered = arguesForLike
+            ? flagged.OrderByDescending(r => r.Signal.Average)
+            : flagged.OrderBy(r => r.Signal.Average);
+
+        return ordered
+            .ThenBy(r => r.Artist.ArtistName, StringComparer.OrdinalIgnoreCase)
+            .Select(r => new FeedItem(
+                arguesForLike ? FeedKind.IndifferentLikeArtist : FeedKind.IndifferentDislikeArtist,
+                r.Artist, null, r.ImageUrl,
+                0, Array.Empty<string>(), null, Reconsider: r.Signal))
+            .ToList();
+    }
 
     private Task<List<FeedItem>> MissingAlbumItems(string userId) =>
         AlbumItems(userId, upgrades: false);
@@ -528,13 +569,18 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     /// </summary>
     public async Task<int> RecordArtistVerdict(string userId, string artistName, DiscoveryStatus status)
     {
-        // Before Rate overwrites the previous verdict, while the row still carries it.
-        if (status is DiscoveryStatus.Disliked or DiscoveryStatus.Liked
+        // Before Rate overwrites the previous verdict, while the row still carries it. Indifferent
+        // confirms like the other two: it is the only thing that stops the sweep offering a shrug back,
+        // and a shrug is second-guessed from both sides, so without it a band with polarised song
+        // ratings would return every week for good.
+        if (status is DiscoveryStatus.Disliked or DiscoveryStatus.Liked or DiscoveryStatus.Indifferent
             && await _queue.TryConfirmVerdict(userId, artistName, status))
         {
+            // The status itself, not a hand-rolled "up"/"down" — that ternary read every third verdict
+            // as a rejection, which is a debugging trap in the log of all places.
             _logger.LogInformation(
-                "{User} thumbed {Artist} {Direction} a second time — the verdict is now permanent",
-                userId, artistName, status == DiscoveryStatus.Liked ? "up" : "down");
+                "{User} rated {Artist} {Verdict} a second time — the verdict is now permanent",
+                userId, artistName, status);
         }
 
         var rated = await _queue.Rate(userId, artistName, status, imageUrl: null);
@@ -543,10 +589,21 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
 
     /// <summary>
     /// The slow half: what a recorded verdict implies for the queue. A like grows the frontier from the
-    /// artist; a dislike — or a cleared verdict (<paramref name="status"/> null), which likewise takes
-    /// the artist out of the frontier — drops the pending candidates it alone had seeded (or just its
-    /// provenance + score share, where others also recommend them), so the queue tracks current taste
-    /// without a manual rebuild.
+    /// artist; every other decided verdict — a dislike, a shrug, or a cleared one
+    /// (<paramref name="status"/> null), all of which take the artist <em>out</em> of the frontier —
+    /// drops the pending candidates it alone had seeded (or just its provenance + score share, where
+    /// others also recommend them), so the queue tracks current taste without a manual rebuild.
+    ///
+    /// <para><b>Indifferent prunes, and the interesting case is Liked→Indifferent.</b> The like seeded
+    /// pending rows that name this artist in their <c>sources</c>; withdrawing it to a shrug leaves
+    /// those rows standing as recommendations grown from taste the user no longer claims. That is
+    /// exactly the situation a clear describes, so it gets the same cleanup. For an artist that was
+    /// never liked the call is a no-op — only <see cref="ExpandFrom"/> writes a name into
+    /// <c>sources</c> — so this costs one indexed find returning nothing.</para>
+    ///
+    /// <para>Note the chain is exhaustive by construction rather than by luck: an unhandled status here
+    /// silently does nothing, which is precisely how a Liked→Indifferent flip would have left orphaned
+    /// recommendations behind while looking entirely correct.</para>
     /// </summary>
     public async Task ApplyVerdictFollowUp(
         string userId, string artistName, DiscoveryStatus? status, int depth)
@@ -555,7 +612,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
         {
             await ExpandFrom(userId, new[] { artistName }, depth);
         }
-        else if (status is DiscoveryStatus.Disliked or null)
+        else if (status is DiscoveryStatus.Disliked or DiscoveryStatus.Indifferent or null)
         {
             await _queue.PruneBySource(userId, artistName);
         }

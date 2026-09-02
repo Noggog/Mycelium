@@ -42,6 +42,18 @@ export function IconReject(props: IconProps) {
   )
 }
 
+// Indifferent — a horizontal bar, the axis the other two point away from. Deliberately the quietest
+// mark of the three: it is a decision, but a decision not to lean either way, and an icon with any
+// direction in it would read as a weak thumb. Not a dash-in-a-circle, which reads as "blocked", and
+// not the moon, which is snooze.
+export function IconIndifferent(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5 12h14" />
+    </Svg>
+  )
+}
+
 // Snooze — a crescent moon.
 export function IconMoon(props: IconProps) {
   return (

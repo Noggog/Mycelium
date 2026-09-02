@@ -528,6 +528,7 @@ api.MapGet("/discovery/mixed", async (
                 FeedKind.RecommendedArtist, FeedKind.MissingAlbum,
                 FeedKind.RecommendedLibraryArtist, FeedKind.SeedLibraryArtist,
                 FeedKind.ReconsiderArtist, FeedKind.SecondThoughtsArtist,
+                FeedKind.IndifferentLikeArtist, FeedKind.IndifferentDislikeArtist,
             };
         }
         var feed = await engine.GetMixedFeed(
@@ -560,11 +561,20 @@ api.MapPost("/discovery/rate", async (
         string artist, string? album, string? albumArt, string verdict, bool? upgrade,
         HttpContext http, DiscoveryRatingService ratings) =>
     {
-        await ratings.RateOne(
-            http.User.GetSubject()!,
-            http.User.FindFirst("preferred_username")?.Value,
-            new DiscoveryRateItem(artist, album, albumArt, verdict, upgrade));
-        return Results.NoContent();
+        try
+        {
+            await ratings.RateOne(
+                http.User.GetSubject()!,
+                http.User.FindFirst("preferred_username")?.Value,
+                new DiscoveryRateItem(artist, album, albumArt, verdict, upgrade));
+            return Results.NoContent();
+        }
+        catch (ArgumentException ex)
+        {
+            // "indifferent" on an album — an artist verdict sent at the wrong thing. Same 400 shape the
+            // batch route answers with, rather than the silent reinterpretation the old fold gave.
+            return Results.BadRequest(new { error = ex.Message });
+        }
     })
     .RequireAuthorization()
     .WithName("RateCandidate");
@@ -625,11 +635,15 @@ api.MapPost("/discovery/seed", async (
 
         var username = http.User.FindFirst("preferred_username")?.Value;
         var tag = ArtistTag.For(username, DiscoveryStatus.Liked);
-        var dislikeTag = tag != null ? ArtistTag.For(username, DiscoveryStatus.Disliked) : null;
+        // Every other verdict tag, not just the dislike: seeding an artist the user had previously
+        // shrugged at would otherwise leave "_indifferent" sitting beside the new "_liked".
+        var staleTags = tag != null
+            ? ArtistTag.OtherVerdictTags(username, DiscoveryStatus.Liked)
+            : Array.Empty<string>();
         followUps.QueueVerdictFollowUp(
             userId, artist, DiscoveryStatus.Liked, depth,
             addTag: tag,
-            removeTags: dislikeTag != null ? new[] { dislikeTag } : Array.Empty<string>());
+            removeTags: staleTags);
 
         return Results.Ok(new { artist });
     })
@@ -716,14 +730,14 @@ api.MapDelete("/discovery/rate", async (
         {
             await engine.ClearArtistVerdict(userId, artist);
             // The queued follow-up prunes what the artist seeded and undoes the Plex tag — a cleared
-            // verdict shouldn't leave its "<username>_liked"/"_disliked" tag behind. We don't know which
-            // verdict it was, so strip both (the user holds at most one). Queued rather than awaited so
-            // it can't reorder against the rate that preceded it: one worker, submission order.
+            // verdict shouldn't leave its "<username>_liked"/"_disliked"/"_indifferent" tag behind. We
+            // don't know which verdict it was, so strip them all (the user holds at most one). Passing
+            // null as the "current" verdict is what makes OtherVerdictTags mean *every* one — and it has
+            // to, because this is the only route that removes a verdict tag: one missed here is a tag
+            // with no way out short of the dev panel. Queued rather than awaited so it can't reorder
+            // against the rate that preceded it: one worker, submission order.
             var username = http.User.FindFirst("preferred_username")?.Value;
-            var tags = new[] { DiscoveryStatus.Liked, DiscoveryStatus.Disliked }
-                .Select(s => ArtistTag.For(username, s))
-                .OfType<string>()
-                .ToArray();
+            var tags = ArtistTag.OtherVerdictTags(username, current: null);
             followUps.QueueVerdictFollowUp(userId, artist, status: null, depth: 0, addTag: null, removeTags: tags);
         }
         else
@@ -804,9 +818,17 @@ api.MapPost("/collections/resolve", async (
 api.MapPost("/collections/rate", async (
         long id, string verdict, HttpContext http, CollectionService collections) =>
     {
-        var status = verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
-            ? DiscoveryStatus.Liked
-            : DiscoveryStatus.Disliked;
+        DiscoveryStatus status;
+        try
+        {
+            // A collection is an album: "indifferent" is refused, not folded into a dislike.
+            status = DiscoveryVerdict.ForAlbum(verdict);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+
         var username = http.User.FindFirst("preferred_username")?.Value;
         var item = await collections.Rate(http.User.GetSubject()!, username, id, status);
         return item is null ? Results.NotFound($"Deezer has no album {id}.") : Results.Ok(item);

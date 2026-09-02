@@ -28,6 +28,8 @@ public class WireEnumTests
     [InlineData(FeedKind.SeedLibraryArtist, "SeedLibraryArtist")]
     [InlineData(FeedKind.ReconsiderArtist, "ReconsiderArtist")]
     [InlineData(FeedKind.SecondThoughtsArtist, "SecondThoughtsArtist")]
+    [InlineData(FeedKind.IndifferentLikeArtist, "IndifferentLikeArtist")]
+    [InlineData(FeedKind.IndifferentDislikeArtist, "IndifferentDislikeArtist")]
     public void A_feed_kind_goes_over_the_wire_as_its_name(FeedKind kind, string expected)
     {
         JsonSerializer.Serialize(kind).Should().Be($"\"{expected}\"");
@@ -69,6 +71,7 @@ public class WireEnumTests
     [InlineData(DiscoveryStatus.Liked, "Liked")]
     [InlineData(DiscoveryStatus.Disliked, "Disliked")]
     [InlineData(DiscoveryStatus.Snoozed, "Snoozed")]
+    [InlineData(DiscoveryStatus.Indifferent, "Indifferent")]
     public void A_discovery_status_goes_over_the_wire_as_its_name(DiscoveryStatus status, string expected)
     {
         JsonSerializer.Serialize(status).Should().Be($"\"{expected}\"");

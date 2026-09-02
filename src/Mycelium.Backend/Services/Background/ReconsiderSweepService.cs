@@ -4,11 +4,18 @@ using Mycelium.Interfaces;
 namespace Mycelium.Backend.Services.Background;
 
 /// <summary>
-/// Periodically re-reads the user's Plex song ratings for every band they've thumbed and flags the
-/// ones the ratings contradict, in both directions (see <see cref="ReconsiderPolicy"/>): a dislike the
-/// ratings rate highly becomes a "second chance" card, a like they rate poorly a "second thoughts" one.
-/// Those flagged rows are what the two discovery categories serve, so each feed is a single Mongo read:
-/// all the judgement happens here, out of band.
+/// Periodically re-reads the user's Plex song ratings for every band they've decided on and flags the
+/// ones the ratings contradict (see <see cref="ReconsiderPolicy"/>): a dislike the ratings rate highly
+/// becomes a "second chance" card, a like they rate poorly a "second thoughts" one, and a shrug they
+/// feel strongly about either way becomes one of the two indifferent cards. Those flagged rows are what
+/// the four discovery categories serve, so each feed is a single Mongo read: all the judgement happens
+/// here, out of band.
+///
+/// <para>Indifference is the reason this sweep matters more than it used to. A like or a dislike is an
+/// opinion that may age badly; a shrug is the <em>absence</em> of one, and nothing else in the app will
+/// ever ask about it again — the card has left the feed and expansion won't re-add it. This pass is the
+/// only route by which "I have no opinion on this band" becomes a real verdict once the user has
+/// actually heard it in the Deep Frontier rotation that indifference deliberately leaves them in.</para>
 ///
 /// The point is to re-litigate verdicts made years ago, so a slow cadence is the feature, not a
 /// compromise — a thumb isn't second-guessed seconds after it's made, and a rating made in Plex today
@@ -97,9 +104,15 @@ public class ReconsiderSweepService : BackgroundService
                 // nothing and so withdraws whatever they were carrying.
                 var link = await _links.Get(userId);
 
-                // Both directions off the same per-artist stats: a dislike the ratings praise, a like
-                // they pan. Confirmed verdicts (the same thumb given twice) never come back from here.
-                foreach (var verdict in new[] { DiscoveryStatus.Disliked, DiscoveryStatus.Liked })
+                // Every decided verdict off the same per-artist stats: a dislike the ratings praise, a
+                // like they pan, a shrug they feel either way about. Confirmed verdicts (the same
+                // decision given twice) never come back from here.
+                //
+                // Order is irrelevant — a row holds exactly one status, so the three passes are disjoint
+                // — and statsByArtist is shared across all of them, so an artist costs one Plex read
+                // however many verdicts are being swept.
+                foreach (var verdict in
+                         new[] { DiscoveryStatus.Disliked, DiscoveryStatus.Liked, DiscoveryStatus.Indifferent })
                 {
                     foreach (var rated in await _queue.GetUnconfirmedVerdicts(userId, verdict))
                     {

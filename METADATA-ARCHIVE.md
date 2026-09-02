@@ -68,7 +68,8 @@ system, and it's invisible until the day it matters.
 ### D1 — Export at the BSON layer, not the domain layer
 
 The domain read models are lossy. `ArtistRating` (`Discovery.cs:194`) carries artist/image/status/
-snooze but drops `decidedAt`, `dislikeConfirmed`, `likeConfirmed`, and the `reconsider` block.
+snooze but drops `decidedAt`, `dislikeConfirmed`, `likeConfirmed`, `indifferentConfirmed`, and the
+`reconsider` block.
 `AlbumRating` likewise. Exporting through them would silently discard the sticky "this verdict is
 final" flags — exactly the hand-made decisions most worth keeping.
 

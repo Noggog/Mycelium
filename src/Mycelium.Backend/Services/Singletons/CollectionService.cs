@@ -299,12 +299,13 @@ public class CollectionService
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            var status = item.Verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
-                ? DiscoveryStatus.Liked
-                : DiscoveryStatus.Disliked;
 
             try
             {
+                // A collection is an album, so "indifferent" is rejected rather than folded into a
+                // dislike — inside the try, so it lands as this item's error rather than aborting the
+                // other twenty-nine.
+                var status = DiscoveryVerdict.ForAlbum(item.Verdict);
                 // The same Rate the single-item route calls, so the missing-album row, the per-user
                 // verdict and the album mood are written identically whichever endpoint was used.
                 var rated = await Rate(userId, username, item.Id, status);
@@ -428,6 +429,11 @@ public class CollectionService
     ///
     /// <para>A snooze is a deferred decision, not a verdict, and is treated as a clear: nothing added,
     /// both stripped. Same as the artist path, which never tags one.</para>
+    ///
+    /// <para>Two verdicts here and three on an artist, deliberately. Indifference is an artist verdict —
+    /// an album thumbs-down already <em>means</em> "meh, hide this from my feed" — and the album routes
+    /// reject the token rather than folding it (see <see cref="DiscoveryVerdict.ForAlbum"/>), so no
+    /// album row can reach the <c>_</c> arm carrying one.</para>
     /// </summary>
     private static (string? Add, string[] Remove)? VerdictTags(string? username, DiscoveryStatus? status)
     {

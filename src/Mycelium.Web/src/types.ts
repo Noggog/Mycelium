@@ -160,7 +160,9 @@ export type FeedKind =
   | 'SeedLibraryArtist'
   | 'ReconsiderArtist'
   | 'SecondThoughtsArtist'
-export type DiscoveryStatus = 'Pending' | 'Liked' | 'Disliked' | 'Snoozed'
+  | 'IndifferentLikeArtist'
+  | 'IndifferentDislikeArtist'
+export type DiscoveryStatus = 'Pending' | 'Liked' | 'Disliked' | 'Snoozed' | 'Indifferent'
 
 // One thing to react to in the discovery feed. `album` is set only for MissingAlbum items;
 // `score`/`sources` rank and explain recommended artists (0/empty otherwise).

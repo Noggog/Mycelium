@@ -13,6 +13,7 @@ import {
   rate,
   seedArtist,
   unblockAlbum,
+  type AlbumVerdict,
   type Verdict,
 } from '../api/discovery'
 import { getRelated } from '../api/related'
@@ -34,7 +35,9 @@ import { useAuth } from '../auth/AuthContext'
 import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
-import { IconApprove, IconBlock, IconCheck, IconClear, IconReject, IconWrench, Spinner } from '../components/icons'
+import {
+  IconApprove, IconBlock, IconCheck, IconClear, IconIndifferent, IconReject, IconWrench, Spinner,
+} from '../components/icons'
 import { isDeezerBusy } from '../api/deezer'
 import { getCollections } from '../api/collections'
 import { CollectionResults, CollectionRow } from '../components/Collections'
@@ -54,18 +57,21 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? s
 
-const verdictStatus = (v: Verdict): DiscoveryStatus => (v === 'up' ? 'Liked' : 'Disliked')
+// Exhaustive rather than a ternary: a verdict that fell through to 'Disliked' would paint the wrong
+// thumb lit on the optimistic update, and the row would only correct itself on the next refetch.
+const verdictStatus = (v: Verdict): DiscoveryStatus =>
+  v === 'up' ? 'Liked' : v === 'indifferent' ? 'Indifferent' : 'Disliked'
 
 // The full library loads in one fetch, but rendering every row at once is the costly part — each
 // row extracts an accent colour from its photo — so we page the rendered rows. Search still spans
 // the whole library (it filters before paging).
 const PAGE_SIZE = 25
 
-// The list can be narrowed to what you've thumbed, so a verdict you gave months ago is one click
-// away rather than a name you have to remember first. The two toggles are independent: neither on is
-// the plain library listing, both on is "everything I've rated".
-type RatingFilter = { liked: boolean; disliked: boolean }
-const NO_FILTER: RatingFilter = { liked: false, disliked: false }
+// The list can be narrowed to what you've decided on, so a verdict you gave months ago is one click
+// away rather than a name you have to remember first. The three toggles are independent: none on is
+// the plain library listing, all on is "everything I've rated".
+type RatingFilter = { liked: boolean; indifferent: boolean; disliked: boolean }
+const NO_FILTER: RatingFilter = { liked: false, indifferent: false, disliked: false }
 
 const normalize = (s: string) => s.trim().toLowerCase()
 
@@ -591,7 +597,8 @@ function AlbumSubRow({
   busy: boolean
   isOpen: boolean
   onToggle: () => void
-  onRate: (a: ArtistAlbumItem, verdict: Verdict) => void
+  // Album rows: no "indifferent" (see AlbumVerdict), so the compiler rules out wiring one in.
+  onRate: (a: ArtistAlbumItem, verdict: AlbumVerdict) => void
   onClear: (a: ArtistAlbumItem) => void
   onMerge: (a: ArtistAlbumItem) => void
   onBlock: (a: ArtistAlbumItem) => void
@@ -747,7 +754,8 @@ function ArtistAlbums({ artist }: { artist: string }) {
   })
 
   const rateAlbum = useMutation({
-    mutationFn: ({ a, verdict }: { a: ArtistAlbumItem; verdict: Verdict }) => rate(toFeedItem(a), verdict),
+    mutationFn: ({ a, verdict }: { a: ArtistAlbumItem; verdict: AlbumVerdict }) =>
+      rate(toFeedItem(a), verdict),
     onMutate: ({ verdict }) => rateFeedback(verdict),
     onSuccess: invalidate,
   })
@@ -948,6 +956,16 @@ function ArtistListRow({
           >
             <IconApprove />
           </button>
+          {/* All three, or an artist you shrugged at would render with nothing lit and read as
+              unrated — while the verdict map happily hands back 'Indifferent'. */}
+          <button
+            className={verdict === 'Indifferent' ? 'disc-btn indifferent active' : 'disc-btn indifferent'}
+            title={verdict === 'Indifferent' ? 'Clear rating' : 'No strong feelings'}
+            disabled={ratePending}
+            onClick={() => onRate(name, 'indifferent', verdict)}
+          >
+            <IconIndifferent />
+          </button>
           <button
             className={verdict === 'Disliked' ? 'disc-btn down active' : 'disc-btn down'}
             title={verdict === 'Disliked' ? 'Clear rating' : 'Reject'}
@@ -1112,6 +1130,16 @@ function DetailPane({
                 onClick={() => onRate(name, 'up', verdict)}
               >
                 <IconApprove />
+              </button>
+              <button
+                className={verdict === 'Indifferent'
+                  ? 'disc-btn indifferent active'
+                  : 'disc-btn indifferent'}
+                title={verdict === 'Indifferent' ? 'Clear rating' : 'No strong feelings'}
+                disabled={ratePending}
+                onClick={() => onRate(name, 'indifferent', verdict)}
+              >
+                <IconIndifferent />
               </button>
               <button
                 className={verdict === 'Disliked' ? 'disc-btn down active' : 'disc-btn down'}
@@ -1381,7 +1409,7 @@ export default function Browse() {
   // Which verdicts the list is narrowed to. Session-only on purpose: a remembered filter would greet
   // you with a fraction of your library and no obvious reason why.
   const [ratingFilter, setRatingFilter] = useState<RatingFilter>(NO_FILTER)
-  const filterActive = ratingFilter.liked || ratingFilter.disliked
+  const filterActive = ratingFilter.liked || ratingFilter.indifferent || ratingFilter.disliked
   // The artist open in the right-hand readout (desktop) / drawer (mobile), and which of its tabs is
   // showing. Carried as a lightweight selection so a related-artist card the user drills into — which
   // may not be in the library — can still drive the readout.
@@ -1521,15 +1549,20 @@ export default function Browse() {
   // Counted over the same set whether or not the filter is on, so the number on a chip doesn't move
   // the moment you click it.
   let likedCount = 0
+  let indifferentCount = 0
   let dislikedCount = 0
   for (const r of [...libraryRows, ...ratedElsewhere]) {
     const v = rowVerdict(r)
     if (v === 'Liked') likedCount++
+    else if (v === 'Indifferent') indifferentCount++
     else if (v === 'Disliked') dislikedCount++
   }
 
   const matchesFilter = (v: DiscoveryStatus | undefined) =>
-    !filterActive || (v === 'Liked' && ratingFilter.liked) || (v === 'Disliked' && ratingFilter.disliked)
+    !filterActive
+    || (v === 'Liked' && ratingFilter.liked)
+    || (v === 'Indifferent' && ratingFilter.indifferent)
+    || (v === 'Disliked' && ratingFilter.disliked)
 
   const filtered = rows.filter(
     (r) =>
@@ -1539,8 +1572,15 @@ export default function Browse() {
           || normalize(r.item.artist.artistName).includes(normalize(query))) && matchesFilter(rowVerdict(r)),
   )
 
-  // How the active filter reads in the empty-state line ("you haven't <word> anything yet").
-  const filterWord = ratingFilter.liked && ratingFilter.disliked ? 'rated' : ratingFilter.liked ? 'liked' : 'disliked'
+  // How the active filter reads in the empty-state line ("you haven't <word> anything yet"). More than
+  // one chip lit has no single honest word, so it falls back to "rated" — which is what the union of
+  // any two of them is.
+  const litFilters = [
+    ratingFilter.liked && 'liked',
+    ratingFilter.indifferent && 'shrugged at',
+    ratingFilter.disliked && 'disliked',
+  ].filter(Boolean) as string[]
+  const filterWord = litFilters.length === 1 ? litFilters[0] : 'rated'
 
   // Clamp to a valid page after the filter shrinks (e.g. a search that lands past the current page).
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -1640,6 +1680,20 @@ export default function Browse() {
             >
               <IconApprove size={15} /> Liked
               <span className="browse-filter-count">{likedCount}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={ratingFilter.indifferent}
+              title={ratingFilter.indifferent
+                ? 'Stop filtering by indifferent'
+                : 'Show only what you’ve shrugged at'}
+              className={ratingFilter.indifferent
+                ? 'disc-btn indifferent active'
+                : 'disc-btn indifferent'}
+              onClick={() => onToggleFilter('indifferent')}
+            >
+              <IconIndifferent size={15} /> Indifferent
+              <span className="browse-filter-count">{indifferentCount}</span>
             </button>
             <button
               type="button"

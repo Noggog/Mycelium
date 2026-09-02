@@ -7,7 +7,8 @@ namespace Mycelium.Interfaces;
 ///
 /// <para>Deliberately not expressed in terms of the domain records: those are lossy. An
 /// <see cref="ArtistRating"/> drops <c>decidedAt</c> and the sticky <c>likeConfirmed</c> /
-/// <c>dislikeConfirmed</c> flags; <see cref="AlbumRating"/> drops the same. Archiving through them
+/// <c>dislikeConfirmed</c> / <c>indifferentConfirmed</c> flags; <see cref="AlbumRating"/> drops the
+/// same. Archiving through them
 /// would quietly discard the hand-made decisions most worth keeping, and the loss would be invisible
 /// until a restore. So the archive reads whole documents and decides what to keep itself.</para>
 ///

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Mycelium.Backend;
 using Mycelium.Backend.Services.Background;
 using Mycelium.Backend.Services.Singletons;
 using Mycelium.Deezer.Services;
@@ -28,6 +29,7 @@ public class DiscoveryRatingServiceTests
     private const string Liked = "noggog_liked";
     private const string Disliked = "noggog_disliked";
     private const string Recommended = "noggog_recommended";
+    private const string Indifferent = "noggog_indifferent";
 
     private readonly IUserQueueRepo _queue = Substitute.For<IUserQueueRepo>();
     private readonly IRelatedArtistReader _related = Substitute.For<IRelatedArtistReader>();
@@ -64,7 +66,11 @@ public class DiscoveryRatingServiceTests
             NullLogger<MissingAlbumRefresher>.Instance);
         var engine = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,
-            quality, NullLogger<DiscoveryEngine>.Instance);
+            quality,
+            new ReconsiderPolicy(
+                MinAverage: 3, MaxAverage: 2, MinRatedFraction: 1.0 / 3,
+                Interval: TimeSpan.FromDays(7), StartupDelay: TimeSpan.Zero),
+            NullLogger<DiscoveryEngine>.Instance);
 
         _followUps = new ArtistFollowUpService(
             _verdicts, _related, _tagger, _albumTagger, Substitute.For<IMoodTagSeeder>(),
@@ -172,10 +178,66 @@ public class DiscoveryRatingServiceTests
 
         await _tagger.Received(1).SetTags(
             "Autechre", Liked,
-            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Disliked, Recommended })));
+            Arg.Is<IReadOnlyCollection<string>>(r =>
+                r.SequenceEqual(new[] { Disliked, Indifferent, Recommended })));
         await _tagger.Received(1).SetTags(
             "Coldplay", Disliked,
-            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { Liked, Recommended })));
+            Arg.Is<IReadOnlyCollection<string>>(r =>
+                r.SequenceEqual(new[] { Liked, Indifferent, Recommended })));
+    }
+
+    /// <summary>
+    /// A shrug is a verdict like any other on the way into Plex: it stamps its own mood and strips
+    /// <em>both</em> of the others. The strip set is asserted whole rather than by spot-check, because
+    /// a leftover "_liked" beside a new "_indifferent" fails nothing — it just keeps the band in a
+    /// "My Library" playlist the user has moved on from.
+    /// </summary>
+    [Fact]
+    public async Task Shrugging_at_an_artist_stamps_indifferent_and_strips_both_thumbs()
+    {
+        await _sut.RateOne(User, Username, Artist("Editors", "indifferent"));
+
+        await Drain(() => _tagger.ReceivedCalls().Any());
+
+        await _queue.Received(1).Rate(User, "Editors", DiscoveryStatus.Indifferent, Arg.Any<string?>());
+        await _tagger.Received(1).SetTags(
+            "Editors", Indifferent,
+            Arg.Is<IReadOnlyCollection<string>>(r =>
+                r.SequenceEqual(new[] { Liked, Disliked, Recommended })));
+    }
+
+    /// <summary>
+    /// The album path refuses the token instead of folding it into a dislike. Folding is what the
+    /// "anything that isn't up reads as down" contract would have done, and it would have written an
+    /// Indifferent album row that no label map renders and that GetDecidedKeys swallows whole — the
+    /// album silently vanishing from the missing-albums feed with nothing anywhere to undo it.
+    /// </summary>
+    [Fact]
+    public async Task Shrugging_at_an_album_is_refused_rather_than_read_as_a_dislike()
+    {
+        var act = () => _sut.RateOne(User, Username, Album("Boards of Canada", "Geogaddi", "indifferent"));
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        await _albumRatings.DidNotReceive().Rate(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+            Arg.Any<DiscoveryStatus>());
+    }
+
+    /// <summary>
+    /// In a batch it is data, not an exception: the one bad item is attributed and the rest still land.
+    /// </summary>
+    [Fact]
+    public async Task A_shrug_at_an_album_fails_only_its_own_batch_item()
+    {
+        var result = await _sut.RateMany(User, Username, new[]
+        {
+            Artist("Autechre"),
+            Album("Boards of Canada", "Geogaddi", "indifferent"),
+        });
+
+        result.Succeeded.Should().Be(1);
+        result.Failed.Should().Be(1);
+        result.Results.Single(r => !r.Ok).Album.Should().Be("Geogaddi");
     }
 
     /// <summary>

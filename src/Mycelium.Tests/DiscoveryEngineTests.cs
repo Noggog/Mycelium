@@ -46,6 +46,11 @@ public class DiscoveryEngineTests
         _sut = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,
             new UserQualityService(_users, AudioQuality.Lossless),
+            // The production defaults. Only the thresholds matter here, and only for splitting the
+            // flagged Indifferent rows into their two feed sections.
+            new ReconsiderPolicy(
+                MinAverage: 3, MaxAverage: 2, MinRatedFraction: 1.0 / 3,
+                Interval: TimeSpan.FromDays(7), StartupDelay: TimeSpan.Zero),
             NullLogger<DiscoveryEngine>.Instance);
 
         // Sensible empty defaults; individual tests override what they need.
@@ -800,6 +805,136 @@ public class DiscoveryEngineTests
         var page = await SecondThoughts();
 
         page.Items.Select(i => i.Artist.ArtistName).Should().Equal("Nickelback", "Creed");
+    }
+
+    // ---- Indifference: one flagged set, split by which way the ratings argue ----
+
+    private Task<DiscoveryFeedPage> IndifferentUp() =>
+        _sut.GetFeed(User, FeedKind.IndifferentLikeArtist, 0, 20);
+
+    private Task<DiscoveryFeedPage> IndifferentDown() =>
+        _sut.GetFeed(User, FeedKind.IndifferentDislikeArtist, 0, 20);
+
+    /// <summary>
+    /// A shrug is the only verdict contradicted from both sides, so unlike the other two sections these
+    /// share a single flagged set and are told apart by the stored average against the policy's
+    /// threshold — not by the status they were fetched at.
+    /// </summary>
+    [Fact]
+    public async Task A_flagged_shrug_lands_in_the_section_its_ratings_argue_for()
+    {
+        _queue.GetReconsiderable(User, DiscoveryStatus.Indifferent).Returns(new[]
+        {
+            new ReconsiderCandidate(new ArtistKey("Slowdive"), "sd-img", new ReconsiderSignal(4.0, 4, 6)),
+            new ReconsiderCandidate(new ArtistKey("Creed"), "cr-img", new ReconsiderSignal(1.5, 4, 6)),
+        });
+
+        var up = (await IndifferentUp()).Items.Single();
+        up.Kind.Should().Be(FeedKind.IndifferentLikeArtist);
+        up.Artist.ArtistName.Should().Be("Slowdive");
+        up.ImageUrl.Should().Be("sd-img");
+        up.Reconsider.Should().Be(new ReconsiderSignal(4.0, 4, 6));
+
+        var down = (await IndifferentDown()).Items.Single();
+        down.Kind.Should().Be(FeedKind.IndifferentDislikeArtist);
+        down.Artist.ArtistName.Should().Be("Creed");
+    }
+
+    [Fact]
+    public async Task Each_indifferent_section_ranks_its_own_most_contradicted_first()
+    {
+        _queue.GetReconsiderable(User, DiscoveryStatus.Indifferent).Returns(new[]
+        {
+            new ReconsiderCandidate(new ArtistKey("Ride"), null, new ReconsiderSignal(3.2, 4, 4)),
+            new ReconsiderCandidate(new ArtistKey("Slowdive"), null, new ReconsiderSignal(4.5, 4, 4)),
+            new ReconsiderCandidate(new ArtistKey("Creed"), null, new ReconsiderSignal(1.9, 4, 4)),
+            new ReconsiderCandidate(new ArtistKey("Nickelback"), null, new ReconsiderSignal(0.5, 4, 4)),
+        });
+
+        // Highest first on the way up, lowest first on the way down: opposite ends of one scale.
+        (await IndifferentUp()).Items.Select(i => i.Artist.ArtistName).Should().Equal("Slowdive", "Ride");
+        (await IndifferentDown()).Items.Select(i => i.Artist.ArtistName)
+            .Should().Equal("Nickelback", "Creed");
+    }
+
+    /// <summary>
+    /// The split is one boolean, not two predicates, so every flagged row lands in exactly one section
+    /// — including one stranded in the dead band by a threshold retuned after it was flagged. Two
+    /// predicates would drop it from both, leaving a row flagged in Mongo that no page can show and no
+    /// click can clear.
+    /// </summary>
+    [Fact]
+    public async Task Every_flagged_shrug_lands_in_exactly_one_section()
+    {
+        _queue.GetReconsiderable(User, DiscoveryStatus.Indifferent).Returns(new[]
+        {
+            // 2.5★ is the dead band: the sweep would not flag this today, but a row flagged under
+            // different thresholds still has to be servable.
+            new ReconsiderCandidate(new ArtistKey("Editors"), null, new ReconsiderSignal(2.5, 4, 6)),
+        });
+
+        var up = (await IndifferentUp()).Items.Count;
+        var down = (await IndifferentDown()).Items.Count;
+
+        (up + down).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task An_indifferent_row_never_shows_up_as_a_thumb_being_second_guessed()
+    {
+        _queue.GetReconsiderable(User, DiscoveryStatus.Indifferent).Returns(new[]
+        {
+            new ReconsiderCandidate(new ArtistKey("Slowdive"), null, new ReconsiderSignal(4.0, 4, 6)),
+        });
+
+        (await Reconsidered()).Items.Should().BeEmpty();
+        (await SecondThoughts()).Items.Should().BeEmpty();
+    }
+
+    // ---- Indifference: what a shrug does to the queue ----
+
+    /// <summary>
+    /// The Liked&#8594;Indifferent case, and the reason indifference prunes at all. The like seeded
+    /// pending rows naming this artist in their sources; withdrawing it to a shrug leaves them standing
+    /// as recommendations grown from taste the user no longer claims — exactly what a clear describes,
+    /// so it gets the same cleanup. Without this the chain simply falls through and everything looks
+    /// correct.
+    /// </summary>
+    [Fact]
+    public async Task Shrugging_at_an_artist_prunes_what_it_seeded_and_does_not_expand()
+    {
+        await _sut.RateArtist(User, "Phoebe Bridgers", DiscoveryStatus.Indifferent);
+
+        await _queue.Received(1).Rate(User, "Phoebe Bridgers", DiscoveryStatus.Indifferent, null);
+        await _queue.Received(1).PruneBySource(User, "Phoebe Bridgers");
+        await _related.DidNotReceive().GetRelated(Arg.Any<ArtistKey>(), Arg.Any<bool>(), Arg.Any<bool>());
+        await _queue.DidNotReceive().UpsertCandidates(
+            Arg.Any<string>(), Arg.Any<IReadOnlyList<DiscoveryCandidate>>());
+    }
+
+    [Fact]
+    public async Task Deferred_follow_up_for_a_shrug_prunes_like_a_dislike()
+    {
+        await _sut.ApplyVerdictFollowUp(User, "boygenius", DiscoveryStatus.Indifferent, depth: 0);
+
+        await _queue.Received(1).PruneBySource(User, "boygenius");
+        await _queue.DidNotReceive().UpsertCandidates(
+            Arg.Any<string>(), Arg.Any<IReadOnlyList<DiscoveryCandidate>>());
+    }
+
+    /// <summary>
+    /// A shrug confirms on the second pass exactly as a thumb does. It matters more here: indifference
+    /// is contradicted from both sides, so without a terminal state a band with polarised song ratings
+    /// would be offered back every week for good.
+    /// </summary>
+    [Fact]
+    public async Task A_second_shrug_confirms_the_verdict()
+    {
+        _queue.TryConfirmVerdict(User, "Editors", DiscoveryStatus.Indifferent).Returns(true);
+
+        await _sut.RecordArtistVerdict(User, "Editors", DiscoveryStatus.Indifferent);
+
+        await _queue.Received(1).TryConfirmVerdict(User, "Editors", DiscoveryStatus.Indifferent);
     }
 
     [Fact]

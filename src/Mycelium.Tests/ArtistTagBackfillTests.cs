@@ -34,9 +34,15 @@ public class ArtistTagBackfillTests
             .Select(r => new ArtistRating(new ArtistKey(r.Artist), null, r.Status))
             .ToArray());
 
-    private Task ReceivedTag(string artist, string add, string remove) =>
+    /// <summary>
+    /// Asserts the exact strip set, not just that the right tag went on. A backfill that added the
+    /// right verdict but left another one standing is the failure that shows up months later as a smart
+    /// playlist matching music the user has moved on from — so the set is compared whole, and
+    /// order-insensitively, since nothing depends on the order it's built in.
+    /// </summary>
+    private Task ReceivedTag(string artist, string add, params string[] remove) =>
         _tagger.Received(1).SetTags(artist, add,
-            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { remove })));
+            Arg.Is<IReadOnlyCollection<string>>(r => r.OrderBy(x => x).SequenceEqual(remove.OrderBy(x => x))));
 
     [Fact]
     public async Task Stamps_a_like_made_before_the_artist_existed_in_plex()
@@ -46,7 +52,7 @@ public class ArtistTagBackfillTests
         var applied = await _sut.Backfill(new[] { "Big Thief" });
 
         applied.Should().Be(1);
-        await ReceivedTag("Big Thief", "noggog_liked", "noggog_disliked");
+        await ReceivedTag("Big Thief", "noggog_liked", "noggog_disliked", "noggog_indifferent");
     }
 
     [Fact]
@@ -56,7 +62,7 @@ public class ArtistTagBackfillTests
 
         await _sut.Backfill(new[] { "Big Thief" });
 
-        await ReceivedTag("Big Thief", "noggog_disliked", "noggog_liked");
+        await ReceivedTag("Big Thief", "noggog_disliked", "noggog_liked", "noggog_indifferent");
     }
 
     [Fact]
@@ -120,7 +126,7 @@ public class ArtistTagBackfillTests
         var applied = await _sut.Backfill(new[] { "Nina Simone;Hot Chip" });
 
         applied.Should().Be(1);
-        await ReceivedTag("Hot Chip", "noggog_liked", "noggog_disliked");
+        await ReceivedTag("Hot Chip", "noggog_liked", "noggog_disliked", "noggog_indifferent");
     }
 
     [Fact]
@@ -147,7 +153,7 @@ public class ArtistTagBackfillTests
         var applied = await _sut.Backfill(new[] { "Big Thief" });
 
         applied.Should().Be(2);
-        await ReceivedTag("Big Thief", "noggog_liked", "noggog_disliked");
-        await ReceivedTag("Big Thief", "kate_disliked", "kate_liked");
+        await ReceivedTag("Big Thief", "noggog_liked", "noggog_disliked", "noggog_indifferent");
+        await ReceivedTag("Big Thief", "kate_disliked", "kate_liked", "kate_indifferent");
     }
 }

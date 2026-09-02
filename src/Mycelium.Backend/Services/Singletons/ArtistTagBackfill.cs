@@ -65,8 +65,11 @@ public class ArtistTagBackfill
             foreach (var rating in await _queue.GetRated(userId))
             {
                 // GetRated is "everything not pending", which includes snoozed rows — a deferred
-                // decision, not a verdict. Only an actual thumb earns a tag.
-                if (rating.Status is not (DiscoveryStatus.Liked or DiscoveryStatus.Disliked)
+                // decision, not a verdict. Only an actual decision earns a tag; ArtistTag.For now
+                // returns null for the rest, so this guard is belt-and-braces rather than the only
+                // thing standing between a snooze and a "_disliked" tag.
+                if (rating.Status is not (DiscoveryStatus.Liked or DiscoveryStatus.Disliked
+                        or DiscoveryStatus.Indifferent)
                     || !names.Contains(rating.Artist.ArtistName))
                 {
                     continue;
@@ -78,13 +81,9 @@ public class ArtistTagBackfill
                     continue; // no usable username to prefix the tag with
                 }
 
-                // Strip the opposite verdict as the live rating path does: a rating flipped while the
-                // artist was still outside the library would otherwise land both tags on arrival.
-                var opposite = rating.Status == DiscoveryStatus.Liked
-                    ? DiscoveryStatus.Disliked
-                    : DiscoveryStatus.Liked;
-                var oppositeTag = ArtistTag.For(user?.Username, opposite);
-                var remove = oppositeTag != null ? new[] { oppositeTag } : Array.Empty<string>();
+                // Strip every other verdict as the live rating path does: a rating flipped while the
+                // artist was still outside the library would otherwise land two tags on arrival.
+                var remove = ArtistTag.OtherVerdictTags(user?.Username, rating.Status);
 
                 await _tagger.SetTags(rating.Artist.ArtistName, tag, remove);
                 applied++;

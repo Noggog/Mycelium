@@ -28,10 +28,17 @@ public class UserQueueRepo : IUserQueueRepo
     // The mirror: "this thumbs-up is final", set when a like lands on an already-liked row. Same
     // absent-reads-as-false rule, so every pre-existing like is still open to being second-guessed.
     private const string FieldLikeConfirmed = "likeConfirmed";
+    // The third of the set: "this shrug is final", set when Indifferent lands on an already-indifferent
+    // row. It matters more here than for the other two, because indifference is contradicted in *both*
+    // directions — without a terminal state, a band whose song ratings are polarised would be offered
+    // back every single week forever. Same absent-reads-as-false rule.
+    private const string FieldIndifferentConfirmed = "indifferentConfirmed";
     // The periodic sweep's verdict that this artist's song ratings contradict how it was thumbed, as a
     // subdocument holding the rating snapshot behind it. Present = flagged; the sweep $unsets it to
     // withdraw the verdict, so "is it flagged" and "why" can never disagree. Which way it cuts follows
-    // from the row's status, so one field serves both the like and dislike sides.
+    // from the row's status for a like or a dislike; for an Indifferent row — the one verdict that can
+    // be contradicted either way — it follows from the stored average against the policy threshold.
+    // Either way one field serves every side.
     private const string FieldReconsider = "reconsider";
     private const string FieldReconsiderAverage = "average";
     private const string FieldReconsiderRatedCount = "ratedCount";
@@ -41,6 +48,7 @@ public class UserQueueRepo : IUserQueueRepo
     private static readonly string StatusLiked = DiscoveryStatus.Liked.ToString();
     private static readonly string StatusDisliked = DiscoveryStatus.Disliked.ToString();
     private static readonly string StatusSnoozed = DiscoveryStatus.Snoozed.ToString();
+    private static readonly string StatusIndifferent = DiscoveryStatus.Indifferent.ToString();
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -103,11 +111,17 @@ public class UserQueueRepo : IUserQueueRepo
     public async Task<HashSet<string>> GetDecidedArtists(string userId)
     {
         var f = Builders<BsonDocument>.Filter;
-        // Liked/Disliked are decided forever; a Snoozed row counts as decided only while unexpired,
-        // so an expired snooze drops out of this exclusion set and expansion may re-touch it.
+        // Liked/Disliked/Indifferent are decided forever; a Snoozed row counts as decided only while
+        // unexpired, so an expired snooze drops out of this exclusion set and expansion may re-touch it.
+        //
+        // Indifferent belongs here for the same reason the other two do: it is an answer. It is also the
+        // single filter that makes a shrug behave like one — it is what takes the card out of the feed,
+        // what stops ExpandFrom re-adding the artist, and (through RecommendedLibraryArtistNames) what
+        // makes the nightly sweep strip the artist's "<user>_recommended" marker.
         var filter = f.Eq(FieldUserId, userId)
                      & (f.Eq(FieldStatus, StatusLiked)
                         | f.Eq(FieldStatus, StatusDisliked)
+                        | f.Eq(FieldStatus, StatusIndifferent)
                         | (f.Eq(FieldStatus, StatusSnoozed) & f.Gt(FieldSnoozeUntil, DateTimeOffset.UtcNow.UtcDateTime)));
         var cursor = await Collection.FindAsync(
             filter,
@@ -277,14 +291,16 @@ public class UserQueueRepo : IUserQueueRepo
 
     /// <summary>
     /// The stored status string and its sticky "final" flag for a swept verdict. Anything but
-    /// Liked/Disliked is a caller bug — the sweep only ever second-guesses a thumb.
+    /// Liked/Disliked/Indifferent is a caller bug — the sweep only ever second-guesses a decision.
     /// </summary>
     private static (string Status, string ConfirmField) Verdict(DiscoveryStatus status) => status switch
     {
         DiscoveryStatus.Disliked => (StatusDisliked, FieldDislikeConfirmed),
         DiscoveryStatus.Liked => (StatusLiked, FieldLikeConfirmed),
+        DiscoveryStatus.Indifferent => (StatusIndifferent, FieldIndifferentConfirmed),
         _ => throw new ArgumentOutOfRangeException(
-            nameof(status), status, "Only Liked/Disliked verdicts can be confirmed or reconsidered"),
+            nameof(status), status,
+            "Only Liked/Disliked/Indifferent verdicts can be confirmed or reconsidered"),
     };
 
     /// <summary>Verdicts of one kind that haven't been re-affirmed: the sweep's working set.</summary>

@@ -6,7 +6,7 @@ import {
   resolveCollection,
   searchCollections,
 } from '../api/collections'
-import type { Verdict } from '../api/discovery'
+import type { AlbumVerdict } from '../api/discovery'
 import { isDeezerBusy } from '../api/deezer'
 import { useDebounced } from '../hooks/useDebounced'
 import { rateFeedback } from '../effects/effectsBus'
@@ -23,7 +23,7 @@ import { IconApprove, IconReject, Spinner } from './icons'
 // the library list for the collections already on the shelf, and the Deezer results block that sits
 // under the artist search for everything else.
 
-const verdictStatus = (v: Verdict): DiscoveryStatus => (v === 'up' ? 'Liked' : 'Disliked')
+const verdictStatus = (v: AlbumVerdict): DiscoveryStatus => (v === 'up' ? 'Liked' : 'Disliked')
 
 // The queries a verdict invalidates: the owned-collection list Browse mixes into the library, the
 // search results, the ratings behind the artist rows, and the buy list a like lands on.
@@ -84,7 +84,8 @@ export function CollectionRow({ item }: { item: CollectionItem }) {
   }
 
   const mutate = useMutation({
-    mutationFn: async (verdict: Verdict) => {
+    // A collection is an album — two verdicts, not three. See AlbumVerdict.
+    mutationFn: async (verdict: AlbumVerdict) => {
       if (item.verdict === verdictStatus(verdict)) {
         return clearCollectionRating(item.artist.artistName, item.title)
       }

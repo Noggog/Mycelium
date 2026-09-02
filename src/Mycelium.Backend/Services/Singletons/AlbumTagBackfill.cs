@@ -89,6 +89,11 @@ public class AlbumTagBackfill
 
                 // Strip the opposite verdict as the live path does: a rating flipped while the album was
                 // still outside the library would otherwise land both tags on arrival.
+                //
+                // Still "the opposite" rather than ArtistTag.OtherVerdictTags, unlike the artist path:
+                // Indifferent is an artist verdict and the album routes reject the token outright (see
+                // DiscoveryVerdict.ForAlbum), so no album row can hold one and there is no third tag in
+                // the album mood vocabulary to strip.
                 var opposite = rating.Status == DiscoveryStatus.Liked
                     ? DiscoveryStatus.Disliked
                     : DiscoveryStatus.Liked;

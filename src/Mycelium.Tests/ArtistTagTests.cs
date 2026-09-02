@@ -7,10 +7,64 @@ namespace Mycelium.Tests;
 public class ArtistTagTests
 {
     [Fact]
-    public void Like_and_dislike_get_their_verdict_suffix()
+    public void Every_verdict_gets_its_own_suffix()
     {
         ArtistTag.For("noggog", DiscoveryStatus.Liked).Should().Be("noggog_liked");
         ArtistTag.For("noggog", DiscoveryStatus.Disliked).Should().Be("noggog_disliked");
+        ArtistTag.For("noggog", DiscoveryStatus.Indifferent).Should().Be("noggog_indifferent");
+    }
+
+    /// <summary>
+    /// The regression guard for the fold this method used to be. When it read
+    /// <c>status == Liked ? "liked" : "disliked"</c>, every non-verdict status silently produced a
+    /// rejection tag — and a wrongly-rejected band fails nothing loudly, it just stops appearing in
+    /// the Deep Frontier playlist. A snooze is a deferred decision and Pending is no decision at all;
+    /// neither has a tag, and asking for one must yield nothing rather than the wrong thing.
+    /// </summary>
+    [Theory]
+    [InlineData(DiscoveryStatus.Pending)]
+    [InlineData(DiscoveryStatus.Snoozed)]
+    public void A_status_that_is_not_a_verdict_has_no_tag(DiscoveryStatus status)
+    {
+        ArtistTag.For("noggog", status).Should().BeNull();
+    }
+
+    /// <summary>
+    /// The one-verdict-tag invariant, from the other side: whatever goes on, everything else comes off.
+    /// This was expressible as "the opposite" with two verdicts and is not with three — an
+    /// Indifferent→Liked flip has two tags to strip, and a call site that stripped only one would leave
+    /// a stale verdict behind without failing anything.
+    /// </summary>
+    [Fact]
+    public void The_other_verdict_tags_are_everything_but_the_one_going_on()
+    {
+        ArtistTag.OtherVerdictTags("noggog", DiscoveryStatus.Liked)
+            .Should().BeEquivalentTo("noggog_disliked", "noggog_indifferent");
+        ArtistTag.OtherVerdictTags("noggog", DiscoveryStatus.Disliked)
+            .Should().BeEquivalentTo("noggog_liked", "noggog_indifferent");
+        ArtistTag.OtherVerdictTags("noggog", DiscoveryStatus.Indifferent)
+            .Should().BeEquivalentTo("noggog_liked", "noggog_disliked");
+    }
+
+    /// <summary>
+    /// A cleared rating passes null: we don't know which verdict the row held, so every one comes off.
+    /// This is the only route that removes a verdict tag, so a tag missing from this set is a tag with
+    /// no way out of Plex short of the dev panel.
+    /// </summary>
+    [Fact]
+    public void Clearing_a_rating_strips_every_verdict_tag()
+    {
+        ArtistTag.OtherVerdictTags("noggog", current: null)
+            .Should().BeEquivalentTo("noggog_liked", "noggog_disliked", "noggog_indifferent");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("@example.com")]
+    public void No_usable_username_yields_no_tags_to_strip(string? username)
+    {
+        ArtistTag.OtherVerdictTags(username, DiscoveryStatus.Liked).Should().BeEmpty();
     }
 
     [Fact]
@@ -46,6 +100,7 @@ public class ArtistTagTests
     [Theory]
     [InlineData("noggog_liked")]
     [InlineData("noggog_disliked")]
+    [InlineData("noggog_indifferent")]
     [InlineData("NOGGOG_LIKED")]
     public void Managed_tags_are_recognized(string label)
     {
@@ -67,6 +122,20 @@ public class ArtistTagTests
     {
         ArtistTag.IsManaged(ArtistTag.For("noggog", DiscoveryStatus.Liked)).Should().BeTrue();
         ArtistTag.IsManaged(ArtistTag.For("noggog", DiscoveryStatus.Disliked)).Should().BeTrue();
+        ArtistTag.IsManaged(ArtistTag.For("noggog", DiscoveryStatus.Indifferent)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The suffixes must not alias each other, or the dev wipe's rebuild would misclassify. Worth
+    /// pinning because "_liked" is a substring of "_disliked" in the obvious reading — it isn't a
+    /// suffix of it, which is what EndsWith actually asks.
+    /// </summary>
+    [Fact]
+    public void The_verdict_suffixes_do_not_alias_one_another()
+    {
+        ArtistTag.IsVerdict("noggog_indifferent").Should().BeTrue();
+        "noggog_disliked".EndsWith("_liked", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        "noggog_indifferent".EndsWith("_liked", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
     }
 
     [Fact]
@@ -99,6 +168,7 @@ public class ArtistTagTests
     [Theory]
     [InlineData("noggog_liked")]
     [InlineData("NOGGOG_DISLIKED")]
+    [InlineData("noggog_indifferent")]
     public void A_verdict_is_ours_but_is_not_an_added_credit(string label)
     {
         ArtistTag.IsVerdict(label).Should().BeTrue();

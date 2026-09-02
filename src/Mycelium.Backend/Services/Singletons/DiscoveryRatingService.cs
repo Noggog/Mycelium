@@ -12,10 +12,12 @@ namespace Mycelium.Backend.Services.Singletons;
 /// strip — and they are not independent: the mood tag a like writes is the one a later dislike has to
 /// remove, so the two halves have to agree on how a tag is spelled. Once the batch endpoint existed
 /// there were two callers making those decisions, and a second copy that got the *stripping* subtly
-/// wrong would not fail anything. It would leave both <c>&lt;user&gt;_liked</c> and
-/// <c>&lt;user&gt;_disliked</c> on an artist, and the only symptom would be a smart playlist quietly
-/// matching music the user had rejected — noticed, if ever, months later. So there is exactly one
-/// implementation (<see cref="RateOne"/>) and the batch is a loop over it.</para>
+/// wrong would not fail anything. It would leave two of <c>&lt;user&gt;_liked</c> /
+/// <c>&lt;user&gt;_disliked</c> / <c>&lt;user&gt;_indifferent</c> on an artist, and the only symptom
+/// would be a smart playlist quietly matching music the user had moved on from — noticed, if ever,
+/// months later. So there is exactly one implementation (<see cref="RateOne"/>) and the batch is a
+/// loop over it. The same reasoning is why the strip set is computed by
+/// <see cref="ArtistTag.OtherVerdictTags"/> rather than spelled out per call site.</para>
 /// </summary>
 public class DiscoveryRatingService
 {
@@ -42,34 +44,42 @@ public class DiscoveryRatingService
     /// blocking on the rate-limited source APIs. That is also why a batch of forty is not the load it
     /// looks like: it is forty small writes and forty queued items, not forty round trips.</para>
     /// </summary>
+    /// <exception cref="ArgumentException">
+    /// An "indifferent" verdict on an album — see <see cref="DiscoveryVerdict"/>. The batch reports it
+    /// per item; the single route answers 400.
+    /// </exception>
     public async Task RateOne(string userId, string? username, DiscoveryRateItem item)
     {
-        var status = item.Verdict.Equals("up", StringComparison.OrdinalIgnoreCase)
-            ? DiscoveryStatus.Liked
-            : DiscoveryStatus.Disliked;
+        // Artists take all three verdicts; albums take two and reject the third rather than folding it
+        // into a dislike. Splitting the parse is what keeps that from being every caller's job.
+        var isArtist = string.IsNullOrEmpty(item.Album);
+        var status = isArtist
+            ? DiscoveryVerdict.ForArtist(item.Verdict)
+            : DiscoveryVerdict.ForAlbum(item.Verdict);
 
-        if (string.IsNullOrEmpty(item.Album))
+        if (isArtist)
         {
             // Record the verdict — that's what the UI is waiting on — and leave the frontier expansion
             // and the Plex write to the follow-up worker, so a thumb never blocks on the source APIs.
             var depth = await _engine.RecordArtistVerdict(userId, item.Artist, status);
             // The queued Plex write mirrors the verdict as a per-user mood tag ("<username>_liked"/
-            // "_disliked"), which a music smart playlist can filter on via "Artist Mood". Stamp the new
-            // verdict and strip the opposite so the latest rating is the only tag left (a like→dislike
-            // flip drops "_liked").
+            // "_disliked"/"_indifferent"), which a music smart playlist can filter on via "Artist Mood".
+            // Stamp the new verdict and strip every *other* one, so the latest rating is the only tag
+            // left. Not "the opposite" — with three verdicts a flip has two tags to clear, and a
+            // ternary that cleared only one would leave a stale verdict behind without failing anything.
             var tag = ArtistTag.For(username, status);
-            var opposite = status == DiscoveryStatus.Liked ? DiscoveryStatus.Disliked : DiscoveryStatus.Liked;
-            var oppositeTag = tag != null ? ArtistTag.For(username, opposite) : null;
+            var staleTags = ArtistTag.OtherVerdictTags(username, status);
             // A thumb also retires the "<username>_recommended" marker, if the artist was carrying one:
-            // it means "your likes point here and you haven't decided yet", and this is the deciding.
-            // The nightly sweep (RecommendedArtistTagger) would drop it anyway, but a rated band should
-            // not sit in the user's recommended playlist until 6am — and the marker is only ever on
-            // artists already in Plex, so this costs nothing beyond the write we're doing regardless.
+            // it means "your likes point here and you haven't decided yet", and this is the deciding —
+            // a shrug decides it as much as a thumb does. The nightly sweep (RecommendedArtistTagger)
+            // would drop it anyway, but a rated band should not sit in the user's recommended playlist
+            // until 6am — and the marker is only ever on artists already in Plex, so this costs nothing
+            // beyond the write we're doing regardless.
             var recommendedTag = tag != null ? ArtistTag.Recommended(username) : null;
             _followUps.QueueVerdictFollowUp(
                 userId, item.Artist, status, depth,
                 addTag: tag,
-                removeTags: new[] { oppositeTag, recommendedTag }.OfType<string>().ToArray());
+                removeTags: staleTags.Append(recommendedTag).OfType<string>().ToArray());
         }
         else if (item.Upgrade == true)
         {
@@ -146,8 +156,9 @@ public class DiscoveryRatingService
 /// A batch cannot go in a query string, but the shape stays identical so a client can move from one
 /// endpoint to the other without re-deriving what a verdict is.
 /// </summary>
-/// <param name="Verdict">"up" or "down"; anything that isn't "up" reads as down, exactly as the
-/// single-item route has always treated it.</param>
+/// <param name="Verdict">"up", "down" or — on an artist only — "indifferent"; anything else reads as
+/// down, exactly as the single-item route has always treated it. See <see cref="DiscoveryVerdict"/>
+/// for why an album rejects "indifferent" instead of folding it.</param>
 /// <param name="Upgrade">True for a verdict on an <em>upgrade</em> card — see
 /// <see cref="DiscoveryEngine.RateUpgrade"/>.</param>
 public record DiscoveryRateItem(

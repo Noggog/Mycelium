@@ -108,9 +108,14 @@ public class PlexTagMaintenance
             foreach (var rating in await _queue.GetRated(userId))
             {
                 // GetRated is "everything not pending", so it also carries snoozed rows — a deferred
-                // decision, which ArtistTag.For would otherwise fold into "_disliked". Only a thumb
-                // earns a tag, matching what the live rating path writes.
-                if (rating.Status is not (DiscoveryStatus.Liked or DiscoveryStatus.Disliked))
+                // decision, which ArtistTag.For used to fold into "_disliked" (it now returns null).
+                // Only a decision earns a tag, matching what the live rating path writes.
+                //
+                // Indifferent belongs here for the rebuild to be lossless: ClearManagedTags strips
+                // "_indifferent" along with the other verdicts (ArtistTag.IsVerdict covers it), so a
+                // wipe that didn't re-apply it would silently downgrade every shrug to "never rated".
+                if (rating.Status is not (DiscoveryStatus.Liked or DiscoveryStatus.Disliked
+                        or DiscoveryStatus.Indifferent))
                 {
                     continue;
                 }

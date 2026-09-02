@@ -28,6 +28,7 @@ import {
   snooze,
   unblockAlbum,
   type SnoozeDuration,
+  type AlbumVerdict,
   type Verdict,
 } from '../api/discovery'
 import { getDeezerPlayInfo, isDeezerBusy } from '../api/deezer'
@@ -38,7 +39,9 @@ import { useAuth } from '../auth/AuthContext'
 import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
-import { IconApprove, IconBlock, IconCheck, IconMoon, IconReject, IconWrench, Spinner } from '../components/icons'
+import {
+  IconApprove, IconBlock, IconCheck, IconIndifferent, IconMoon, IconReject, IconWrench, Spinner,
+} from '../components/icons'
 import { rateFeedback } from '../effects/effectsBus'
 
 const PAGE_SIZE = 20
@@ -60,6 +63,8 @@ const BADGE: Record<FeedKind, string> = {
   LibraryArtist: 'Mark existing artist',
   ReconsiderArtist: 'Second Chance',
   SecondThoughtsArtist: 'Second Thoughts',
+  IndifferentLikeArtist: 'Maybe You Like This',
+  IndifferentDislikeArtist: "Maybe You Don't",
 }
 
 // The category filters, shown up top as toggle-able tag chips styled exactly like the per-row
@@ -82,15 +87,22 @@ const FILTER_CHIPS: { kinds: FeedKind[]; label: string; tip: string }[] = [
   },
   {
     // Plum first: the chip borrows that kind's name, so it should borrow its hue too.
-    kinds: ['SecondThoughtsArtist', 'ReconsiderArtist'],
+    //
+    // All four second-guessing kinds ride this one chip. They are the same question asked of the three
+    // verdicts — "your own song ratings disagree with what you said" — and nobody wants to reason about
+    // six directions separately. The cards keep their distinct badges; only the filter groups them.
+    kinds: [
+      'SecondThoughtsArtist', 'ReconsiderArtist',
+      'IndifferentLikeArtist', 'IndifferentDislikeArtist',
+    ],
     label: 'Second Thoughts',
-    tip: 'Verdicts your Plex ratings argue with — bands you thumbed down but rate highly, and ones you thumbed up but rate poorly',
+    tip: 'Verdicts your Plex ratings argue with — bands you thumbed down but rate highly, ones you thumbed up but rate poorly, and ones you shrugged at but feel strongly about',
   },
 ]
 
 const ALL_KINDS: FeedKind[] = [
   'RecommendedArtist', 'MissingAlbum', 'UpgradeAlbum', 'RecommendedLibraryArtist', 'SeedLibraryArtist',
-  'ReconsiderArtist', 'SecondThoughtsArtist',
+  'ReconsiderArtist', 'SecondThoughtsArtist', 'IndifferentLikeArtist', 'IndifferentDislikeArtist',
 ]
 // Default to everything on: the recommended sections (new + existing owned), the album section
 // (gaps and upgrades), the seed section (owned artists nothing recommends yet) — rating those grows
@@ -110,9 +122,10 @@ const SHOWN_PREF_KEY = 'mc.discover.shown'
 // switched on and the new version is stamped — after which unchecking one sticks like any other.
 // Without this a new section would stay invisible to everyone who has ever touched the chips.
 const SHOWN_VERSION_KEY = 'mc.discover.shown.version'
-const SHOWN_VERSION = 2
+const SHOWN_VERSION = 3
 const KINDS_ADDED_IN: Record<number, FeedKind[]> = {
   2: ['SecondThoughtsArtist'],
+  3: ['IndifferentLikeArtist', 'IndifferentDislikeArtist'],
 }
 
 // The chips toggle whole groups, so a group is all-on or all-off — there's no chip that could turn
@@ -172,16 +185,21 @@ type RowMark = Verdict | 'snoozed' | 'merged' | 'blocked'
 const MARK_LABEL: Record<RowMark, string> = {
   up: 'Added',
   down: 'Dismissed',
+  indifferent: 'Noted',
   snoozed: 'Snoozed',
   merged: 'In library',
   blocked: 'Blocked for all',
 }
+// Every mark spelled out, with snooze last as the fallback. The fallback is why this needs saying:
+// `mark` is a union and this is a ternary chain, so a new mark without a branch here silently renders
+// the *moon* — the reader would see a snooze icon labelled "Noted" and nothing would error.
 const MarkIcon = ({ mark }: { mark: RowMark }) =>
   mark === 'up' ? <IconApprove size={15} />
     : mark === 'down' ? <IconReject size={15} />
-      : mark === 'merged' ? <IconCheck size={15} />
-        : mark === 'blocked' ? <IconBlock size={15} />
-          : <IconMoon size={15} />
+      : mark === 'indifferent' ? <IconIndifferent size={15} />
+        : mark === 'merged' ? <IconCheck size={15} />
+          : mark === 'blocked' ? <IconBlock size={15} />
+            : <IconMoon size={15} />
 
 // An in-place decision marker with an undo: "✓ Added · undo". Every decision (approve / reject /
 // snooze, on artists or albums) is reversible from the feed so a misclick is one click to fix. A
@@ -449,10 +467,11 @@ function Provenance({ sources }: { sources: string[] }) {
   )
 }
 
-// Why a "Second Chance" / "Second Thoughts" card is in the feed: nothing recommended it — the user's
-// own Plex song ratings did, by contradicting the thumb they gave the band (too high for the
-// thumbs-down, too low for the thumbs-up). Stands in for the provenance line. The numbers come off the
-// feed item (snapshotted by the sweep that flagged it), so no per-row fetch.
+// Why a second-guessing card is in the feed: nothing recommended it — the user's own Plex song ratings
+// did, by contradicting the verdict they gave the band (too high for a thumbs-down, too low for a
+// thumbs-up, either for a shrug). Stands in for the provenance line, and is shared by all four kinds
+// because the readout is just the evidence: which way it cuts is the card's badge and blurb to say.
+// The numbers come off the feed item (snapshotted by the sweep that flagged it), so no per-row fetch.
 function ReconsiderWhy({ signal }: { signal: ReconsiderSignal | null }) {
   if (!signal) return null
   return (
@@ -482,7 +501,10 @@ function SubAlbumRow({
   canPlay: boolean
   disabled: boolean
   onToggle: () => void
-  onRate: (item: FeedItem, verdict: Verdict) => void
+  // AlbumVerdict, not Verdict: these rows are albums, and "indifferent" is an artist verdict the API
+  // answers 400 for. Narrowing the callback is what makes wiring the third button in here a compile
+  // error rather than a click that fails at runtime.
+  onRate: (item: FeedItem, verdict: AlbumVerdict) => void
   onUndo: (item: FeedItem) => void
   onMerge: (item: FeedItem) => void
   onBlock: (item: FeedItem) => void
@@ -539,7 +561,10 @@ function ArtistAlbumsPanel({
 }: {
   artist: string
   rated: Map<string, RowMark>
-  onRate: (item: FeedItem, verdict: Verdict) => void
+  // AlbumVerdict, not Verdict: these rows are albums, and "indifferent" is an artist verdict the API
+  // answers 400 for. Narrowing the callback is what makes wiring the third button in here a compile
+  // error rather than a click that fails at runtime.
+  onRate: (item: FeedItem, verdict: AlbumVerdict) => void
   onUndo: (item: FeedItem) => void
   onMerge: (item: FeedItem) => void
   onBlock: (item: FeedItem) => void
@@ -628,7 +653,10 @@ const BROWSE_LINK_KINDS = new Set<FeedKind>(['RecommendedLibraryArtist', 'SeedLi
 // sense. RecommendedArtist (not yet owned) and MissingAlbum (an album, not the artist) are excluded.
 const IN_LIBRARY_KINDS = new Set<FeedKind>([
   'RecommendedLibraryArtist', 'SeedLibraryArtist', 'LibraryArtist', 'ReconsiderArtist',
-  'SecondThoughtsArtist',
+  // The two indifferent kinds belong here for a second reason beyond the library link: this set also
+  // gates the Plex star readout, which is the very evidence these cards argue from. Leaving them out
+  // would show "your ratings disagree with you" with the ratings hidden.
+  'SecondThoughtsArtist', 'IndifferentLikeArtist', 'IndifferentDislikeArtist',
 ])
 
 // Deep links to open an owned artist where it lives (Plex now, Navidrome later) — the same per-library
@@ -757,6 +785,28 @@ function DetailPanel({
                 recommendations. Thumb it down to drop it, or up again to settle it for good.
               </p>
             </>
+          ) : item.kind === 'IndifferentLikeArtist' ? (
+            // A shrug the ratings argue up. The copy leans on "you've heard it since", because that is
+            // the actual difference between now and when they shrugged — indifference deliberately
+            // leaves a band in the Deep Frontier rotation, which is how they came to rate it.
+            <>
+              <div className="detail-section-label">Why this is back</div>
+              <p className="detail-why">
+                You had no strong feelings about this band, but you've been rating its songs highly
+                since. Thumb it up to start growing recommendations from it, or shrug again to settle it
+                for good.
+              </p>
+            </>
+          ) : item.kind === 'IndifferentDislikeArtist' ? (
+            // The other side of the same verdict. Lower stakes — an indifferent band feeds nothing — so
+            // the copy says what a rejection would actually buy: it leaves the rotation.
+            <>
+              <div className="detail-section-label">Why this is back</div>
+              <p className="detail-why">
+                You had no strong feelings about this band, but you've been rating its songs poorly.
+                Thumb it down to drop it out of your playlists, or shrug again to settle it for good.
+              </p>
+            </>
           ) : item.sources.length > 0 ? (
             <>
               <div className="detail-section-label">Recommended via</div>
@@ -809,6 +859,18 @@ function DetailPanel({
                 >
                   <IconApprove />
                 </button>
+                {/* Artists only: an album already has this verdict twice over — its thumbs-down *is*
+                    "meh, hide this from my feed", and an upgrade's is "keep the copy I have". The API
+                    refuses "indifferent" on an album, and AlbumVerdict keeps that from compiling. */}
+                {!isAlbum && (
+                  <button
+                    className="disc-btn indifferent"
+                    title="No strong feelings — keep playing it, just don't recommend from it"
+                    onClick={() => onRate(item, 'indifferent')}
+                  >
+                    <IconIndifferent />
+                  </button>
+                )}
                 <button
                   className="disc-btn down"
                   title={isAlbum ? 'Meh — hide this from my feed only' : 'Not interested'}
@@ -916,7 +978,10 @@ function DiscRow({
               {name}
               {item.year && <> · {item.year}</>}
             </span>
-          ) : item.kind === 'ReconsiderArtist' || item.kind === 'SecondThoughtsArtist' ? (
+          ) : item.kind === 'ReconsiderArtist' || item.kind === 'SecondThoughtsArtist'
+            || item.kind === 'IndifferentLikeArtist' || item.kind === 'IndifferentDislikeArtist' ? (
+            // The readout is direction-neutral — it just shows the stars behind the flag — so all four
+            // second-guessing kinds share it.
             <ReconsiderWhy signal={item.reconsider} />
           ) : (
             <Provenance sources={item.sources} />
@@ -934,6 +999,15 @@ function DiscRow({
               >
                 <IconApprove />
               </button>
+              {!isAlbum && (
+                <button
+                  className="disc-btn indifferent"
+                  title="No strong feelings — keep playing it, just don't recommend from it"
+                  onClick={() => onRate(item, 'indifferent')}
+                >
+                  <IconIndifferent />
+                </button>
+              )}
               <button
                 className="disc-btn down"
                 title={isAlbum ? 'Meh — hide this from my feed only' : 'Not interested'}

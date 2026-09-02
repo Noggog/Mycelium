@@ -14,7 +14,14 @@ import type {
 } from '../types'
 import { DeezerBusyError } from './deezer'
 
-export type Verdict = 'up' | 'down'
+export type Verdict = 'up' | 'down' | 'indifferent'
+
+// The two an album can carry. "indifferent" is an *artist* verdict: an album thumbs-down already means
+// "meh, hide this from my feed" and an upgrade thumbs-down means "keep the copy I have", so the API
+// rejects it on an album with a 400 rather than folding it into a dislike. Typing the album-facing
+// props with this makes the compiler catch a third button wired into an album row, instead of leaving
+// it to a runtime error nobody sees until they click it.
+export type AlbumVerdict = Exclude<Verdict, 'indifferent'>
 
 // How long a snoozed recommendation stays hidden before it resurfaces in the feed.
 export type SnoozeDuration = 'week' | 'month' | 'year'

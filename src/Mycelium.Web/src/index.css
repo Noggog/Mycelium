@@ -30,6 +30,12 @@
   --yellow: #f7b992;
   --plum: #d98fc0;
 
+  /* The verdict that takes no side. Cool grey with just enough violet to belong to this palette
+     rather than reading as an un-themed default — it has to sit between the approve green and the
+     reject salmon without competing with either. */
+  --slate: #96a0ac;
+  --slate-light: #b9c1cb;
+
   /* --- Semantic --- */
   --bg: var(--abyss);
   --text: #ece8ff;
@@ -1052,6 +1058,11 @@ input[type='checkbox'] {
 .disc-rated.mark-down .disc-rated-icon {
   color: var(--salmon-light);
 }
+/* A shrug. Deliberately the palette's grey rather than a fourth hue: the other marks say which way you
+   went, and this one says you didn't. */
+.disc-rated.mark-indifferent .disc-rated-icon {
+  color: var(--slate);
+}
 .disc-rated.mark-snoozed .disc-rated-icon {
   color: var(--purple-fg);
 }
@@ -1362,10 +1373,21 @@ a.disc-row-link:hover .disc-name {
 .disc-btn.down {
   color: var(--salmon-light);
 }
+/* The shrug sits between the two and is coloured to lose to both. It is a real verdict, so it gets the
+   same size and hover lift as its neighbours — but a saturated third hue would make "no opinion" the
+   loudest thing in the row, and the flanking green and salmon are what the eye should land on. */
+.disc-btn.indifferent {
+  color: var(--slate);
+}
 @media (hover: hover) {
   .disc-btn.up:hover:not(:disabled) {
     border-color: var(--good);
     box-shadow: 0 0 14px rgba(56, 232, 160, 0.5);
+  }
+  .disc-btn.indifferent:hover:not(:disabled) {
+    border-color: var(--slate);
+    color: var(--slate-light);
+    box-shadow: 0 0 14px rgba(150, 160, 172, 0.32);
   }
   .disc-btn.down:hover:not(:disabled) {
     border-color: var(--salmon-light);
@@ -1398,6 +1420,12 @@ a.disc-row-link:hover .disc-name {
   background: rgba(56, 232, 160, 0.16);
   color: var(--good);
   box-shadow: 0 0 14px rgba(56, 232, 160, 0.35);
+}
+.disc-btn.indifferent.active {
+  border-color: var(--slate);
+  background: rgba(150, 160, 172, 0.16);
+  color: var(--slate-light);
+  box-shadow: 0 0 14px rgba(150, 160, 172, 0.28);
 }
 .disc-btn.down.active {
   border-color: var(--salmon-light);
@@ -2048,6 +2076,20 @@ a.detail-chip.via:hover {
   color: var(--plum);
   background: rgba(217, 143, 192, 0.12);
   border-color: rgba(217, 143, 192, 0.42);
+}
+/* The two indifferent cards. Same family as the pair above — these re-litigate a verdict too — but
+   desaturated, because they are the lowest-stakes cards in the feed: a shrug feeds nothing, so
+   nothing is going wrong while one sits unanswered. The hue still says which way the ratings lean:
+   sage for "maybe you like this", dusty rose for "maybe you don't". */
+.feed-badge-IndifferentLikeArtist {
+  color: #8fc7ac;
+  background: rgba(143, 199, 172, 0.1);
+  border-color: rgba(143, 199, 172, 0.34);
+}
+.feed-badge-IndifferentDislikeArtist {
+  color: #c79aa0;
+  background: rgba(199, 154, 160, 0.1);
+  border-color: rgba(199, 154, 160, 0.34);
 }
 
 /* Filter chips: the per-kind badge styling made into a clickable on/off toggle. */

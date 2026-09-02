@@ -363,6 +363,30 @@ public class ArchiveBuilderTests
         File(files, "Library/Nickelback/metadata.yaml").Should().Contain("confirmed: true");
     }
 
+    /// <summary>
+    /// A shrug archives like the thumbs do, flag and all. Its confirmation lives in its own Mongo field,
+    /// and the switch that reads them is keyed by status string — a missing arm there wouldn't fail,
+    /// it would just drop "I really do have no opinion about this" from the dump silently.
+    /// </summary>
+    [Fact]
+    public void A_confirmed_shrug_keeps_its_stickiness_too()
+    {
+        var files = new ArchiveBuilder().Build(Input(
+            users: [User("sub-1", "kelsey")],
+            artists: [Artist("Editors")],
+            artistVerdicts:
+            [
+                new JsonObject
+                {
+                    ["userId"] = "sub-1", ["artist"] = "Editors", ["status"] = "Indifferent",
+                    ["indifferentConfirmed"] = true,
+                },
+            ]));
+
+        File(files, "Library/Editors/metadata.yaml")
+            .Should().Contain("Indifferent").And.Contain("confirmed: true");
+    }
+
     [Fact]
     public void Pending_queue_rows_are_not_taste_and_are_dropped()
     {

@@ -11,11 +11,11 @@ using Xunit;
 namespace Mycelium.Tests;
 
 /// <summary>
-/// The weekly pass that decides which thumbed artists the user's own Plex song ratings contradict — in
-/// both directions: a dislike they rated highly, or a like they rated poorly. All the threshold
-/// judgement lives here (the feeds just serve what this flags), so this is where the "3+ stars to undo a
-/// dislike, 2 or below to question a like, either way across at least a third of the songs" rule is
-/// pinned down.
+/// The weekly pass that decides which decided artists the user's own Plex song ratings contradict — a
+/// dislike they rated highly, a like they rated poorly, or a shrug they feel strongly about either way.
+/// All the threshold judgement lives here (the feeds just serve what this flags), so this is where the
+/// "3+ stars to undo a dislike, 2 or below to question a like, either bar to question a shrug, and
+/// always across at least a third of the songs" rule is pinned down.
 /// </summary>
 public class ReconsiderSweepServiceTests
 {
@@ -94,6 +94,11 @@ public class ReconsiderSweepServiceTests
         string artist, int ratingKey, double?[] plexRatings, ReconsiderSignal? alreadyFlagged = null,
         string? users = null, bool owned = true) =>
         Thumbed(DiscoveryStatus.Liked, artist, ratingKey, plexRatings, alreadyFlagged, users, owned);
+
+    private void Indifferent(
+        string artist, int ratingKey, double?[] plexRatings, ReconsiderSignal? alreadyFlagged = null,
+        string? users = null, bool owned = true) =>
+        Thumbed(DiscoveryStatus.Indifferent, artist, ratingKey, plexRatings, alreadyFlagged, users, owned);
 
     /// <summary>"The sweep wrote nothing at all", the assertion most of the skip cases want.</summary>
     private Task WroteNothing() => _queue.DidNotReceive().SetReconsider(
@@ -351,5 +356,93 @@ public class ReconsiderSweepServiceTests
         await Build().SweepAll();
 
         await _queue.DidNotReceive().GetUnconfirmedVerdicts(Arg.Any<string>(), Arg.Any<DiscoveryStatus>());
+    }
+
+    /// <summary>
+    /// Indifference is the two-sided case: the same shrug is contradicted by ratings that are too good
+    /// *or* too bad. Both are flagged with the same signal shape — which card it becomes is decided at
+    /// serve time from the average, not stored here.
+    /// </summary>
+    [Fact]
+    public async Task Flags_a_shrug_the_song_ratings_argue_up()
+    {
+        // 4 of 6 rated, averaging 4 stars: "no opinion" doesn't survive rating most of the record
+        // highly, so the card comes back offering the thumbs-up.
+        Indifferent("Slowdive", 12, new double?[] { 10, 8, 8, 6, null, null });
+
+        await Build().SweepAll();
+
+        await _queue.Received(1).SetReconsider(
+            User, "Slowdive", DiscoveryStatus.Indifferent, new ReconsiderSignal(4.0, 4, 6), "Slowdive-img");
+    }
+
+    [Fact]
+    public async Task Flags_a_shrug_the_song_ratings_argue_down()
+    {
+        // The other side of the same verdict: 4 of 6 rated, averaging 2 stars. A shrug over music they
+        // actively rate poorly is worth settling as a rejection.
+        Indifferent("Creed", 13, new double?[] { 4, 4, 4, 4, null, null });
+
+        await Build().SweepAll();
+
+        await _queue.Received(1).SetReconsider(
+            User, "Creed", DiscoveryStatus.Indifferent, new ReconsiderSignal(2.0, 4, 6), "Creed-img");
+    }
+
+    /// <summary>
+    /// The dead band, and the whole reason the indifferent predicate isn't simply "always true": between
+    /// the two thresholds the ratings are as unopinionated as the verdict is. That is agreement, not a
+    /// contradiction, and offering the card anyway would make every genuinely-middling band a weekly
+    /// interruption.
+    /// </summary>
+    [Fact]
+    public async Task Leaves_a_shrug_the_ratings_agree_with_alone()
+    {
+        // 2.5 stars — above the 2-star "argue down" bar, below the 3-star "argue up" one.
+        Indifferent("Editors", 14, new double?[] { 5, 5, 5, 5 });
+
+        await Build().SweepAll();
+
+        await WroteNothing();
+    }
+
+    /// <summary>
+    /// All three verdicts are swept in one pass, off one set of per-artist stats. Confirming this
+    /// together matters because the sweep is a loop over a hard-coded array: a verdict missing from it
+    /// fails nothing, it just never gets second-guessed.
+    /// </summary>
+    [Fact]
+    public async Task Sweeps_every_decided_verdict_in_one_pass()
+    {
+        Disliked("Low", 10, new double?[] { 10, 8, 8, 6, null, null });
+        Liked("Nickelback", 11, new double?[] { 4, 4, 4, 4, null, null });
+        Indifferent("Slowdive", 12, new double?[] { 10, 8, 8, 6, null, null });
+
+        await Build().SweepAll();
+
+        await _queue.Received(1).SetReconsider(
+            User, "Low", DiscoveryStatus.Disliked, Arg.Any<ReconsiderSignal>(), Arg.Any<string?>());
+        await _queue.Received(1).SetReconsider(
+            User, "Nickelback", DiscoveryStatus.Liked, Arg.Any<ReconsiderSignal>(), Arg.Any<string?>());
+        await _queue.Received(1).SetReconsider(
+            User, "Slowdive", DiscoveryStatus.Indifferent, Arg.Any<ReconsiderSignal>(), Arg.Any<string?>());
+    }
+
+    /// <summary>
+    /// A confirmed shrug — marked indifferent a second time — never reaches the sweep at all, because
+    /// GetUnconfirmedVerdicts is what it reads. This matters more for indifference than for the other
+    /// two: it is contradicted from both sides, so without a terminal state a band with polarised
+    /// ratings would be offered back every week forever.
+    /// </summary>
+    [Fact]
+    public async Task A_confirmed_shrug_is_never_offered_back()
+    {
+        // Not stubbed into GetUnconfirmedVerdicts — which is exactly what confirming does.
+        _queue.GetUnconfirmedVerdicts(User, DiscoveryStatus.Indifferent)
+            .Returns(Array.Empty<SweptArtist>());
+
+        await Build().SweepAll();
+
+        await WroteNothing();
     }
 }

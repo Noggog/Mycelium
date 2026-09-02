@@ -21,6 +21,78 @@ public enum DiscoveryStatus
     /// drops back out of the decided set so the frontier may re-touch it.
     /// </summary>
     Snoozed,
+
+    /// <summary>
+    /// A shrug: the user has heard enough to decide they have no opinion. The third verdict, and the
+    /// only one that decides <em>without</em> taking a side.
+    ///
+    /// <para><b>What it does.</b> Counts as decided — the card leaves the feed for good and expansion
+    /// never re-adds it — but grows nothing: no frontier, no wishlist, no "&lt;user&gt;_recommended".
+    /// <b>What it deliberately doesn't do</b> is block playback. A dislike is subtracted from the Deep
+    /// Frontier playlist; indifference is not, so the band stays in rotation. That is the whole point:
+    /// the shrug used to have to be spent as a rejection, which took music out of rotation the user
+    /// never objected to.</para>
+    ///
+    /// <para>It is not a permanent silence either. The reconsider sweep second-guesses it in
+    /// <em>both</em> directions — an indifferent band whose own song ratings are high comes back
+    /// offering the thumbs-up, a poorly-rated one the thumbs-down — so an unopinionated verdict is
+    /// expected to resolve into a real one eventually, once the user has actually heard the band. A
+    /// second shrug confirms it and retires it from the sweep for good.</para>
+    ///
+    /// <para>Artists only. An album thumbs-down already <em>means</em> "meh, hide this from my feed"
+    /// and an upgrade thumbs-down means "keep the copy I have", so both already occupy this slot;
+    /// see the album verdict parse in <c>DiscoveryRatingService</c>, which rejects it outright.</para>
+    /// </summary>
+    Indifferent,
+}
+
+/// <summary>
+/// The wire spelling of a verdict — what a client puts in <c>?verdict=</c> or a batch item — and the
+/// one place it is turned into a <see cref="DiscoveryStatus"/>.
+///
+/// <para><b>Why artists and albums parse differently.</b> The long-standing contract is "anything that
+/// isn't <c>up</c> reads as down", and clients rely on it, so it is kept. But admitting a
+/// <em>new</em> token to that fold is a different thing entirely: <c>verdict=indifferent&amp;album=X</c>
+/// would silently record a dislike on the album, writing a row no label map can render and that
+/// <c>GetDecidedKeys</c> swallows whole — the album vanishes from the missing-albums feed with no
+/// affordance anywhere to undo it. Indifference is an artist verdict (see
+/// <see cref="DiscoveryStatus.Indifferent"/>), so on an album it is rejected at the door rather than
+/// quietly reinterpreted.</para>
+/// </summary>
+public static class DiscoveryVerdict
+{
+    public const string Up = "up";
+    public const string Down = "down";
+    public const string Indifferent = "indifferent";
+
+    /// <summary>
+    /// An artist verdict. <c>up</c> is a like, <c>indifferent</c> a shrug, and anything else a dislike
+    /// — the historical fold, kept for every client that has ever sent something other than "down".
+    /// </summary>
+    public static DiscoveryStatus ForArtist(string verdict) =>
+        verdict.Equals(Up, StringComparison.OrdinalIgnoreCase) ? DiscoveryStatus.Liked
+        : verdict.Equals(Indifferent, StringComparison.OrdinalIgnoreCase) ? DiscoveryStatus.Indifferent
+        : DiscoveryStatus.Disliked;
+
+    /// <summary>
+    /// An album (or collection) verdict: <c>up</c> is a like, anything else a dislike — except
+    /// <c>indifferent</c>, which is not a thing an album can be.
+    /// </summary>
+    /// <exception cref="ArgumentException"><c>indifferent</c> on an album.</exception>
+    public static DiscoveryStatus ForAlbum(string verdict)
+    {
+        if (verdict.Equals(Indifferent, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "'indifferent' is an artist verdict. An album thumbs-down already means \"meh, hide "
+                + "this from my feed\", and an upgrade thumbs-down means \"keep the copy I have\".",
+                nameof(verdict));
+        }
+
+        return verdict.Equals(Up, StringComparison.OrdinalIgnoreCase)
+            ? DiscoveryStatus.Liked
+            : DiscoveryStatus.Disliked;
+    }
 }
 
 /// <summary>
@@ -104,6 +176,30 @@ public enum FeedKind
     /// thumbs-down. Thumbing it up a second time confirms the like and it never returns.
     /// </summary>
     SecondThoughtsArtist,
+
+    /// <summary>
+    /// An owned artist the user marked <see cref="DiscoveryStatus.Indifferent"/> whose own Plex song
+    /// ratings say they do in fact like it — a high average across a decent share of the tracks. The
+    /// shrug was made before they'd heard much, so the card offers the thumbs-up.
+    ///
+    /// <para><b>Why two indifferent kinds and not one.</b> The direction a reconsider card argues in is
+    /// read off its kind — that is why <see cref="ReconsiderArtist"/> and
+    /// <see cref="SecondThoughtsArtist"/> are two kinds sharing one <see cref="ReconsiderSignal"/>
+    /// shape. Indifference is the only verdict that can be contradicted <em>either</em> way, and one
+    /// kind covering both would make direction sometimes-readable from the kind and sometimes not,
+    /// forcing every consumer (badge, blurb, ordering) to grow a second mechanism. There is also no
+    /// single correct ordering for a merged list: each side sorts most-contradicted-first, which is
+    /// opposite ends of the same scale.</para>
+    /// </summary>
+    IndifferentLikeArtist,
+
+    /// <summary>
+    /// The mirror of <see cref="IndifferentLikeArtist"/>: an artist the user shrugged at whose song
+    /// ratings are poor enough to argue for a rejection, so the card offers the thumbs-down. Lower
+    /// stakes than <see cref="SecondThoughtsArtist"/> — an indifferent band feeds nothing, so nothing
+    /// is being wasted — but settling it is what stops the sweep offering it back.
+    /// </summary>
+    IndifferentDislikeArtist,
 }
 
 /// <summary>What a <see cref="FeedKind"/> means for acquisition.</summary>

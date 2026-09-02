@@ -30,7 +30,23 @@ public record ReconsiderPolicy(
 {
     /// <summary>
     /// Whether these ratings contradict <paramref name="verdict"/> hard enough to offer it back: a
-    /// dislike needs a high average, a like a low one, and both need enough of the discography rated.
+    /// dislike needs a high average, a like a low one, and all of them need enough of the discography
+    /// rated.
+    ///
+    /// <para><b>Indifference is the two-sided case.</b> A like and a dislike each have one way of being
+    /// wrong, so each tests one threshold. A shrug has two — the ratings may say you actually like the
+    /// band, or that you actually don't — so it tests both, and which card it becomes is read off the
+    /// stored average afterwards (see <c>DiscoveryEngine.IndifferentItems</c>). Between the thresholds
+    /// lies a dead band, <c>(MaxAverage, MinAverage)</c> — 2★–3★ on the defaults — where the ratings
+    /// are as unopinionated as the verdict is. That is not a contradiction, it is agreement, and it is
+    /// the case this predicate exists to leave alone.</para>
+    ///
+    /// <para><b>Misconfiguration warning.</b> The two thresholds are independent env knobs
+    /// (RECONSIDER_MAX_AVG_STARS / RECONSIDER_MIN_AVG_STARS), and setting max >= min collapses the dead
+    /// band and makes this vacuously true for Indifferent alone — every shrugged-at artist with enough
+    /// rated tracks would be offered back, every week. The like and dislike sides degrade gracefully
+    /// under the same setting (they just flag more); this one does not, so it is called out here rather
+    /// than left to be discovered from a feed full of cards.</para>
     /// </summary>
     public bool Contradicts(ArtistRatingStats stats, DiscoveryStatus verdict) =>
         HasEnoughEvidence(stats)
@@ -38,9 +54,23 @@ public record ReconsiderPolicy(
         {
             DiscoveryStatus.Disliked => stats.Average >= MinAverage,
             DiscoveryStatus.Liked => stats.Average <= MaxAverage,
+            DiscoveryStatus.Indifferent => stats.Average >= MinAverage || stats.Average <= MaxAverage,
             _ => throw new ArgumentOutOfRangeException(
-                nameof(verdict), verdict, "Only Liked/Disliked verdicts can be contradicted"),
+                nameof(verdict), verdict,
+                "Only Liked/Disliked/Indifferent verdicts can be contradicted"),
         };
+
+    /// <summary>
+    /// Which way a flagged <see cref="DiscoveryStatus.Indifferent"/> row cuts: true when the ratings
+    /// argue for a like, false when they argue for a dislike.
+    ///
+    /// <para>Deliberately a single boolean rather than two independent predicates. A row flagged while
+    /// <see cref="MinAverage"/> was 3 and read back after someone raised it to 4 falls into the widened
+    /// dead band; with two predicates it would match neither and vanish from both feed sections while
+    /// still occupying a flagged queue row — invisible in the UI and impossible to clear from it. One
+    /// boolean means every flagged row always lands somewhere, even after the thresholds move.</para>
+    /// </summary>
+    public bool ArguesForLike(ReconsiderSignal signal) => signal.Average >= MinAverage;
 
     /// <summary>
     /// Whether there's enough rated music here to argue with a verdict at all. False when the artist

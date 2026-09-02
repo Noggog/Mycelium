@@ -569,7 +569,8 @@ public class DownloadServiceTests
         await Sut().SettleOnce();
 
         await _tagger.Received(1).SetTags("Big Thief", "noggog_liked",
-            Arg.Is<IReadOnlyCollection<string>>(r => r.SequenceEqual(new[] { "noggog_disliked" })));
+            Arg.Is<IReadOnlyCollection<string>>(r =>
+                r.SequenceEqual(new[] { "noggog_disliked", "noggog_indifferent" })));
     }
 
     [Fact]
