@@ -42,6 +42,19 @@ export function IconReject(props: IconProps) {
   )
 }
 
+// Skip — the transport "next track" glyph, the counterpart to IconDownload on an album card. Passing
+// on an album is not a rejection: on a missing-album card it hides that one record from your feed and
+// nothing else, and on an upgrade card it means "keep the copy I have". A salmon down-chevron
+// overclaimed both; this just says "move along".
+export function IconSkip(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M6 5.5 15 12l-9 6.5z" />
+      <path d="M18.5 5.5v13" />
+    </Svg>
+  )
+}
+
 // Indifferent — a horizontal bar, the axis the other two point away from. Deliberately the quietest
 // mark of the three: it is a decision, but a decision not to lean either way, and an icon with any
 // direction in it would read as a weak thumb. Not a dash-in-a-circle, which reads as "blocked", and
@@ -123,7 +136,9 @@ export function IconBlock(props: IconProps) {
   )
 }
 
-// Download — an arrow into a tray. The "Download now" action on a queued album.
+// Download — an arrow into a tray. The "Download now" action on a queued album, and the same glyph on
+// a missing-album feed card, where the ask is "fetch this" rather than "how do you feel about it".
+// Deliberately shared: one symbol, one meaning, wherever acquiring a record is the action.
 export function IconDownload(props: IconProps) {
   return (
     <Svg {...props}>

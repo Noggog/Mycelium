@@ -128,7 +128,7 @@ export function CollectionRow({ item }: { item: CollectionItem }) {
         )}
         <button
           className={item.verdict === 'Liked' ? 'disc-btn up active' : 'disc-btn up'}
-          title={item.verdict === 'Liked' ? 'Clear rating' : 'Approve'}
+          title={item.verdict === 'Liked' ? 'Clear rating' : 'Like'}
           disabled={mutate.isPending}
           onClick={() => mutate.mutate('up')}
         >
@@ -136,7 +136,7 @@ export function CollectionRow({ item }: { item: CollectionItem }) {
         </button>
         <button
           className={item.verdict === 'Disliked' ? 'disc-btn down active' : 'disc-btn down'}
-          title={item.verdict === 'Disliked' ? 'Clear rating' : 'Reject'}
+          title={item.verdict === 'Disliked' ? 'Clear rating' : 'Dislike - Block'}
           disabled={mutate.isPending}
           onClick={() => mutate.mutate('down')}
         >

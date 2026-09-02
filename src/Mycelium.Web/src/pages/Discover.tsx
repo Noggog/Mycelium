@@ -40,7 +40,8 @@ import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
 import {
-  IconApprove, IconBlock, IconCheck, IconIndifferent, IconMoon, IconReject, IconWrench, Spinner,
+  IconApprove, IconBlock, IconCheck, IconDownload, IconIndifferent, IconMoon, IconReject, IconSkip,
+  IconWrench, Spinner,
 } from '../components/icons'
 import { rateFeedback } from '../effects/effectsBus'
 
@@ -190,25 +191,50 @@ const MARK_LABEL: Record<RowMark, string> = {
   merged: 'In library',
   blocked: 'Blocked for all',
 }
+// What each button promises, named by its *effect* rather than by the gesture. "Not interested" said
+// nothing about which of the two negative verdicts you were picking — and that is the whole difference
+// between them: a dislike blocks the band from your playlists, a shrug leaves it playing. A tooltip on
+// an icon-only button is the entire affordance, so it has to answer "what will this do".
+const ARTIST_ACTION_TITLE = {
+  up: 'Like - Recommend',
+  indifferent: "Indifferent - Keep playing, don't recommend",
+  down: 'Dislike - Block',
+} as const
+
+// Albums aren't rated, they're fetched or passed over — so they get their own pair. An upgrade says
+// what happens to the copy already on disk, which is the only thing that makes it different from a
+// gap: one replaces a record, the other adds one.
+const albumActionTitle = (kind: FeedKind) =>
+  kind === 'UpgradeAlbum'
+    ? { up: 'Download - replace the copy you have', down: 'Skip - keep the copy you have' }
+    : { up: 'Download - queue this album', down: 'Skip - hide this album from my feed' }
+
+// An album's up/down aren't verdicts, so they don't read as ones once taken: you queued a download or
+// you passed on it. Only these two differ — a snoozed or blocked album means the same thing it does
+// anywhere else — so this overlays the label map rather than replacing it.
+const ALBUM_MARK_LABEL: Partial<Record<RowMark, string>> = {
+  up: 'Queued',
+  down: 'Skipped',
+}
 // Every mark spelled out, with snooze last as the fallback. The fallback is why this needs saying:
 // `mark` is a union and this is a ternary chain, so a new mark without a branch here silently renders
 // the *moon* — the reader would see a snooze icon labelled "Noted" and nothing would error.
-const MarkIcon = ({ mark }: { mark: RowMark }) =>
-  mark === 'up' ? <IconApprove size={15} />
-    : mark === 'down' ? <IconReject size={15} />
+const MarkIcon = ({ mark, isAlbum }: { mark: RowMark; isAlbum?: boolean }) =>
+  mark === 'up' ? (isAlbum ? <IconDownload size={15} /> : <IconApprove size={15} />)
+    : mark === 'down' ? (isAlbum ? <IconSkip size={15} /> : <IconReject size={15} />)
       : mark === 'indifferent' ? <IconIndifferent size={15} />
         : mark === 'merged' ? <IconCheck size={15} />
           : mark === 'blocked' ? <IconBlock size={15} />
             : <IconMoon size={15} />
 
-// An in-place decision marker with an undo: "✓ Added · undo". Every decision (approve / reject /
-// snooze, on artists or albums) is reversible from the feed so a misclick is one click to fix. A
-// merge is the exception — it's an assertion about the library, not a verdict, and there's nothing
-// to walk back in the feed once the album is known to be owned.
+// An in-place decision marker with an undo: "✓ Added · undo". Every decision (like / dislike /
+// download / skip / snooze) is reversible from the feed so a misclick is one click to fix. A merge is
+// the exception — it's an assertion about the library, not a verdict, and there's nothing to walk back
+// in the feed once the album is known to be owned.
 //
-// A thumbs-down means different things either side of the artist/album line, so the label follows:
-// on an artist it prunes the frontier ("Dismissed"), on an album it's the private "meh" that hides
-// the record from you alone.
+// Up and down mean different things either side of the artist/album line, so the icon and the label
+// both follow: on an artist they're taste ("Added" / "Dismissed"), on an album they're an errand
+// ("Queued" / "Skipped").
 function DecisionMark({
   mark,
   onUndo,
@@ -221,9 +247,9 @@ function DecisionMark({
   isAlbum?: boolean
 }) {
   return (
-    <span className={`disc-rated mark-${mark}`}>
-      <span className="disc-rated-icon"><MarkIcon mark={mark} /></span>
-      {mark === 'down' && isAlbum ? 'Meh' : MARK_LABEL[mark]}
+    <span className={`disc-rated mark-${mark}${isAlbum ? ' is-album' : ''}`}>
+      <span className="disc-rated-icon"><MarkIcon mark={mark} isAlbum={isAlbum} /></span>
+      {(isAlbum && ALBUM_MARK_LABEL[mark]) || MARK_LABEL[mark]}
       {mark !== 'merged' && (
         <button className="disc-undo" title="Undo this decision" disabled={disabled} onClick={onUndo}>
           undo
@@ -530,11 +556,11 @@ function SubAlbumRow({
             <DecisionMark mark={verdict} disabled={disabled} isAlbum onUndo={() => onUndo(album)} />
           ) : (
             <>
-              <button className="disc-btn up" title="Queue album to buy" disabled={disabled} onClick={() => onRate(album, 'up')}>
-                <IconApprove />
+              <button className="disc-btn download" title="Download — queue this album" disabled={disabled} onClick={() => onRate(album, 'up')}>
+                <IconDownload />
               </button>
-              <button className="disc-btn down" title="Meh — hide this from my feed only" disabled={disabled} onClick={() => onRate(album, 'down')}>
-                <IconReject />
+              <button className="disc-btn skip" title="Skip — hide this album from my feed" disabled={disabled} onClick={() => onRate(album, 'down')}>
+                <IconSkip />
               </button>
               <MergeButton disabled={disabled} onMerge={() => onMerge(album)} />
               <BlockButton disabled={disabled} onBlock={() => onBlock(album)} />
@@ -853,30 +879,30 @@ function DetailPanel({
             ) : (
               <>
                 <button
-                  className="disc-btn up"
-                  title={isAlbum ? 'Queue album to buy' : 'Approve'}
+                  className={isAlbum ? 'disc-btn download' : 'disc-btn up'}
+                  title={isAlbum ? albumActionTitle(item.kind).up : ARTIST_ACTION_TITLE.up}
                   onClick={() => onRate(item, 'up')}
                 >
-                  <IconApprove />
+                  {isAlbum ? <IconDownload /> : <IconApprove />}
                 </button>
-                {/* Artists only: an album already has this verdict twice over — its thumbs-down *is*
+                {/* Artists only: an album already has this verdict twice over — its skip *is*
                     "meh, hide this from my feed", and an upgrade's is "keep the copy I have". The API
                     refuses "indifferent" on an album, and AlbumVerdict keeps that from compiling. */}
                 {!isAlbum && (
                   <button
                     className="disc-btn indifferent"
-                    title="No strong feelings — keep playing it, just don't recommend from it"
+                    title={ARTIST_ACTION_TITLE.indifferent}
                     onClick={() => onRate(item, 'indifferent')}
                   >
                     <IconIndifferent />
                   </button>
                 )}
                 <button
-                  className="disc-btn down"
-                  title={isAlbum ? 'Meh — hide this from my feed only' : 'Not interested'}
+                  className={isAlbum ? 'disc-btn skip' : 'disc-btn down'}
+                  title={isAlbum ? albumActionTitle(item.kind).down : ARTIST_ACTION_TITLE.down}
                   onClick={() => onRate(item, 'down')}
                 >
-                  <IconReject />
+                  {isAlbum ? <IconSkip /> : <IconReject />}
                 </button>
                 <SnoozeControl onPick={(duration) => onSnooze(item, duration)} disabled={false} />
                 {isAlbum && <MergeButton disabled={busy} onMerge={() => onMerge(item)} />}
@@ -993,27 +1019,27 @@ function DiscRow({
           ) : (
             <>
               <button
-                className="disc-btn up"
-                title={isAlbum ? 'Queue album to buy' : 'Approve'}
+                className={isAlbum ? 'disc-btn download' : 'disc-btn up'}
+                title={isAlbum ? albumActionTitle(item.kind).up : ARTIST_ACTION_TITLE.up}
                 onClick={() => onRate(item, 'up')}
               >
-                <IconApprove />
+                {isAlbum ? <IconDownload /> : <IconApprove />}
               </button>
               {!isAlbum && (
                 <button
                   className="disc-btn indifferent"
-                  title="No strong feelings — keep playing it, just don't recommend from it"
+                  title={ARTIST_ACTION_TITLE.indifferent}
                   onClick={() => onRate(item, 'indifferent')}
                 >
                   <IconIndifferent />
                 </button>
               )}
               <button
-                className="disc-btn down"
-                title={isAlbum ? 'Meh — hide this from my feed only' : 'Not interested'}
+                className={isAlbum ? 'disc-btn skip' : 'disc-btn down'}
+                title={isAlbum ? albumActionTitle(item.kind).down : ARTIST_ACTION_TITLE.down}
                 onClick={() => onRate(item, 'down')}
               >
-                <IconReject />
+                {isAlbum ? <IconSkip /> : <IconReject />}
               </button>
               {/* Snooze hides a "not now" pick for a while — works for artists and missing albums. */}
               <SnoozeControl

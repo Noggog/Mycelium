@@ -1066,6 +1066,11 @@ input[type='checkbox'] {
 .disc-rated.mark-snoozed .disc-rated-icon {
   color: var(--purple-fg);
 }
+/* A skipped album, once decided. Same reasoning as the button: passing on one record is not the
+   rejection that salmon announces. The queued mark keeps the green — it really is a yes. */
+.disc-rated.mark-down.is-album .disc-rated-icon {
+  color: var(--slate);
+}
 /* A merged album — the same "already owned" green as the In-library flag in the Browse drill-down. */
 .disc-rated.mark-merged .disc-rated-icon {
   color: var(--good);
@@ -1373,6 +1378,18 @@ a.disc-row-link:hover .disc-name {
 .disc-btn.down {
   color: var(--salmon-light);
 }
+/* Fetching an album keeps the approve green — the Purchases page already pairs this glyph with it, so
+   "green + down-arrow-into-tray" means "get this record" everywhere in the app. */
+.disc-btn.download {
+  color: var(--good);
+}
+/* Skipping an album is a pass, not a rejection: it hides one record from your feed (or, on an upgrade,
+   keeps the copy you have) and touches nothing else. Salmon claimed far more than that, so this takes
+   the same muted slate as the artist shrug — the two never appear in the same cluster, and they mean
+   the same kind of thing. */
+.disc-btn.skip {
+  color: var(--slate);
+}
 /* The shrug sits between the two and is coloured to lose to both. It is a real verdict, so it gets the
    same size and hover lift as its neighbours — but a saturated third hue would make "no opinion" the
    loudest thing in the row, and the flanking green and salmon are what the eye should land on. */
@@ -1384,7 +1401,12 @@ a.disc-row-link:hover .disc-name {
     border-color: var(--good);
     box-shadow: 0 0 14px rgba(56, 232, 160, 0.5);
   }
-  .disc-btn.indifferent:hover:not(:disabled) {
+  .disc-btn.download:hover:not(:disabled) {
+    border-color: var(--good);
+    box-shadow: 0 0 14px rgba(56, 232, 160, 0.5);
+  }
+  .disc-btn.indifferent:hover:not(:disabled),
+  .disc-btn.skip:hover:not(:disabled) {
     border-color: var(--slate);
     color: var(--slate-light);
     box-shadow: 0 0 14px rgba(150, 160, 172, 0.32);

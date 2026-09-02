@@ -36,7 +36,8 @@ import { DeezerSample } from '../components/DeezerSample'
 import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
 import {
-  IconApprove, IconBlock, IconCheck, IconClear, IconIndifferent, IconReject, IconWrench, Spinner,
+  IconApprove, IconBlock, IconCheck, IconClear, IconDownload, IconIndifferent, IconReject, IconSkip,
+  IconWrench, Spinner,
 } from '../components/icons'
 import { isDeezerBusy } from '../api/deezer'
 import { getCollections } from '../api/collections'
@@ -537,12 +538,13 @@ function AlbumState({
   )
 }
 
-// Verdict → the label shown on a decided missing album. "Meh" is a purely personal pass: it hides
+// Verdict → the label shown on a decided missing album. "Skipped" is a purely personal pass: it hides
 // the album from your feed for good and leaves it offerable to every other user (a globally blocked
-// album shows as "Blocked" instead — see the `blocked` flag).
+// album shows as "Blocked" instead — see the `blocked` flag). No entry for Indifferent: that is an
+// artist verdict, and the album routes refuse it (see AlbumVerdict), so no album row can hold one.
 const ALBUM_VERDICT_LABEL: Partial<Record<DiscoveryStatus, string>> = {
   Liked: 'Queued',
-  Disliked: 'Meh',
+  Disliked: 'Skipped',
   Snoozed: 'Snoozed',
 }
 
@@ -656,20 +658,20 @@ function AlbumSubRow({
               ) : (
                 <>
                   <button
-                    className="disc-btn up"
-                    title="Queue album to buy"
+                    className="disc-btn download"
+                    title="Download - queue this album"
                     disabled={busy}
                     onClick={() => onRate(a, 'up')}
                   >
-                    <IconApprove />
+                    <IconDownload />
                   </button>
                   <button
-                    className="disc-btn down"
-                    title="Meh — hide this from my feed only"
+                    className="disc-btn skip"
+                    title="Skip - hide this album from my feed"
                     disabled={busy}
                     onClick={() => onRate(a, 'down')}
                   >
-                    <IconReject />
+                    <IconSkip />
                   </button>
                 </>
               )}
@@ -950,7 +952,7 @@ function ArtistListRow({
         <div className="disc-actions" onClick={(e) => e.stopPropagation()}>
           <button
             className={verdict === 'Liked' ? 'disc-btn up active' : 'disc-btn up'}
-            title={verdict === 'Liked' ? 'Clear rating' : 'Approve'}
+            title={verdict === 'Liked' ? 'Clear rating' : 'Like - Recommend'}
             disabled={ratePending}
             onClick={() => onRate(name, 'up', verdict)}
           >
@@ -960,7 +962,7 @@ function ArtistListRow({
               unrated — while the verdict map happily hands back 'Indifferent'. */}
           <button
             className={verdict === 'Indifferent' ? 'disc-btn indifferent active' : 'disc-btn indifferent'}
-            title={verdict === 'Indifferent' ? 'Clear rating' : 'No strong feelings'}
+            title={verdict === 'Indifferent' ? 'Clear rating' : "Indifferent - Keep playing, don't recommend"}
             disabled={ratePending}
             onClick={() => onRate(name, 'indifferent', verdict)}
           >
@@ -968,7 +970,7 @@ function ArtistListRow({
           </button>
           <button
             className={verdict === 'Disliked' ? 'disc-btn down active' : 'disc-btn down'}
-            title={verdict === 'Disliked' ? 'Clear rating' : 'Reject'}
+            title={verdict === 'Disliked' ? 'Clear rating' : 'Dislike - Block'}
             disabled={ratePending}
             onClick={() => onRate(name, 'down', verdict)}
           >
@@ -1125,7 +1127,7 @@ function DetailPane({
             <div className="detail-actions">
               <button
                 className={verdict === 'Liked' ? 'disc-btn up active' : 'disc-btn up'}
-                title={verdict === 'Liked' ? 'Clear rating' : 'Approve'}
+                title={verdict === 'Liked' ? 'Clear rating' : 'Like - Recommend'}
                 disabled={ratePending}
                 onClick={() => onRate(name, 'up', verdict)}
               >
@@ -1135,7 +1137,7 @@ function DetailPane({
                 className={verdict === 'Indifferent'
                   ? 'disc-btn indifferent active'
                   : 'disc-btn indifferent'}
-                title={verdict === 'Indifferent' ? 'Clear rating' : 'No strong feelings'}
+                title={verdict === 'Indifferent' ? 'Clear rating' : "Indifferent - Keep playing, don't recommend"}
                 disabled={ratePending}
                 onClick={() => onRate(name, 'indifferent', verdict)}
               >
@@ -1143,7 +1145,7 @@ function DetailPane({
               </button>
               <button
                 className={verdict === 'Disliked' ? 'disc-btn down active' : 'disc-btn down'}
-                title={verdict === 'Disliked' ? 'Clear rating' : 'Reject'}
+                title={verdict === 'Disliked' ? 'Clear rating' : 'Dislike - Block'}
                 disabled={ratePending}
                 onClick={() => onRate(name, 'down', verdict)}
               >
