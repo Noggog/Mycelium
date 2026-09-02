@@ -2714,6 +2714,29 @@ a.detail-chip.via:hover {
   font-size: 0.8rem;
   color: var(--text-dim);
 }
+
+/* Verdict filters beside the search box. They're .disc-btn thumbs with a label and a count, so an
+   active filter looks exactly like the row button that set the verdict — same hue, same glow. */
+.browse-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.browse-filters .disc-btn {
+  gap: 0.4rem;
+  padding: 0.45rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+}
+.browse-filter-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.browse-filters .disc-btn.active .browse-filter-count {
+  color: inherit;
+  opacity: 0.8;
+}
 /* Live Deezer results below the library: artists not in the library, addable from here. */
 .uncataloged-results {
   margin-top: 1.25rem;
@@ -2837,6 +2860,13 @@ a.detail-chip.via:hover {
   color: var(--text-dim);
   background: rgba(116, 88, 219, 0.16);
   border: 1px solid var(--border);
+}
+/* A row that's in the list only because you rated it — it isn't on the shelf. Muted so it never
+   competes with the genre tags it sits beside. */
+.genre-tag.ghost {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-faint);
+  font-style: italic;
 }
 .wrench-btn {
   margin-left: auto;

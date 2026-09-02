@@ -61,7 +61,16 @@ const verdictStatus = (v: Verdict): DiscoveryStatus => (v === 'up' ? 'Liked' : '
 // the whole library (it filters before paging).
 const PAGE_SIZE = 25
 
+// The list can be narrowed to what you've thumbed, so a verdict you gave months ago is one click
+// away rather than a name you have to remember first. The two toggles are independent: neither on is
+// the plain library listing, both on is "everything I've rated".
+type RatingFilter = { liked: boolean; disliked: boolean }
+const NO_FILTER: RatingFilter = { liked: false, disliked: false }
+
 const normalize = (s: string) => s.trim().toLowerCase()
+
+const byName = (x: BrowseRow, y: BrowseRow) =>
+  x.sortName.localeCompare(y.sortName, undefined, { sensitivity: 'base' })
 
 // A library row is "suspect" when it resolved to a Deezer artist whose name doesn't match — the
 // tell-tale of a misassociation (e.g. library "ALEX" → Deezer "Alex Warren").
@@ -884,6 +893,7 @@ function ArtistAvatar({ name, image, size, hero }: { name: string; image: string
 function ArtistListRow({
   artist,
   verdict,
+  notInLibrary,
   selected,
   user,
   ratePending,
@@ -892,6 +902,9 @@ function ArtistListRow({
 }: {
   artist: ArtistListItem
   verdict: DiscoveryStatus | undefined
+  // Set on a row that's only here because it was rated — see `ratedElsewhere` in Browse. Says so on
+  // the row, since everything else in this list is on the shelf.
+  notInLibrary?: boolean
   selected: boolean
   user: boolean
   ratePending: boolean
@@ -912,8 +925,13 @@ function ArtistListRow({
             <span className="warn-badge" title="Deezer name doesn't match — likely the wrong artist"> ⚠</span>
           )}
         </div>
-        {artist.genres.length > 0 && (
+        {(notInLibrary || artist.genres.length > 0) && (
           <div className="genre-tags">
+            {notInLibrary && (
+              <span className="genre-tag ghost" title="You've rated this artist, but they're not on the shelf">
+                not in library
+              </span>
+            )}
             {artist.genres.slice(0, 3).map((g) => (
               <span className="genre-tag" key={g}>{g}</span>
             ))}
@@ -1360,6 +1378,10 @@ export default function Browse() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
+  // Which verdicts the list is narrowed to. Session-only on purpose: a remembered filter would greet
+  // you with a fraction of your library and no obvious reason why.
+  const [ratingFilter, setRatingFilter] = useState<RatingFilter>(NO_FILTER)
+  const filterActive = ratingFilter.liked || ratingFilter.disliked
   // The artist open in the right-hand readout (desktop) / drawer (mobile), and which of its tabs is
   // showing. Carried as a lightweight selection so a related-artist card the user drills into — which
   // may not be in the library — can still drive the readout.
@@ -1369,6 +1391,13 @@ export default function Browse() {
   // Editing the search resets to the first page so matches are never hidden on a later page.
   const onSearch = (next: string) => {
     setQuery(next)
+    setPage(0)
+  }
+
+  // Same for the verdict toggles — and clicking the one that's already lit turns it back off, so
+  // there's no third "All" button to hunt for.
+  const onToggleFilter = (which: keyof RatingFilter) => {
+    setRatingFilter((cur) => ({ ...cur, [which]: !cur[which] }))
     setPage(0)
   }
 
@@ -1435,7 +1464,7 @@ export default function Browse() {
   // The library, as one list: every artist, plus the collections already on the shelf, ordered by the
   // name each row shows. A collection matches on its own title *and* on its credit, so searching
   // "various artists" finds them all.
-  const rows: BrowseRow[] = useMemo(() => {
+  const libraryRows: BrowseRow[] = useMemo(() => {
     const artistRows: BrowseRow[] = (artists ?? []).map((a) => ({
       kind: 'artist',
       sortName: a.artistKey.artistName,
@@ -1445,17 +1474,73 @@ export default function Browse() {
       .filter((c) => c.owned)
       .map((c) => ({ kind: 'collection', sortName: c.title, item: c }))
 
-    return [...artistRows, ...collectionRows].sort((x, y) =>
-      x.sortName.localeCompare(y.sortName, undefined, { sensitivity: 'base' }),
-    )
+    return [...artistRows, ...collectionRows].sort(byName)
   }, [artists, collections])
 
-  const filtered = rows.filter((r) =>
-    r.kind === 'artist'
-      ? normalize(r.artist.artistKey.artistName).includes(normalize(query))
-      : normalize(r.item.title).includes(normalize(query))
-        || normalize(r.item.artist.artistName).includes(normalize(query)),
+  const libraryNames = useMemo(
+    () => new Set((artists ?? []).map((a) => normalize(a.artistKey.artistName))),
+    [artists],
   )
+
+  // Artists you've thumbed that aren't on the shelf: a liked recommendation still on the buy list, a
+  // rejected one you never want offered again. They're not library rows, so they stay out of the plain
+  // listing — but "show me what I've liked" that quietly dropped everything not yet owned would be
+  // answering a different question, so they join the list whenever a verdict filter is on. A rating
+  // carries only the name and photo, which is all a row needs; the readout works off the name.
+  const ratedElsewhere: BrowseRow[] = useMemo(
+    () =>
+      (ratings ?? [])
+        .filter((r) => !r.album && !libraryNames.has(normalize(r.artist.artistName)))
+        .map((r) => ({
+          kind: 'artist' as const,
+          sortName: r.artist.artistName,
+          artist: {
+            artistKey: r.artist,
+            artistImageUrl: r.imageUrl,
+            genres: [],
+            deezerId: null,
+            deezerName: null,
+            deezerFans: null,
+            deezerLink: null,
+            deezerOverride: false,
+          },
+        })),
+    [ratings, libraryNames],
+  )
+
+  const rows = useMemo(
+    () => (filterActive ? [...libraryRows, ...ratedElsewhere].sort(byName) : libraryRows),
+    [filterActive, libraryRows, ratedElsewhere],
+  )
+
+  // The verdict a row wears. A collection carries its own: an umbrella-credited record is rated on the
+  // album (nobody has taste about "Various Artists"), so its verdict never lands in the artist map.
+  const rowVerdict = (r: BrowseRow): DiscoveryStatus | undefined =>
+    r.kind === 'artist' ? verdictByArtist.get(r.artist.artistKey.artistName) : r.item.verdict ?? undefined
+
+  // Counted over the same set whether or not the filter is on, so the number on a chip doesn't move
+  // the moment you click it.
+  let likedCount = 0
+  let dislikedCount = 0
+  for (const r of [...libraryRows, ...ratedElsewhere]) {
+    const v = rowVerdict(r)
+    if (v === 'Liked') likedCount++
+    else if (v === 'Disliked') dislikedCount++
+  }
+
+  const matchesFilter = (v: DiscoveryStatus | undefined) =>
+    !filterActive || (v === 'Liked' && ratingFilter.liked) || (v === 'Disliked' && ratingFilter.disliked)
+
+  const filtered = rows.filter(
+    (r) =>
+      (r.kind === 'artist'
+        ? normalize(r.artist.artistKey.artistName).includes(normalize(query))
+        : normalize(r.item.title).includes(normalize(query))
+          || normalize(r.item.artist.artistName).includes(normalize(query))) && matchesFilter(rowVerdict(r)),
+  )
+
+  // How the active filter reads in the empty-state line ("you haven't <word> anything yet").
+  const filterWord = ratingFilter.liked && ratingFilter.disliked ? 'rated' : ratingFilter.liked ? 'liked' : 'disliked'
 
   // Clamp to a valid page after the filter shrinks (e.g. a search that lands past the current page).
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -1536,9 +1621,36 @@ export default function Browse() {
             <input
               type="text"
               value={query}
-              placeholder={`Search ${rows.length} artists & collections…`}
+              placeholder={`Search ${libraryRows.length} artists & collections…`}
               onChange={(e) => onSearch(e.target.value)}
             />
+          </div>
+        )}
+
+        {/* Narrow the list to your own verdicts. The toggles wear the same hues as the row thumbs, so
+            "liked" reads the same here as it does on the button that set it. */}
+        {user && artists && artists.length > 0 && (
+          <div className="browse-filters">
+            <button
+              type="button"
+              aria-pressed={ratingFilter.liked}
+              title={ratingFilter.liked ? 'Stop filtering by liked' : 'Show only what you’ve liked'}
+              className={ratingFilter.liked ? 'disc-btn up active' : 'disc-btn up'}
+              onClick={() => onToggleFilter('liked')}
+            >
+              <IconApprove size={15} /> Liked
+              <span className="browse-filter-count">{likedCount}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={ratingFilter.disliked}
+              title={ratingFilter.disliked ? 'Stop filtering by disliked' : 'Show only what you’ve disliked'}
+              className={ratingFilter.disliked ? 'disc-btn down active' : 'disc-btn down'}
+              onClick={() => onToggleFilter('disliked')}
+            >
+              <IconReject size={15} /> Disliked
+              <span className="browse-filter-count">{dislikedCount}</span>
+            </button>
           </div>
         )}
       </div>
@@ -1572,6 +1684,7 @@ export default function Browse() {
                       key={name}
                       artist={row.artist}
                       verdict={verdictByArtist.get(name)}
+                      notInLibrary={!libraryNames.has(normalize(name))}
                       selected={selected?.name === name}
                       user={!!user}
                       ratePending={rateArtist.isPending}
@@ -1583,10 +1696,19 @@ export default function Browse() {
                   )
                 })}
 
-                {filtered.length === 0 && !user && (
+                {filtered.length === 0 && filterActive && (
+                  <p className="disc-sub-note">
+                    <em>
+                      {query
+                        ? `Nothing matching “${query}” is ${filterWord}.`
+                        : `You haven’t ${filterWord} anything yet.`}
+                    </em>
+                  </p>
+                )}
+                {filtered.length === 0 && !filterActive && !user && (
                   <p className="disc-sub-note"><em>No artists match “{query}”.</em></p>
                 )}
-                {filtered.length === 0 && user && query && (
+                {filtered.length === 0 && !filterActive && user && query && (
                   <p className="disc-sub-note"><em>Nothing in your library matches — see other results below.</em></p>
                 )}
               </div>
@@ -1603,10 +1725,12 @@ export default function Browse() {
                 </div>
               )}
 
-              {user && (
+              {/* Both blocks below search Deezer for things you haven't rated, which is the opposite of
+                  what a verdict filter asks for — so they sit out while one is on. */}
+              {user && !filterActive && (
                 <UncatalogedResults
                   query={query}
-                  libraryNames={new Set((artists ?? []).map((a) => normalize(a.artistKey.artistName)))}
+                  libraryNames={libraryNames}
                   verdictByArtist={verdictByArtist}
                   selectedName={selected?.name ?? null}
                   onSelect={setSelected}
@@ -1615,7 +1739,7 @@ export default function Browse() {
 
               {/* ...and the records no artist above could have led you to: compilations and
                   soundtracks, credited to an umbrella whose discography is empty. */}
-              {user && <CollectionResults query={query} />}
+              {user && !filterActive && <CollectionResults query={query} />}
             </div>
 
             <DetailPane
