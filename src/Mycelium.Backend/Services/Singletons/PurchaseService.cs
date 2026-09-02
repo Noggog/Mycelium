@@ -26,6 +26,7 @@ public class PurchaseService
     private readonly IArtistCatalogRepo _catalog;
     private readonly IMissingAlbumRepo _missing;
     private readonly IAlbumMatchOverrideRepo _overrides;
+    private readonly IAlbumBlockRepo _blocks;
     private readonly IDownloader _downloader;
     private readonly IDeezerApi _deezer;
     private readonly IAlbumTagger _albumTagger;
@@ -44,6 +45,7 @@ public class PurchaseService
         IArtistCatalogRepo catalog,
         IMissingAlbumRepo missing,
         IAlbumMatchOverrideRepo overrides,
+        IAlbumBlockRepo blocks,
         IDownloader downloader,
         IDeezerApi deezer,
         IAlbumTagger albumTagger,
@@ -65,6 +67,7 @@ public class PurchaseService
         _catalog = catalog;
         _missing = missing;
         _overrides = overrides;
+        _blocks = blocks;
         _downloader = downloader;
         _deezer = deezer;
         _albumTagger = albumTagger;
@@ -275,6 +278,15 @@ public class PurchaseService
         // User-asserted merges (near-miss titles the normalizer can't collapse): an album carrying an
         // override key is treated as owned, so it leaves the queue and stays gone across reconciles.
         var overrideKeys = await LoadOverrideKeys();
+        // Albums nobody should be offered a *replacement* for: a user saying the copy we hold is fine,
+        // or the downloader having established Deezer has nothing better (snoozed, so a catalogue that
+        // later gains a lossless master is picked up again). The upgrade feed already passes over these
+        // — DiscoveryEngine.UpgradeSkippedKeys — and this list has to agree with it, because the two are
+        // separate routes to the same download. Without it a row the downloader just wrote off is
+        // re-wanted on the very next reconcile, so the prune below can never reach it: it sits in Failed
+        // for ever offering a Retry that cannot work, and the only way out is deleting the like on an
+        // album the user owns and likes.
+        var upgradeSkipped = await UpgradeSkippedKeys();
 
         // Per (listing-artist, album), sourced from the global missing-albums set so a liked album
         // carries what reconcile needs without threading it through the rating flow:
@@ -334,6 +346,17 @@ public class PurchaseService
             // the row because the two are acquired differently — an upgrade has an existing copy that
             // must be moved aside rather than merged with.
             var isUpgrade = AlbumIsOwned(ownedAlbums, overrideKeys, matchArtist, first.Album.AlbumName);
+            // Checked under both acts the album can be filed as, exactly as a block is recorded: a
+            // collaboration reached through one member must stay skipped when reached through the other.
+            // Only upgrades — a scope-Upgrade verdict says "keep what we have", which has nothing to say
+            // about an album the library doesn't hold at all.
+            if (isUpgrade
+                && (upgradeSkipped.Contains(AlbumOverrideKey.For(first.Artist.ArtistName, first.Album.AlbumName))
+                    || upgradeSkipped.Contains(AlbumOverrideKey.For(matchArtist, first.Album.AlbumName))))
+            {
+                continue;
+            }
+
             // What is on disk right now. The downloader checks the result against this before
             // replacing anything, and by then the album is no longer in the missing set.
             var ownedQuality = isUpgrade
@@ -656,6 +679,27 @@ public class PurchaseService
         (await _overrides.GetAll())
         .Select(o => AlbumOverrideKey.For(o.MatchArtist, o.DeezerTitle))
         .ToHashSet();
+
+    /// <summary>
+    /// The lookup keys of every album currently carrying a scope-<see cref="AlbumBlockScope.Upgrade"/>
+    /// verdict — "keep the copy we have". Deliberately the same read the upgrade feed does
+    /// (DiscoveryEngine.UpgradeSkippedKeys), including the expiry test: a stamped verdict is a snooze,
+    /// not a foreclosure, so an album Deezer had nothing better for becomes a candidate again once the
+    /// stamp lapses.
+    ///
+    /// <para>Scope-<see cref="AlbumBlockScope.Release"/> blocks are pointedly <em>not</em> read here: a
+    /// block stops an album being offered, and does not retract a purchase someone already asked for
+    /// (see <see cref="DiscoveryEngine.BlockAlbum"/>). An upgrade verdict is the other thing — it is
+    /// about the copy on disk, and the row it governs is one nobody chose to queue album by album.</para>
+    /// </summary>
+    private async Task<HashSet<string>> UpgradeSkippedKeys()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return (await _blocks.GetAll())
+            .Where(b => b.Scope == AlbumBlockScope.Upgrade && b.AppliesAt(now))
+            .Select(b => AlbumOverrideKey.For(b.Artist, b.Album))
+            .ToHashSet();
+    }
 
     /// <summary>How many library albums a merge search returns — enough to scan, bounded for the wire.</summary>
     private const int SearchLimit = 60;

@@ -70,8 +70,8 @@ public class DownloadServiceTests
         config ??= Config();
         var settings = new DownloadSettings(_settingsRepo, NullLogger<DownloadSettings>.Instance);
         var purchases = new PurchaseService(
-            _repo, _queue, _albumRatings, _library, _catalogRepo, _missing, _overrides, _downloader,
-            Substitute.For<IDeezerApi>(), _albumTagger, config, settings,
+            _repo, _queue, _albumRatings, _library, _catalogRepo, _missing, _overrides, _blocks,
+            _downloader, Substitute.For<IDeezerApi>(), _albumTagger, config, settings,
             new UserQualityService(_users, AudioQuality.Lossless), _jitter, _schedule,
             NullLogger<PurchaseService>.Instance);
         var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);

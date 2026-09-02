@@ -8,6 +8,7 @@ import {
   downloadPurchase,
   getDownloadStatus,
   getPurchases,
+  rate,
   removeManualPurchase,
   setDeezerArl,
   setDownloadsAutomatic,
@@ -506,6 +507,12 @@ export default function Purchases() {
   //
   // A hand-added row has no rating behind it — clearing one would be a no-op and the row would sit
   // there forever — so it's deleted directly instead.
+  //
+  // An upgrade row is the third case, and clearing is the wrong verb for it: the user owns this record
+  // and likes it — the row exists only because the copy on disk is below what they can have. Deleting
+  // that like to get rid of the row would throw away a verdict about the music to answer a question
+  // about a file. Thumbing it down as an upgrade is the verdict that actually fits ("keep the copy we
+  // have"), and it drops the row on the same reconcile.
   const remove = useMutation({
     mutationFn: async (item: PurchaseItem) => {
       // A manual row is deleted outright whatever state it's in, queued included: nothing re-creates
@@ -525,7 +532,7 @@ export default function Purchases() {
         reconsider: null,
         ownedQuality: null,
       }
-      await clearRating(feedItem)
+      await (item.kind === 'UpgradeAlbum' ? rate(feedItem, 'down') : clearRating(feedItem))
 
       // Dropping the want isn't enough once a row has been handed to the drainer: the reconcile
       // only prunes Pending/Failed rows, so an unwanted Queued one survives every pass and gets
@@ -547,11 +554,15 @@ export default function Purchases() {
   })
   const busy = download.isPending || unsend.isPending || remove.isPending
 
-  // The remove (✕) action shared by pending/failed rows — cancels the want before it downloads.
+  // The remove (✕) action shared by pending/failed rows — cancels the want before it downloads. An
+  // upgrade row isn't a want being dropped (the record is already on the shelf), so it says what it
+  // actually does: settle for the copy in the library.
   const removeBtn = (item: PurchaseItem) => (
     <button
       className="disc-btn"
-      title="Remove from queue"
+      title={item.kind === 'UpgradeAlbum'
+        ? 'Keep the copy in the library — stop offering this upgrade'
+        : 'Remove from queue'}
       disabled={busy}
       onClick={() => remove.mutate(item)}
     >

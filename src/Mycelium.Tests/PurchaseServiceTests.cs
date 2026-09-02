@@ -20,6 +20,7 @@ public class PurchaseServiceTests
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
     private readonly IMissingAlbumRepo _missing = Substitute.For<IMissingAlbumRepo>();
     private readonly FakeAlbumMatchOverrideRepo _overrides = new();
+    private readonly IAlbumBlockRepo _blocks = Substitute.For<IAlbumBlockRepo>();
     private readonly IDownloader _downloader = Substitute.For<IDownloader>();
     private readonly IDeezerApi _deezer = Substitute.For<IDeezerApi>();
     private readonly IAlbumTagger _albumTagger = Substitute.For<IAlbumTagger>();
@@ -38,7 +39,8 @@ public class PurchaseServiceTests
         var settings = new DownloadSettings(
             new FakeAppSettingsRepo(), NullLogger<DownloadSettings>.Instance);
         _sut = new PurchaseService(
-            _purchases, _queue, _albumRatings, _library, _catalog, _missing, _overrides, _downloader,
+            _purchases, _queue, _albumRatings, _library, _catalog, _missing, _overrides, _blocks,
+            _downloader,
             _deezer, _albumTagger, Config, settings,
             new UserQualityService(_users, AudioQuality.Lossless),
             new JitterPolicy(0.3), _schedule,
@@ -51,6 +53,7 @@ public class PurchaseServiceTests
         _library.GetAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _catalog.GetOwnedAlbums().Returns(new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase));
         _missing.GetAll().Returns(Array.Empty<MissingAlbum>());
+        _blocks.GetAll().Returns(Array.Empty<AlbumBlock>());
         _downloader.Name.Returns("test-backend");
         _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
     }
@@ -1229,5 +1232,121 @@ public class PurchaseServiceTests
         var active = await _sut.GetActive();
 
         active.Single(p => p.Kind == FeedKind.MissingAlbum).Status.Should().Be(PurchaseStatus.Sent);
+    }
+
+    /// <summary>
+    /// Owned at <paramref name="quality"/> — the shape that makes a liked album an upgrade rather
+    /// than a gap.
+    /// </summary>
+    private void OwnedAlbum(string artist, string album, AudioQuality quality)
+    {
+        _library.GetAllArtistMetadata().Returns(new[] { new ArtistMetadata(new ArtistKey(artist), null) });
+        _catalog.GetOwnedAlbums().Returns(
+            new Dictionary<string, Dictionary<string, AudioQuality?>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [artist] = new(StringComparer.OrdinalIgnoreCase) { [album] = quality },
+            });
+    }
+
+    [Fact]
+    public async Task An_owned_album_below_the_asked_tier_is_an_upgrade_row()
+    {
+        UserTier("justin", AudioQuality.Lossless);
+        OwnedAlbum("José Peixoto", "As Vozes Dos Passos", AudioQuality.Lossy);
+        LikedBy(("justin", "José Peixoto", "As Vozes Dos Passos"));
+
+        var active = await _sut.GetActive();
+
+        active.Single().Kind.Should().Be(FeedKind.UpgradeAlbum);
+    }
+
+    [Fact]
+    public async Task An_upgrade_the_downloader_wrote_off_stops_being_wanted_and_its_failed_row_is_pruned()
+    {
+        // The stuck-row case: streamrip found nothing better than the copy on disk, so DownloadService
+        // snoozed the upgrade and left the row Failed. Reconcile has to agree with that verdict —
+        // otherwise the album is re-wanted every pass, the prune can never reach the row, and it sits
+        // in the Failed list for ever offering a Retry that is guaranteed to fail the same way.
+        UserTier("justin", AudioQuality.Lossless);
+        OwnedAlbum("José Peixoto", "As Vozes Dos Passos", AudioQuality.Lossy);
+        LikedBy(("justin", "José Peixoto", "As Vozes Dos Passos"));
+        _purchases.Seed(new PurchaseItem(
+            PurchaseKey.ForAlbum("José Peixoto", "As Vozes Dos Passos"), FeedKind.UpgradeAlbum,
+            new ArtistKey("José Peixoto"), "As Vozes Dos Passos", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Failed, DateTimeOffset.UtcNow, null, 1, "José Peixoto",
+            DownloadFailure.NoBetterQualityAvailable,
+            TargetQuality: AudioQuality.Lossless, OwnedQuality: AudioQuality.Lossy));
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock(
+                "José Peixoto", "As Vozes Dos Passos", BlockedBy: null, AlbumBlockScope.Upgrade,
+                DateTimeOffset.UtcNow.AddDays(180)),
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Should().BeEmpty();
+        _purchases.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_lapsed_upgrade_snooze_makes_the_album_a_candidate_again()
+    {
+        // The stamp is a snooze, not a foreclosure: a catalogue can gain a lossless master later.
+        UserTier("justin", AudioQuality.Lossless);
+        OwnedAlbum("José Peixoto", "As Vozes Dos Passos", AudioQuality.Lossy);
+        LikedBy(("justin", "José Peixoto", "As Vozes Dos Passos"));
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock(
+                "José Peixoto", "As Vozes Dos Passos", BlockedBy: null, AlbumBlockScope.Upgrade,
+                DateTimeOffset.UtcNow.AddDays(-1)),
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Single().Kind.Should().Be(FeedKind.UpgradeAlbum);
+    }
+
+    [Fact]
+    public async Task An_upgrade_verdict_does_not_touch_an_album_the_library_is_missing()
+    {
+        // Scope-Upgrade says "keep the copy we have". With no copy to keep it has nothing to say, and
+        // reading it as a block would silently drop a genuine gap off the queue.
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(("justin", "José Peixoto", "As Vozes Dos Passos"));
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock(
+                "José Peixoto", "As Vozes Dos Passos", BlockedBy: null, AlbumBlockScope.Upgrade, null),
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Single().Kind.Should().Be(FeedKind.MissingAlbum);
+    }
+
+    [Fact]
+    public async Task An_upgrade_snoozed_under_the_album_artist_is_not_re_offered_via_the_listing_artist()
+    {
+        // A collaboration: the row was surfaced through one member and Deezer credits it to another.
+        // DownloadService records the snooze under both acts, so either spelling has to find it.
+        UserTier("justin", AudioQuality.Lossless);
+        OwnedAlbum("Duo Credit", "Split Record", AudioQuality.Lossy);
+        LikedBy(("justin", "One Member", "Split Record"));
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(
+                new ArtistKey("One Member"), new AlbumKey("Split Record"), null, 7,
+                new ArtistKey("Duo Credit")),
+        });
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock("Duo Credit", "Split Record", BlockedBy: null, AlbumBlockScope.Upgrade, null),
+        });
+
+        var active = await _sut.GetActive();
+
+        active.Should().BeEmpty();
     }
 }

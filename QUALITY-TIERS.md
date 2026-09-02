@@ -493,6 +493,18 @@ snooze. Reuses `AlbumOverrideKey` keying, the global store, and the existing
 lift-the-block UI, while keeping "don't offer this record" distinct from "this
 record stays as it is."
 
+**Both readers of the verdict must agree** (corrected 2026-09-01). The feed is
+not the only route to an upgrade download: `PurchaseService.Reconcile` derives
+the shared to-buy list straight from liked albums + owned quality, so it reaches
+the same conclusion independently. It therefore consults the upgrade verdict too
+(`UpgradeSkippedKeys`, the same read `DiscoveryEngine` does, expiry included).
+Without that, the snooze the downloader writes on `NoBetterQualityAvailable` only
+silences the *card*: reconcile re-wants the album on the very next pass, the
+prune can never reach the `Failed` row, and it sits in the download list for ever
+offering a Retry guaranteed to fail identically. Note the asymmetry with scope
+`Release`, which deliberately does **not** prune purchase rows — a block stops an
+album being offered and does not retract a purchase someone chose to queue.
+
 ### The fallback ladder stays ON (corrected 2026-08-24)
 
 An earlier draft said to disable the ladder for upgrades. **Wrong** — it would
