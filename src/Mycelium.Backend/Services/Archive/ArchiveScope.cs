@@ -33,12 +33,12 @@ public static class ArchiveScope
             TrackRatings = Only(input.TrackRatings, r => Str(r, "userId") == subject),
             Playlists = Only(input.Playlists, p => Str(p, "userId") == subject),
 
-            // These two name a person rather than pointing at one. `addedBy` is stamped with the
-            // username at the moment someone pressed Download; `blockedBy` holds the OIDC subject on
-            // rows written since the block endpoint existed, and a username on older ones. Matching
-            // both spellings is what keeps a person's own history from being filtered out from under
-            // them. A row crediting nobody — most acquisitions, which arrive automatically off a like
-            // — belongs to no takeout and is dropped.
+            // These two name a person rather than pointing at one, and both hold a username: `addedBy`
+            // always has, `blockedBy` since the startup migration rewrote it. The subject is still
+            // matched as well, because that migration can only reach rows whose user still exists —
+            // and a person's own history must not be filtered out from under them over a spelling. A
+            // row crediting nobody — most acquisitions, which arrive automatically off a like —
+            // belongs to no takeout and is dropped.
             Purchases = Only(input.Purchases, p => Str(p, "addedBy") is { } by && owned.Contains(by)),
             Blocks = Only(input.Blocks, b => Str(b, "blockedBy") is { } by && owned.Contains(by)),
 

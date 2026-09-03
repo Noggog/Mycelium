@@ -84,6 +84,8 @@ album: "Kid A"
 artist: "Radiohead"
 quality: "Lossless"
 acquiredBy: "kelsey"
+musicBrainz:
+  releaseGroup: "b8048f24-c026-3398-b23a-b5e50716cbc7"
 songs:
   - title: "Everything in Its Right Place"
   - title: "Idioteque"
@@ -99,6 +101,12 @@ back as booleans. Numbers and booleans are bare, so a rating is a number.
 
 `ratings` under a song is that person's star rating, 0–5 with a half-star step, keyed by username. A
 song nobody has rated simply has none.
+
+`musicBrainz.releaseGroup` is the album's MusicBrainz release-group id — the album as a *work*, not
+as a particular pressing, and the only identifier on this file that is stable forever. It is what to
+re-key on if the titles have moved by the time you read this. It is absent where MusicBrainz has no
+entry for the record (bootlegs, DJ mixes, a library's own compilations) or where it had not yet been
+looked up when the snapshot was taken.
 
 Songs are listed in running order, so no track numbers are stored. `acquiredBy` names whoever asked
 for the record by hand; most arrive automatically and name nobody. When it was acquired is not a
@@ -117,6 +125,43 @@ their own text.
 
 **Always read the real name from the `artist` / `album` field inside the file.** Nothing needs to
 reverse the filename transformation, and nothing should try.
+
+## A playlist file
+
+Hand-built playlists carry their tracks, in order. Smart playlists carry their **rules** instead —
+their membership is only the current answer to those rules, and would be stale by the next snapshot.
+
+```yaml
+- title: "Ambient Primo"
+  smart: true
+  rules:
+    match: "all"
+    rules:
+      - field: "track.userRating"
+        op: "greater than"
+        value: "4"
+      - match: "any"
+        rules:
+          - field: "artist.mood"
+            op: "is"
+            value: "Ambient"
+    sort: "titleSort"
+```
+
+`match` is `all` or `any`, and a rule may be a nested group of rules with its own `match` — the
+nesting is load-bearing, since "rated over 4 **and** (ambient)" selects something different from
+"rated over 4 **or** ambient".
+
+Everything in a rule is written to mean something on its own. Operators are words (`is`, `is not`,
+`greater than`, `less than`, `equals`, `not equals`, `begins with`, `ends with`) rather than the
+source system's punctuation; a mood or genre condition carries the tag's **name**, not the numeric id
+the source stored; ratings are on the same 0&ndash;5 star scale as everywhere else here; and dates
+stay as the relative offsets they were written as (`-3mon`). The server address and library number
+the rules were saved against are dropped — they name a machine, not music.
+
+One ambiguity is inherited rather than invented: the source system uses one operator for two
+meanings depending on the field, and does not record which. `is` means "is" on a tag or a number and
+"contains" on free text, while `equals` is the exact-match form for text.
 
 ## Keys, and what to join on
 

@@ -1146,22 +1146,24 @@ public class DiscoveryEngineTests
     [Fact]
     public async Task Declining_an_upgrade_records_a_skip_not_an_album_dislike()
     {
-        await _sut.RateUpgrade(User, "boygenius", "the record", null, DiscoveryStatus.Disliked);
+        await _sut.RateUpgrade(User, "noggog", "boygenius", "the record", null, DiscoveryStatus.Disliked);
 
         // The user owns and likes this album. A dislike would show it as rejected on their Ratings
         // page and drop it out of the liked set the frontier grows from.
         await _albumRatings.DidNotReceive().Rate(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<DiscoveryStatus>());
+        // Attributed by username, not by the OIDC subject that keys the rating store: nothing matches
+        // on this field, so the only readers are a person and the export.
         await _blocks.Received().Add(Arg.Is<AlbumBlock>(b =>
-            b.Scope == AlbumBlockScope.Upgrade && b.RetryAfter == null));
+            b.Scope == AlbumBlockScope.Upgrade && b.RetryAfter == null && b.BlockedBy == "noggog"));
     }
 
     [Fact]
     public async Task Accepting_an_upgrade_rates_it_like_any_other_acquisition()
     {
         // The like is what puts it on the shared to-buy list, same as a missing album.
-        await _sut.RateUpgrade(User, "boygenius", "the record", "art", DiscoveryStatus.Liked);
+        await _sut.RateUpgrade(User, "noggog", "boygenius", "the record", "art", DiscoveryStatus.Liked);
 
         await _albumRatings.Received().Rate(User, "boygenius", "the record", "art", DiscoveryStatus.Liked);
         await _blocks.DidNotReceive().Add(Arg.Any<AlbumBlock>());
@@ -1172,7 +1174,7 @@ public class DiscoveryEngineTests
     {
         var until = DateTimeOffset.UtcNow.AddDays(90);
 
-        await _sut.SkipUpgrade(User, "boygenius", "the record", until);
+        await _sut.SkipUpgrade("noggog", "boygenius", "the record", until);
 
         await _blocks.Received().Add(Arg.Is<AlbumBlock>(b =>
             b.Scope == AlbumBlockScope.Upgrade && b.RetryAfter == until));

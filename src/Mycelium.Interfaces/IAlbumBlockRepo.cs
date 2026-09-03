@@ -5,7 +5,11 @@ namespace Mycelium.Interfaces;
 /// that duplicates something owned, a record the library has decided against carrying. Distinct from
 /// an <see cref="AlbumMatchOverride"/> (which asserts "we already have this") and from a per-user
 /// "meh" (<see cref="DiscoveryStatus.Disliked"/>, which only hides it from the one user who said so).
-/// <see cref="BlockedBy"/> is the user who placed it, kept for audit — anyone may lift it.
+/// <see cref="BlockedBy"/> is the <b>username</b> of whoever placed it, kept for audit — anyone may
+/// lift it. A username rather than the OIDC subject on purpose: this field is never matched on, only
+/// read by a person or exported, and an identity-provider id means nothing outside the provider that
+/// issued it. Rows written before that was settled hold a subject and are migrated on startup by
+/// <see cref="IAlbumBlockRepo.BackfillAttribution"/>.
 /// </summary>
 public record AlbumBlock(
     string Artist,
@@ -62,4 +66,17 @@ public interface IAlbumBlockRepo
 
     /// <summary>Lifts a block, returning the album to everyone's feeds.</summary>
     Task Remove(string artist, string album, AlbumBlockScope scope = AlbumBlockScope.Release);
+
+    /// <summary>
+    /// One-time migration: rewrites <see cref="AlbumBlock.BlockedBy"/> from the OIDC subject the field
+    /// used to hold to the username it holds now, given a subject → username map. Returns how many
+    /// rows were rewritten.
+    ///
+    /// <para>Idempotent, and safe to run against a mixed collection: only values that match a known
+    /// subject are touched, so a row already holding a username is left exactly as it is. A subject
+    /// belonging to a user who has since been deleted can't be resolved and stays as it was — the
+    /// export writes those as an opaque placeholder rather than publishing an identity-provider id.
+    /// </para>
+    /// </summary>
+    Task<int> BackfillAttribution(IReadOnlyDictionary<string, string> usernamesBySubject);
 }

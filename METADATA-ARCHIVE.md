@@ -1,7 +1,8 @@
 # Metadata Archive — owning the data in git
 
-Status: **phases 1, 3, 4 and 5 built** (2026-09-02). Decisions in §7 are settled. Phase 2 (restore) is
-deliberately **not** being built — see the note under it. §8 covers the per-user takeout.
+Status: **phases 1, 3, 4, 5 and 6 built** (2026-09-02). Decisions in §7 are settled. Phase 2 (restore)
+is deliberately **not** being built — see the note under it. §8 covers the per-user takeout, §9 the
+self-sufficiency pass that followed it.
 
 ## Goal
 
@@ -348,7 +349,10 @@ pass, `playlists/<username>.jsonl`. Smart playlists as rules, manual as ordered 
 **Phase 5 — Takeout** ✅ built
 A per-user export of the same files, from the app rather than from git. See §8.
 
-**Phase 6 — Polish**
+**Phase 6 — Self-sufficiency** ✅ built
+Nothing in the archive should need the system that wrote it in order to be read. See §9.
+
+**Phase 7 — Polish**
 Human-readable digests (a `library.md` sorted by artist, so the repo browses nicely on a phone),
 archive status on the panel, a restore CLI.
 
@@ -433,3 +437,136 @@ The old dev panel became the **Other** tab, visible to everyone. The takeout car
 signed in; the operator tooling behind it (Plex tags, sweeps, the similarity debugger) still renders
 only for `DEV_USERNAMES`, and every one of those endpoints re-checks server-side regardless. `/dev`
 redirects to `/other`.
+
+---
+
+## 9. Self-sufficiency — removing what only means something here
+
+The takeout made a latent problem visible: an export is handed to a person, so anything in it that
+only means something *inside this deployment* is now actively wrong rather than merely untidy. Three
+things failed that test, and one turned out to be a source-data problem rather than an export one.
+
+The test, applied to every field: **could a reader with the audio files and this repo, and nothing
+else, act on this?**
+
+### 9.1 — Identity: usernames, never OIDC subjects
+
+The archive was already keyed on usernames and D4 already said so; the subject is dropped from
+`users.yaml` outright. But it could still reach a file by four back doors, all of them the same
+shape — a per-user row whose `users` document is gone (an account deleted after it rated something).
+`ArchiveBuilder` slugified the subject and filed the person under it, and for playlists that became
+a *filename*.
+
+Those now resolve to `unknown-<6 hex of SHA-256>`. A placeholder rather than the id itself because an
+identity-provider handle is meaningless outside the provider that issued it, so publishing one adds
+nothing a reader can use while putting an identity token in a file meant to outlive that provider.
+The fingerprint keeps two departed people from silently merging into one.
+
+**The real fix was upstream.** `blockedAlbums.blockedBy` *stored* an OIDC subject, where
+`purchases.addedBy` has always stored a username — the same concept, two spellings, and nothing ever
+matched on the field. It is written by name now (`DiscoveryEngine.BlockAlbum` /`SkipUpgrade` take the
+username, exactly as `DownloadService.RequestDownload` already did), with a one-time startup migration
+rewriting existing rows.
+
+One case is deliberately left alone: a `blockedBy` that matches neither a known subject nor a known
+username is passed through verbatim. A departed user's name and a departed user's subject are
+indistinguishable from there, and masking would destroy the only attribution a lapsed account left
+behind. Rows keyed on `userId` have no such ambiguity — the value is known to be a subject — which is
+why those *are* masked.
+
+### 9.2 — Smart playlist rules
+
+The worst offender, and the one most worth fixing: playlists archive their **rules** rather than
+their membership on the grounds that the rules are the durable half — which was not true, because
+what was stored was Plex's own query string:
+
+```
+server://<machine-id>/com.plexapp.plugins.library/directory/%2Flibrary%2Fsections%2F3%2Fall%3Ftype%3D8%26artist.mood%3D2779%26track.userRating%3E%3E%3D8
+```
+
+A machine identifier, a section number, numeric tag ids, wire-token operators, and ratings on Plex's
+internal 0–10 scale while every other rating in the archive is 0–5. Five kinds of local state in one
+string, and a reader on new hardware could see all of it and still not know what the playlist selects.
+
+It is decomposed at **harvest** time now (`PlaylistRuleMapper`), not at export time, so the Mongo
+mirror is as readable as the archive and nothing downstream needs a live Plex to interpret it:
+
+```yaml
+rules:
+  match: "all"
+  rules:
+    - field: "track.userRating"
+      op: "greater than"
+      value: "4"
+    - match: "any"
+      rules:
+        - field: "artist.mood"
+          op: "is"
+          value: "Ambient"
+  sort: "titleSort"
+```
+
+Notes on the decisions inside that:
+
+- **The nesting is load-bearing** and is preserved. "Rated over 4 **and** (ambient)" is a different
+  playlist from "rated over 4 **or** ambient". Redundant nesting that Plex's own editor would rewrite
+  away is flattened first, so the file shows no structure a reader would look for meaning in.
+- **Ratings are halved onto the 0–5 star scale.** An album file three directories away records the
+  same user's rating of the same track as `4.5`; a rule saying `9` would read as a different
+  measurement rather than the same one. `-1` becomes `unrated`, since halved it would be `-0.5`.
+- **Tag ids become names**, which is the single biggest reason a stored rule meant nothing elsewhere:
+  `2779` is a row id in one server's database and says nothing about ambient music. A vocabulary Plex
+  won't hand over costs the *name*, not the rule — the id is kept, because a dropped condition would
+  silently change what the playlist claims to select.
+- **`type` is dropped, `sort` and `limit` kept.** The first is a Plex metadata code that doesn't
+  change which tracks are selected; the other two do.
+- **One ambiguity is inherited, not invented.** Plex uses one operator for two meanings depending on
+  the field's type and doesn't record the type: `is` means "is" on a tag or number and "contains" on
+  free text. The README says so rather than pretending to knowledge we don't have.
+
+`PlaylistRuleMapperTests` runs over every hand-made playlist captured from a real server
+(`PlexSmartFilterFixtures`) and asserts no wire token survives — so a filter shape nobody anticipated
+shows up in a test rather than in the archive.
+
+### 9.3 — Albums finally have a stable id
+
+Artists carried a MusicBrainz MBID; albums carried a title, which is the identifier here most likely
+to drift (editions renamed, remasters suffixed, two acts with a *Greatest Hits*). Albums now carry
+`musicBrainz.releaseGroup`.
+
+**Release group, not release.** A release is one pressing — the 2009 Japanese remaster, the vinyl
+reissue — and which one a library holds is an accident of acquisition. The release group is the album
+as a work, and is what survives someone replacing their copy.
+
+**Not the Deezer album id**, which was the obvious cheap alternative: it is a commercial catalogue
+handle that can be withdrawn, renumbered, or region-locked, and the whole point of storing an
+identifier is that it can be trusted years from now. MBID is the only identifier in the system that
+is stable forever, which is the same argument that already justified keeping the artist's.
+
+Three constraints shaped the implementation:
+
+- **1 request/second.** MusicBrainz's published limit, enforced by the existing client. A library of
+  any size is therefore *hours*. So this is a backfill that converges over days
+  (`AlbumIdentityService`, daily, `ALBUM_MBID_BATCH` albums per pass, default 2000 ≈ 37 minutes) and
+  not a sweep that completes. There is no cursor: a gap is defined as "not asked about yet", so a pass
+  simply picks up where the last one stopped, and a crash mid-pass costs nothing.
+- **A wrong id is worse than no id** — it is invisible, permanent, and would send a future migration
+  to the wrong record. Two guards: the search is scoped by the artist's own MBID (*Greatest Hits*
+  matches thousands globally and one within a discography), and a hit whose title isn't an exact
+  match is discarded. MusicBrainz scores loosely; taking the top hit would file *OK Computer* under
+  *Kid A*.
+- **A miss must be recorded, a failure must not.** MusicBrainz genuinely lacks some records; left
+  unrecorded they would be re-asked every pass for ever and the albums behind them would never come
+  up. But a *transport* failure says nothing about whether the record exists, so it leaves the album
+  as a gap — writing a miss on a network blip would retire it from the backfill permanently.
+
+Stored in its own `albumIdentities` field on the artist doc, deliberately not folded into `albums` or
+`albumQuality`: those are rewritten wholesale by every Plex sync, which would erase weeks of
+rate-limited lookups.
+
+### Not done
+
+A miss is never re-checked. MusicBrainz grows, so an album absent today may exist next year, and
+nothing currently revisits one. The stored entry carries enough to add a staleness clock later; it
+was left out rather than guessed at, since the right interval is a question for a library that has
+actually finished a first pass.

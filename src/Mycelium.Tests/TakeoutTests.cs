@@ -214,6 +214,62 @@ public class TakeoutTests
     }
 
     [Fact]
+    public void An_orphaned_row_is_filed_under_a_placeholder_never_the_identity_providers_id()
+    {
+        // A verdict left behind by a deleted account. The subject is the only name left for it, and
+        // it is exactly the thing that must not be written: it means nothing outside the provider that
+        // issued it, and this file is meant to outlive that provider.
+        var ghost = "oidc-subject-deleted-account";
+        var input = Shared() with { ArtistVerdicts = [Verdict(ghost, "Radiohead", "Liked")] };
+
+        var files = new ArchiveBuilder().Build(ArchiveScope.ForUser(input, ghost));
+        var everything = Everything(files);
+
+        everything.Should().NotContain(ghost);
+        File(files, "Library/Radiohead/metadata.yaml").Should().Contain("unknown-");
+    }
+
+    [Fact]
+    public void Two_different_orphans_do_not_collapse_into_one_person()
+    {
+        // The placeholder is a fingerprint rather than a flat "unknown" so that two deleted accounts
+        // don't silently merge — which would read as one person holding both sets of opinions.
+        var input = Shared() with
+        {
+            TrackRatings =
+            [
+                Rating("ghost-one", "Radiohead", "Kid A", "Idioteque", 5),
+                Rating("ghost-two", "Radiohead", "Kid A", "Idioteque", 2),
+            ],
+        };
+
+        // Built unscoped, the way the nightly archive does it — the takeout would filter one out.
+        var album = File(new ArchiveBuilder().Build(input), "Library/Radiohead/Kid A.yaml");
+
+        album.Should().NotContain("ghost-one").And.NotContain("ghost-two");
+        System.Text.RegularExpressions.Regex.Matches(album, "unknown-[0-9a-f]{6}")
+            .Select(m => m.Value).Distinct().Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void A_block_recorded_against_a_live_user_reads_as_their_name()
+    {
+        // Both spellings resolve to the same person: the subject via the crosswalk, the username
+        // straight through. Neither leaves an id in the file.
+        foreach (var stored in new[] { Mine, "noggog" })
+        {
+            var input = Shared() with
+            {
+                Blocks = [new JsonObject { ["artist"] = "Creed", ["blockedBy"] = stored }],
+            };
+
+            var decisions = File(new ArchiveBuilder().Build(input), "decisions.yaml");
+            decisions.Should().Contain("blockedBy: \"noggog\"");
+            decisions.Should().NotContain(Mine);
+        }
+    }
+
+    [Fact]
     public void An_account_with_no_ratings_at_all_still_gets_the_library()
     {
         // A new user pressing the button gets an honest empty answer, not an error.
@@ -222,6 +278,56 @@ public class TakeoutTests
         files.Select(f => f.RelativePath).Should().Contain("Library/Radiohead/Kid A.yaml");
         files.Select(f => f.RelativePath).Should().NotContain(p => p.StartsWith("playlists/"));
         Everything(files).Should().NotContain("kelsey");
+    }
+
+    [Fact]
+    public void A_smart_playlists_rules_read_as_rules_not_as_a_server_query()
+    {
+        // The rules are archived *instead of* the membership, on the grounds that they are the durable
+        // half. That only holds if they survive the server: no machine id, no section number, no
+        // numeric tag ids, no wire tokens, and ratings on the same 0-5 scale as everything else here.
+        var input = Shared() with
+        {
+            Playlists =
+            [
+                new JsonObject
+                {
+                    ["userId"] = Mine,
+                    ["title"] = "Ambient Primo",
+                    ["smart"] = true,
+                    ["rules"] = new JsonObject
+                    {
+                        ["match"] = "all",
+                        ["sort"] = "titleSort",
+                        ["rules"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["field"] = "track.userRating",
+                                ["op"] = "greater than",
+                                ["value"] = "4",
+                            },
+                            new JsonObject
+                            {
+                                ["match"] = "any",
+                                ["rules"] = new JsonArray(new JsonObject
+                                {
+                                    ["field"] = "artist.mood", ["op"] = "is", ["value"] = "Ambient",
+                                }),
+                            }),
+                    },
+                },
+            ],
+        };
+
+        var yaml = File(new ArchiveBuilder().Build(ArchiveScope.ForUser(input, Mine)),
+            "playlists/noggog.yaml");
+
+        yaml.Should().Contain("match: \"all\"");
+        yaml.Should().Contain("field: \"track.userRating\"");
+        yaml.Should().Contain("op: \"greater than\"");
+        yaml.Should().Contain("value: \"Ambient\"");
+        // Nesting survives: "rated over 4 AND (ambient)" is not "rated over 4 OR ambient".
+        yaml.Should().Contain("match: \"any\"");
     }
 
     // ---- the summary and the zip ----

@@ -12,12 +12,16 @@ public record PlaylistTrack(int Position, string Artist, string Album, string Ti
 /// thing and the membership is just their current answer; a hand-built one keeps its
 /// <paramref name="Tracks"/>, because that list *is* the work.
 /// </param>
-/// <param name="Rules">The stored filter query, for a smart playlist. Null otherwise.</param>
+/// <param name="Rules">
+/// The definition, for a smart playlist; null otherwise. Decomposed into <see cref="PlaylistRules"/>
+/// rather than kept as the server's own query string, which is local to one installation — see that
+/// type for what gets resolved on the way in.
+/// </param>
 /// <param name="Tracks">The ordered membership, for a hand-built playlist. Empty for a smart one.</param>
 public record UserPlaylist(
     string Title,
     bool Smart,
-    string? Rules,
+    PlaylistRules? Rules,
     IReadOnlyList<PlaylistTrack> Tracks);
 
 /// <summary>

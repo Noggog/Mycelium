@@ -34,6 +34,14 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     private const string FieldMusicBrainzOverride = "musicBrainzOverride";
     private const string FieldMusicBrainzUnlinked = "musicBrainzUnlinked";
 
+    // Resolved MusicBrainz release groups per album: [{ title, mbid }, ...], with `mbid` absent on a
+    // recorded miss. Its own field, deliberately not folded into `albumKeys`/`albumQuality`: those are
+    // rewritten wholesale by every Plex sync, and these entries cost a rate-limited network round trip
+    // each — weeks of them, for a library of any size.
+    private const string FieldAlbumIdentities = "albumIdentities";
+    private const string FieldAlbumIdentityTitle = "title";
+    private const string FieldAlbumIdentityMbid = "mbid";
+
     private readonly IMongoDbProvider _mongoDbProvider;
 
     public ArtistCatalogRepo(IMongoDbProvider mongoDbProvider)
@@ -305,6 +313,106 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         { FieldAlbumKeyTitle, album.Title },
         { FieldAlbumKeyQuality, album.Quality!.Value.ToString() },
     };
+
+    public async Task<AlbumIdentityGap[]> GetAlbumsWithoutReleaseGroup(int limit)
+    {
+        // Only artists that are present, hold an MBID, and own something. The set difference is done
+        // here rather than in an aggregation: the projection is three small arrays per artist, and the
+        // title comparison has to be case-insensitive in the same way the rest of the album handling
+        // is — which is far clearer in C# than as a $setDifference over $toLower.
+        var filter = Builders<BsonDocument>.Filter.And(
+            Builders<BsonDocument>.Filter.Eq(FieldPresent, true),
+            Builders<BsonDocument>.Filter.Ne(FieldMusicBrainzMbid, BsonNull.Value),
+            Builders<BsonDocument>.Filter.Exists(FieldMusicBrainzMbid),
+            Builders<BsonDocument>.Filter.Exists(FieldAlbums));
+
+        var cursor = await Collection.FindAsync(filter, new FindOptions<BsonDocument>
+        {
+            Projection = Builders<BsonDocument>.Projection
+                .Include(FieldMusicBrainzMbid).Include(FieldAlbums).Include(FieldAlbumIdentities),
+        });
+
+        var gaps = new List<AlbumIdentityGap>();
+        var budget = limit;
+
+        foreach (var doc in await cursor.ToListAsync())
+        {
+            if (budget <= 0)
+            {
+                break;
+            }
+
+            var mbid = doc.TryGetValue(FieldMusicBrainzMbid, out var m) && m.IsString ? m.AsString : null;
+            if (string.IsNullOrWhiteSpace(mbid))
+            {
+                continue;
+            }
+
+            var asked = Identities(doc).Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = Titles(doc)
+                .Where(t => !asked.Contains(t))
+                .Take(budget)
+                .ToList();
+
+            if (missing.Count == 0)
+            {
+                continue;
+            }
+
+            budget -= missing.Count;
+            gaps.Add(new AlbumIdentityGap(doc["_id"].AsString, mbid!, missing));
+        }
+
+        return gaps.ToArray();
+    }
+
+    public Task SetAlbumReleaseGroup(string artist, string album, string? releaseGroupMbid)
+    {
+        var entry = new BsonDocument { { FieldAlbumIdentityTitle, album } };
+        if (!string.IsNullOrWhiteSpace(releaseGroupMbid))
+        {
+            entry[FieldAlbumIdentityMbid] = releaseGroupMbid;
+        }
+
+        // Pull-then-push so a re-resolution replaces rather than duplicates, and so a miss later
+        // upgraded to a hit doesn't leave both entries behind. IsUpsert=false throughout: this must
+        // never conjure a catalog row for an artist the library doesn't hold.
+        return Collection.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", artist),
+            Builders<BsonDocument>.Update.Combine(
+                Builders<BsonDocument>.Update.PullFilter(
+                    FieldAlbumIdentities,
+                    Builders<BsonDocument>.Filter.Eq(FieldAlbumIdentityTitle, album)),
+                Builders<BsonDocument>.Update.Push(FieldAlbumIdentities, entry)));
+    }
+
+    /// <summary>Album title -> resolved release-group MBID (null where the lookup came back empty).</summary>
+    private static Dictionary<string, string?> Identities(BsonDocument doc)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (!doc.TryGetValue(FieldAlbumIdentities, out var value) || value is not BsonArray entries)
+        {
+            return result;
+        }
+
+        foreach (var entry in entries.OfType<BsonDocument>())
+        {
+            if (entry.TryGetValue(FieldAlbumIdentityTitle, out var title) && title.IsString)
+            {
+                result[title.AsString] =
+                    entry.TryGetValue(FieldAlbumIdentityMbid, out var mbid) && mbid.IsString
+                        ? mbid.AsString
+                        : null;
+            }
+        }
+
+        return result;
+    }
+
+    private static List<string> Titles(BsonDocument doc) =>
+        doc.TryGetValue(FieldAlbums, out var albums) && albums is BsonArray array
+            ? array.Where(a => a.IsString).Select(a => a.AsString).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+            : [];
 
     public async Task<string[]> FindCombinedArtistNames()
     {

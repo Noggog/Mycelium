@@ -143,6 +143,13 @@ public class MainModule : Autofac.Module
         // repository configured can still hand someone their own data.
         builder.RegisterType<TakeoutBuilder>().AsSelf().SingleInstance();
 
+        // How hard the album-identity backfill leans on MusicBrainz. An instance for the same reason
+        // as the archive config: it carries a bare int the assembly scan couldn't supply.
+        builder.RegisterInstance(new AlbumIdentityConfig(
+            int.TryParse(Environment.GetEnvironmentVariable("ALBUM_MBID_BATCH"), out var albumMbids)
+                ? albumMbids
+                : 2000));
+
         builder.RegisterAssemblyTypes(typeof(LibraryProvider).Assembly)
             .InNamespacesOf(
                 typeof(LibraryProvider))

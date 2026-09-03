@@ -17,6 +17,13 @@ public class UserPlaylistRepo : IUserPlaylistRepo
     private const string FieldTitle = "title";
     private const string FieldSmart = "smart";
     private const string FieldRules = "rules";
+    private const string FieldMatch = "match";
+    private const string FieldRuleList = "rules";
+    private const string FieldField = "field";
+    private const string FieldOp = "op";
+    private const string FieldValue = "value";
+    private const string FieldSort = "sort";
+    private const string FieldLimit = "limit";
     private const string FieldTracks = "tracks";
 
     private const string FieldPosition = "position";
@@ -67,7 +74,7 @@ public class UserPlaylistRepo : IUserPlaylistRepo
         { FieldUserId, userId },
         { FieldTitle, playlist.Title },
         { FieldSmart, playlist.Smart },
-        { FieldRules, playlist.Rules ?? (BsonValue)BsonNull.Value },
+        { FieldRules, playlist.Rules is { } rules ? ToDocument(rules) : (BsonValue)BsonNull.Value },
         {
             FieldTracks, new BsonArray(playlist.Tracks.Select(t => new BsonDocument
             {
@@ -83,10 +90,81 @@ public class UserPlaylistRepo : IUserPlaylistRepo
     private static UserPlaylist ToPlaylist(BsonDocument doc) => new(
         Title: doc.TryGetValue(FieldTitle, out var title) && !title.IsBsonNull ? title.AsString : "",
         Smart: doc.TryGetValue(FieldSmart, out var smart) && !smart.IsBsonNull && smart.ToBoolean(),
-        Rules: doc.TryGetValue(FieldRules, out var rules) && !rules.IsBsonNull ? rules.AsString : null,
+        Rules: doc.TryGetValue(FieldRules, out var rules) && rules is BsonDocument ruleDoc
+            ? ToRules(ruleDoc)
+            : null,
         Tracks: doc.TryGetValue(FieldTracks, out var tracks) && tracks is BsonArray array
             ? array.OfType<BsonDocument>().Select(ToTrack).ToList()
             : []);
+
+    /// <summary>
+    /// A rule tree as a nested document rather than a serialised string, so the archive's dump — which
+    /// walks BSON into JSON structurally — carries the shape through without having to know this
+    /// format, and so a query could one day filter on a rule without parsing anything.
+    /// </summary>
+    private static BsonDocument ToDocument(PlaylistRules rules)
+    {
+        var doc = new BsonDocument
+        {
+            { FieldMatch, rules.Match },
+            { FieldRuleList, new BsonArray(rules.Rules.Select(ToDocument)) },
+        };
+
+        // Omitted when absent rather than written as null: these are optional parts of a definition,
+        // and a null would read as "sorted by nothing" rather than "not sorted".
+        if (rules.Sort is { Length: > 0 } sort)
+        {
+            doc[FieldSort] = sort;
+        }
+
+        if (rules.Limit is { } limit)
+        {
+            doc[FieldLimit] = limit;
+        }
+
+        return doc;
+    }
+
+    private static BsonDocument ToDocument(PlaylistRule rule) => rule switch
+    {
+        PlaylistRuleGroup group => new BsonDocument
+        {
+            { FieldMatch, group.Match },
+            { FieldRuleList, new BsonArray(group.Rules.Select(ToDocument)) },
+        },
+        PlaylistCondition condition => new BsonDocument
+        {
+            { FieldField, condition.Field },
+            { FieldOp, condition.Op },
+            { FieldValue, condition.Value },
+        },
+        _ => new BsonDocument(),
+    };
+
+    private static PlaylistRules ToRules(BsonDocument doc) => new(
+        Match: Str(doc, FieldMatch) ?? "all",
+        Rules: Children(doc),
+        Sort: Str(doc, FieldSort),
+        Limit: doc.TryGetValue(FieldLimit, out var limit) && limit.IsNumeric ? limit.ToInt32() : null);
+
+    /// <summary>
+    /// One node back. A document carrying <c>match</c> is a group and anything else a condition, which
+    /// is the same test the writer's shapes imply — and a defensive one: an unrecognised shape becomes
+    /// an empty condition rather than throwing and costing the whole playlist.
+    /// </summary>
+    private static PlaylistRule ToRule(BsonDocument doc) =>
+        doc.Contains(FieldMatch)
+            ? new PlaylistRuleGroup(Str(doc, FieldMatch) ?? "all", Children(doc))
+            : new PlaylistCondition(
+                Str(doc, FieldField) ?? "", Str(doc, FieldOp) ?? "", Str(doc, FieldValue) ?? "");
+
+    private static List<PlaylistRule> Children(BsonDocument doc) =>
+        doc.TryGetValue(FieldRuleList, out var rules) && rules is BsonArray array
+            ? array.OfType<BsonDocument>().Select(ToRule).ToList()
+            : [];
+
+    private static string? Str(BsonDocument doc, string field) =>
+        doc.TryGetValue(field, out var value) && value.IsString ? value.AsString : null;
 
     private static PlaylistTrack ToTrack(BsonDocument doc) => new(
         Position: doc.TryGetValue(FieldPosition, out var pos) && !pos.IsBsonNull ? pos.ToInt32() : 0,

@@ -653,8 +653,16 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     /// gesture means "keep the copy we have", which is a fact about the upgrade, not about the
     /// music.</para>
     /// </summary>
+    /// <param name="userId">The OIDC subject, which keys the per-user rating store.</param>
+    /// <param name="blockedBy">
+    /// The same person's <em>username</em>, for the skip's audit field. Two spellings of one identity
+    /// because they are read by different audiences: the rating store is matched on and must use the
+    /// stable internal key, while the skip's attribution is only ever read by a person or exported,
+    /// where an identity-provider id would mean nothing.
+    /// </param>
     public async Task RateUpgrade(
-        string userId, string artistName, string albumName, string? albumArt, DiscoveryStatus status)
+        string userId, string? blockedBy, string artistName, string albumName, string? albumArt,
+        DiscoveryStatus status)
     {
         if (status == DiscoveryStatus.Liked)
         {
@@ -662,7 +670,7 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
             return;
         }
 
-        await SkipUpgrade(userId, artistName, albumName, retryAfter: null);
+        await SkipUpgrade(blockedBy, artistName, albumName, retryAfter: null);
     }
 
     /// <summary>
@@ -674,13 +682,15 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     /// <para>Recorded under every act the album could be filed as, for the same reason a block is:
     /// a collaboration reachable through either member must not come back through the other.</para>
     /// </summary>
+    /// <param name="blockedBy">Username of whoever skipped it, for audit. Null when the downloader
+    /// itself decided there was nothing better to fetch.</param>
     public async Task SkipUpgrade(
-        string userId, string artistName, string albumName, DateTimeOffset? retryAfter)
+        string? blockedBy, string artistName, string albumName, DateTimeOffset? retryAfter)
     {
         foreach (var act in await BlockActsFor(artistName, albumName))
         {
             await _blocks.Add(new AlbumBlock(
-                act, albumName, userId, AlbumBlockScope.Upgrade, retryAfter));
+                act, albumName, blockedBy, AlbumBlockScope.Upgrade, retryAfter));
         }
 
         _logger.LogInformation(
@@ -704,14 +714,16 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     /// saying no to the album — being re-offered the same record next week under a different edition
     /// name is the answer nobody wants.
     /// </summary>
-    public async Task BlockAlbum(string userId, string artistName, string albumName)
+    /// <param name="blockedBy">Username of whoever placed the block, for audit — anyone may lift it.</param>
+    public async Task BlockAlbum(string? blockedBy, string artistName, string albumName)
     {
         foreach (var act in await BlockActsFor(artistName, albumName))
         {
-            await _blocks.Add(new AlbumBlock(act, albumName, userId));
+            await _blocks.Add(new AlbumBlock(act, albumName, blockedBy));
         }
         _logger.LogInformation(
-            "{User} blocked album \"{Album}\" ({Artist}) for everyone", userId, albumName, artistName);
+            "{User} blocked album \"{Album}\" ({Artist}) for everyone",
+            blockedBy ?? "(unattributed)", albumName, artistName);
     }
 
     /// <summary>Lifts a global block, returning the album to everyone's feeds.</summary>

@@ -61,6 +61,49 @@ public class MusicBrainzApi : IMusicBrainzApi
         return await Get<MusicBrainzArtist>(url);
     }
 
+    /// <summary>
+    /// The strongest release group for (artist, title). Two guards on top of the search itself, both
+    /// because a wrong MBID is worse than no MBID: the query is scoped to the artist's own MBID, and
+    /// a hit whose title doesn't actually match the one asked for is discarded.
+    /// </summary>
+    public async Task<MusicBrainzReleaseGroup?> SearchReleaseGroup(string artistMbid, string title)
+    {
+        if (string.IsNullOrWhiteSpace(artistMbid) || string.IsNullOrWhiteSpace(title))
+        {
+            return null;
+        }
+
+        // Lucene syntax. The title is quoted so that punctuation and spaces in it are a phrase rather
+        // than a set of loose terms, and any quote inside it is dropped — escaping it would be
+        // correct too, but a title containing a double quote is vanishingly rare and dropping it
+        // cannot produce a malformed query.
+        var phrase = title.Replace("\"", " ").Trim();
+        var qs = HttpUtility.ParseQueryString(string.Empty);
+        qs["query"] = $"arid:{artistMbid} AND releasegroup:\"{phrase}\"";
+        qs["fmt"] = "json";
+        qs["limit"] = "5";
+        var url = $"{_endpointInfo.MusicBrainzBaseUri}/ws/2/release-group?{qs}";
+
+        var result = await Get<MusicBrainzReleaseGroupSearchResult>(url);
+        return Pick(result?.ReleaseGroups, phrase);
+    }
+
+    /// <summary>
+    /// The hit that actually is the album asked for, or null.
+    ///
+    /// <para>Separated from the request because it is the judgement call, not the plumbing.
+    /// MusicBrainz scores loosely: an act's <em>other</em> records come back as partial matches on a
+    /// shared word, so taking the top hit blindly would file <i>OK Computer</i> under <i>Kid A</i> —
+    /// and unlike a missing id, a wrong one is invisible and permanent. Only an exact title match
+    /// (case- and whitespace-insensitive) is accepted; everything else is a miss, which costs an id
+    /// we never had.</para>
+    /// </summary>
+    public static MusicBrainzReleaseGroup? Pick(
+        IEnumerable<MusicBrainzReleaseGroup>? candidates, string title) =>
+        candidates?.FirstOrDefault(g =>
+            g.Id is { Length: > 0 }
+            && string.Equals(g.Title?.Trim(), title.Trim(), StringComparison.OrdinalIgnoreCase));
+
     private async Task<T?> Get<T>(string url) where T : class
     {
         await Throttle();

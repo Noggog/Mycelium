@@ -57,6 +57,28 @@ public class AlbumBlockRepo : IAlbumBlockRepo
             new UpdateOptions { IsUpsert = true });
     }
 
+    public async Task<int> BackfillAttribution(IReadOnlyDictionary<string, string> usernamesBySubject)
+    {
+        if (usernamesBySubject.Count == 0)
+        {
+            return 0;
+        }
+
+        // Driven off the subjects rather than off the rows: the map is small (one entry per user who
+        // has ever signed in) and this way the filter does the matching, so a row already holding a
+        // username is never even read back, let alone rewritten.
+        var rewritten = 0;
+        foreach (var (subject, username) in usernamesBySubject)
+        {
+            var result = await Collection.UpdateManyAsync(
+                Builders<BsonDocument>.Filter.Eq(FieldBlockedBy, subject),
+                Builders<BsonDocument>.Update.Set(FieldBlockedBy, username));
+            rewritten += (int)result.ModifiedCount;
+        }
+
+        return rewritten;
+    }
+
     public Task Remove(string artist, string album, AlbumBlockScope scope = AlbumBlockScope.Release) =>
         Collection.DeleteOneAsync(Builders<BsonDocument>.Filter.Eq("_id", Id(artist, album, scope)));
 

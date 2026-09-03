@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -82,7 +83,7 @@ public class ArchiveBuilder
                 continue;
             }
 
-            var username = identities.GetValueOrDefault(subject, FileName(subject));
+            var username = Person(identities, subject);
 
             // No `subject`, no `email`, no `lastLoginAt`. The first is an identity-provider detail that
             // means nothing outside the provider that issued it; the second identifies nobody here and
@@ -132,13 +133,15 @@ public class ArchiveBuilder
 
             var albums = Strings(artist, "albums");
             var quality = AlbumQuality(artist);
+            var releaseGroups = AlbumIdentities(artist);
             var albumPaths = ArchivePaths.ForNames(albums);
 
             foreach (var album in albums)
             {
                 files.Add(new ArchiveFile(
                     $"{directory}/{albumPaths[album]}.yaml",
-                    CanonicalYaml.Document(AlbumFile(name, album, quality, acquisitions, songs))));
+                    CanonicalYaml.Document(
+                        AlbumFile(name, album, quality, releaseGroups, acquisitions, songs))));
             }
         }
 
@@ -188,6 +191,7 @@ public class ArchiveBuilder
         string artist,
         string album,
         IReadOnlyDictionary<string, string> quality,
+        IReadOnlyDictionary<string, string> releaseGroups,
         IReadOnlyDictionary<string, string> acquisitions,
         IReadOnlyDictionary<string, JsonArray> songs)
     {
@@ -200,6 +204,16 @@ public class ArchiveBuilder
         if (quality.TryGetValue(album, out var tier))
         {
             row["quality"] = tier;
+        }
+
+        // The one identifier on this file that is stable forever. A title is what the library happens
+        // to call the record today: editions get renamed, remasters gain suffixes, and two acts can
+        // both have a "Greatest Hits". The release group is the album as a work rather than as a
+        // pressing, which is the right thing to re-key on if the titles have moved by the time anyone
+        // reads this. Absent where MusicBrainz had nothing, or where the backfill hasn't reached it.
+        if (releaseGroups.TryGetValue(album, out var releaseGroup))
+        {
+            row["musicBrainz"] = new JsonObject { ["releaseGroup"] = releaseGroup };
         }
 
         var key = AlbumKey(artist, album);
@@ -254,7 +268,7 @@ public class ArchiveBuilder
                 continue;
             }
 
-            var user = identities.GetValueOrDefault(subject, FileName(subject));
+            var user = Person(identities, subject);
             if (!ratings.TryGetValue(file, out var byUser))
             {
                 ratings[file] = byUser = new SortedDictionary<string, JsonNode?>(StringComparer.Ordinal);
@@ -363,7 +377,7 @@ public class ArchiveBuilder
                 continue;
             }
 
-            var user = identities.GetValueOrDefault(subject, FileName(subject));
+            var user = Person(identities, subject);
             if (!byArtist.TryGetValue(Fold(artist), out var byUser))
             {
                 byArtist[Fold(artist)] = byUser =
@@ -441,9 +455,12 @@ public class ArchiveBuilder
             var row = new JsonObject { ["kind"] = "block" };
             Copy(block, row, "artist", "album", "scope", "createdAt", "retryAfter");
 
-            // The block endpoint stores the OIDC subject where the purchase rows store a username, so
-            // left alone this is an opaque hash — and meaningless once the identity provider is rebuilt.
-            // A value matching no known subject is kept as-is: older rows may already hold a name.
+            // Blocks store a username now; rows written before that was settled hold an OIDC subject,
+            // and the startup migration rewrites the ones whose user still exists. What is left over
+            // is genuinely ambiguous — a departed user's name and a departed user's subject look the
+            // same from here — so it is passed through rather than guessed at. Unlike the rows keyed
+            // on `userId`, where the value is known to be a subject and is masked, replacing this one
+            // would risk destroying the only attribution a lapsed account left behind.
             if (Str(block, "blockedBy") is { } by)
             {
                 row["blockedBy"] = identities.TryGetValue(by, out var name) ? name : by;
@@ -491,7 +508,7 @@ public class ArchiveBuilder
                 row["tracks"] = Entries(tracks);
             }
 
-            var user = identities.GetValueOrDefault(subject, FileName(subject));
+            var user = Person(identities, subject);
             if (!byUser.TryGetValue(user, out var rows))
             {
                 byUser[user] = rows = [];
@@ -544,10 +561,14 @@ public class ArchiveBuilder
 
         foreach (var (subject, username) in candidates)
         {
-            var name = FileName(username ?? subject!);
+            // A user row with no username is an account the identity provider never gave one; the
+            // subject is not a stand-in for it, for the same reason it is not one anywhere else here.
+            var name = username is null ? Unresolved(subject!) : FileName(username);
             if (taken.TryGetValue(name, out var owner) && owner != subject)
             {
-                name = $"{name}-{FileName(subject!)[..Math.Min(6, FileName(subject!).Length)]}";
+                // Derived from the subject but never *of* it: a slice of the raw id would put an
+                // identity-provider handle into a filename that then lives in the archive for ever.
+                name = $"{name}-{Fingerprint(subject!)}";
             }
 
             taken[name] = subject!;
@@ -556,6 +577,24 @@ public class ArchiveBuilder
 
         return result;
     }
+
+    /// <summary>
+    /// What to call the person a row belongs to.
+    ///
+    /// <para>An unknown subject is a row whose user record is gone — an account deleted after it
+    /// rated something. It gets a stable placeholder rather than the subject itself: an OIDC id is
+    /// meaningless outside the provider that issued it, so publishing one adds nothing a reader can
+    /// use while putting an identity handle in a file that is meant to outlive the provider. The
+    /// fingerprint keeps two different deleted people from silently merging into one.</para>
+    /// </summary>
+    private static string Person(IReadOnlyDictionary<string, string> identities, string subject) =>
+        identities.TryGetValue(subject, out var name) ? name : Unresolved(subject);
+
+    private static string Unresolved(string subject) => $"unknown-{Fingerprint(subject)}";
+
+    /// <summary>Six hex characters of SHA-256 — enough to keep strangers apart, and one-way.</summary>
+    private static string Fingerprint(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..6].ToLowerInvariant();
 
     /// <summary>
     /// A username reduced to something safe in a path. Its own rule rather than a call to
@@ -611,19 +650,35 @@ public class ArchiveBuilder
         return identity;
     }
 
-    private static IReadOnlyDictionary<string, string> AlbumQuality(JsonObject artist)
+    /// <summary>
+    /// Album title -> MusicBrainz release-group MBID, for the albums that have one. Entries recording
+    /// a <em>miss</em> carry no MBID and are skipped: "we asked and MusicBrainz didn't know" is
+    /// bookkeeping for the backfill, not a fact about the record worth archiving.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> AlbumIdentities(JsonObject artist) =>
+        Entries(artist, "albumIdentities", "title", "mbid");
+
+    private static IReadOnlyDictionary<string, string> AlbumQuality(JsonObject artist) =>
+        Entries(artist, "albumQuality", "title", "quality");
+
+    /// <summary>
+    /// Flattens one of the catalog's per-album side-tables — <c>[{ title, &lt;value&gt; }, ...]</c> —
+    /// into a lookup. Entries missing either half are skipped rather than defaulted.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> Entries(
+        JsonObject artist, string field, string keyName, string valueName)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (artist["albumQuality"] is not JsonArray entries)
+        if (artist[field] is not JsonArray entries)
         {
             return result;
         }
 
         foreach (var entry in entries.OfType<JsonObject>())
         {
-            if (Str(entry, "title") is { } title && Str(entry, "quality") is { } quality)
+            if (Str(entry, keyName) is { } key && Str(entry, valueName) is { } value)
             {
-                result[title] = quality;
+                result[key] = value;
             }
         }
 

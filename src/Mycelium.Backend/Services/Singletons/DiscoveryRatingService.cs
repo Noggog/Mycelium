@@ -86,7 +86,7 @@ public class DiscoveryRatingService
             // A thumbs-down on an upgrade card means "keep the copy we have", not "I dislike this
             // album" — the user owns it and presumably likes it. Routed to its own verdict store so
             // it never lands on their Ratings page as a rejection. See DiscoveryEngine.RateUpgrade.
-            await _engine.RateUpgrade(userId, item.Artist, item.Album, item.AlbumArt, status);
+            await _engine.RateUpgrade(userId, username, item.Artist, item.Album, item.AlbumArt, status);
         }
         else
         {

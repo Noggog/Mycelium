@@ -14,14 +14,16 @@ public class PlaylistHarvesterTests
     private readonly IPlexLinkRepo _links = Substitute.For<IPlexLinkRepo>();
     private readonly IPlexPlaylistApi _plex = Substitute.For<IPlexPlaylistApi>();
     private readonly IUserPlaylistRepo _store = Substitute.For<IUserPlaylistRepo>();
+    private readonly IPlexApi _plexApi = Substitute.For<IPlexApi>();
 
     private PlaylistHarvester Harvester() => new(
-        _users, _links, _plex, _store, NullLogger<PlaylistHarvester>.Instance);
+        _users, _links, _plex, _plexApi, _store, NullLogger<PlaylistHarvester>.Instance);
 
     public PlaylistHarvesterTests()
     {
         _store.ReplaceForUser(Arg.Any<string>(), Arg.Any<IReadOnlyList<UserPlaylist>>())
             .Returns(call => ((IReadOnlyList<UserPlaylist>)call[1]).Count);
+        _plexApi.ResolveLibrary().Returns(new PlexLibrary { Key = 1, Title = "Music", Type = "artist" });
     }
 
     private static AppUser User(string subject) =>
@@ -42,8 +44,16 @@ public class PlaylistHarvesterTests
     private static PlexPlaylist Manual(string title, string key = "1") =>
         new(key, title, Smart: false, LeafCount: 2, Content: null);
 
-    private static PlexPlaylist Smart(string title, string rules, string key = "2") =>
-        new(key, title, Smart: true, LeafCount: 40, Content: rules);
+    /// <summary>
+    /// A smart playlist as Plex actually reports one: the query wrapped in the
+    /// <c>library://…/directory/</c> envelope, percent-encoded, over a numbered section. The envelope
+    /// is the part that has to be shed before the rules mean anything anywhere else.
+    /// </summary>
+    private static PlexPlaylist Smart(string title, string query, string key = "2") =>
+        new(key, title, Smart: true, LeafCount: 40, Content: Content(query));
+
+    private static string Content(string query, int sectionKey = 1) =>
+        "library://x/directory/" + Uri.EscapeDataString($"/library/sections/{sectionKey}/all?{query}");
 
     [Fact]
     public async Task A_hand_built_playlist_is_stored_with_its_ordered_tracks()
@@ -73,14 +83,20 @@ public class PlaylistHarvesterTests
         // The rules are the durable thing. Reading the members would cost a request per playlist to
         // archive an answer that goes stale the next time the library changes.
         Linked("kelsey");
-        _plex.GetAudioPlaylists(TokenFor("kelsey")).Returns([Smart("4 stars up", "track.userRating>>7")]);
+        _plex.GetAudioPlaylists(TokenFor("kelsey"))
+            .Returns([Smart("4 stars up", "type=8&track.userRating%3E%3E=7")]);
 
         await Harvester().HarvestAll();
 
         await _plex.DidNotReceive().GetPlaylistItems(Arg.Any<string>(), Arg.Any<string>());
         await _store.Received(1).ReplaceForUser("kelsey", Arg.Is<IReadOnlyList<UserPlaylist>>(p =>
             p.Single().Smart
-            && p.Single().Rules == "track.userRating>>7"
+            && p.Single().Rules!.Match == "all"
+            && ((PlaylistCondition)p.Single().Rules!.Rules[0]).Field == "track.userRating"
+            && ((PlaylistCondition)p.Single().Rules!.Rules[0]).Op == "greater than"
+            // Stored by Plex as 7 on its internal 0-10 scale; kept as stars, like every other rating
+            // in the archive.
+            && ((PlaylistCondition)p.Single().Rules!.Rules[0]).Value == "3.5"
             && p.Single().Tracks.Count == 0));
     }
 
@@ -89,7 +105,7 @@ public class PlaylistHarvesterTests
     {
         Linked("kelsey");
         _plex.GetAudioPlaylists(TokenFor("kelsey")).Returns(
-            [Manual("Driving"), Smart("4 stars up", "track.userRating>>7")]);
+            [Manual("Driving"), Smart("4 stars up", "type=8&track.userRating%3E%3E=7")]);
         _plex.GetPlaylistItems(TokenFor("kelsey"), "1").Returns(
             [new PlexPlaylistItem(1, "A", "B", "C", "/music/a.flac")]);
 
