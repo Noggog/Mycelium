@@ -179,15 +179,23 @@ committing every night forever.)
 Since the exporter has the before/after in hand, generate a real summary:
 
 ```
-snapshot 2026-08-25
-
-  inventory  +12 artists, +31 albums
-  taste      kelsey +4 liked, +1 disliked; justin +2 liked
-  downloads  +3 landed (kelsey 2, justin 1)
-  stars      kelsey 18 changed
+12 albums, 3 artists, 1 playlist file, users
 ```
 
 `git log --oneline` then becomes the library's history, which is most of the value.
+
+**A subject and nothing else** (revised 2026-09-02). This started out with the changed paths listed
+under the summary, which turned out to be the one thing the message had no business saying: git
+already records exactly that, in more detail, with no truncation cap, and prints it on demand with
+`git log --name-status`. Repeating it made every commit long, put an "...and 175 more" in front of
+the reader on the runs where the detail mattered most, and was a second copy that could drift from
+what was actually committed. The date went the same way, for the same reason no tracked file carries
+one: git timestamps the commit.
+
+What survives is only the part git can't derive — that a file under `Library/` is an *album* rather
+than an *artist*, which is the distinction that makes the log read as a history of a record
+collection rather than of a directory. `decisions` and `users` are named rather than counted, since
+each is a single file and the count could only ever be 1.
 
 ### D8 — Push is optional and best-effort
 

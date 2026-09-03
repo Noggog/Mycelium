@@ -81,7 +81,7 @@ public class MetadataArchiver
             Write(files);
             changes.AddRange(Prune(files));
 
-            var message = ArchiveDelta.CommitMessage(DateOnly.FromDateTime(DateTime.Now), changes);
+            var message = ArchiveDelta.CommitMessage(changes);
             var commit = await _git.CommitAll(message);
 
             switch (commit.Outcome)

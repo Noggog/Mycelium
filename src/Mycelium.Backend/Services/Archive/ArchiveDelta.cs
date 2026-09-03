@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace Mycelium.Backend.Services.Archive;
 
 /// <summary>What happened to one file between the last snapshot and this one.</summary>
@@ -14,53 +12,33 @@ public enum FileChange
 public record ArchiveChange(string Path, FileChange Change);
 
 /// <summary>
-/// Turns a snapshot into the sentence that describes it.
+/// Turns a snapshot into the one line that describes it.
 ///
 /// <para>This is what makes the archive usable as a history rather than as a backup:
 /// <c>git log --oneline</c> becomes a readable account of what the library did, and nobody has to
 /// diff two commits to find out whether a night mattered.</para>
 ///
-/// <para>With a file per album, "what changed" is simply which files changed — so the summary counts
-/// albums and artists directly, in the language of the thing being described.</para>
+/// <para><b>A subject and nothing else.</b> The message used to list every changed path underneath,
+/// which was the one thing it had no business saying: git already records exactly that, in more
+/// detail and without a cap, and <c>git log --name-status</c> or <c>--stat</c> prints it on demand.
+/// Duplicating it made every commit long, put a truncation ("...and 175 more") in front of the reader
+/// on the runs where the detail mattered most, and risked drifting from what was actually committed.
+/// The date went with it, for the reason no tracked file carries one either: git timestamps the
+/// commit.</para>
+///
+/// <para>What is left is the part git can't derive — that a file under <c>Library/</c> is an album
+/// rather than an artist, and that a change to either is worth counting in the language of the thing
+/// being described.</para>
 /// </summary>
 public static class ArchiveDelta
 {
     /// <summary>
-    /// The commit message: a one-line summary that reads well in <c>--oneline</c>, then the changed
-    /// paths underneath.
+    /// The commit message: a single line, sized to read well in <c>--oneline</c>.
     /// </summary>
-    public static string CommitMessage(DateOnly date, IReadOnlyList<ArchiveChange> changes)
+    public static string CommitMessage(IReadOnlyList<ArchiveChange> changes)
     {
-        var builder = new StringBuilder();
-        builder.Append("snapshot ").Append(date.ToString("yyyy-MM-dd"));
-
         var headline = Headline(changes);
-        if (headline.Length > 0)
-        {
-            builder.Append(" — ").Append(headline);
-        }
-
-        builder.Append("\n\n");
-
-        // Capped so a first run, or a sweep that touches every album, can't produce a commit message
-        // thousands of lines long.
-        const int maxLines = 25;
-        var listed = changes
-            .OrderBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(c => c.Path, StringComparer.Ordinal)
-            .ToList();
-
-        foreach (var change in listed.Take(maxLines))
-        {
-            builder.Append("  ").Append(Marker(change.Change)).Append(' ').Append(change.Path).Append('\n');
-        }
-
-        if (listed.Count > maxLines)
-        {
-            builder.Append("  ...and ").Append(listed.Count - maxLines).Append(" more\n");
-        }
-
-        return builder.ToString();
+        return headline.Length > 0 ? headline : "snapshot";
     }
 
     private static string Headline(IReadOnlyList<ArchiveChange> changes)
@@ -80,20 +58,23 @@ public static class ArchiveDelta
         // two are counted apart rather than lumped as "files".
         Note("album", c => IsLibrary(c) && !c.Path.EndsWith("/metadata.yaml", StringComparison.Ordinal));
         Note("artist", c => IsLibrary(c) && c.Path.EndsWith("/metadata.yaml", StringComparison.Ordinal));
+        // One file per person, so the count is of people whose playlists moved, not of playlists.
         Note("playlist file", c => c.Path.StartsWith("playlists/", StringComparison.Ordinal));
-        Note("decision file", c => c.Path == "decisions.yaml");
-        Note("user file", c => c.Path == "users.yaml");
+
+        // These two are single files, so a count would only ever be "1" and says nothing.
+        if (changes.Any(c => c.Path == "decisions.yaml"))
+        {
+            parts.Add("decisions");
+        }
+
+        if (changes.Any(c => c.Path == "users.yaml"))
+        {
+            parts.Add("users");
+        }
 
         return string.Join(", ", parts);
     }
 
     private static bool IsLibrary(ArchiveChange change) =>
         change.Path.StartsWith("Library/", StringComparison.Ordinal);
-
-    private static char Marker(FileChange change) => change switch
-    {
-        FileChange.Added => '+',
-        FileChange.Removed => '-',
-        _ => '~',
-    };
 }

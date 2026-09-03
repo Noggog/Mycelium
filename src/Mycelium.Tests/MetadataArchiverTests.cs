@@ -86,7 +86,7 @@ public sealed class MetadataArchiverTests : IDisposable
         File.Exists(Path.Combine(_repo, "Library", "Radiohead", "metadata.yaml")).Should().BeTrue();
         File.Exists(Path.Combine(_repo, "Library", "Radiohead", "Kid A.yaml")).Should().BeTrue();
 
-        Git("log", "--oneline").Should().Contain("snapshot");
+        Git("log", "--oneline").Should().Contain("1 album");
     }
 
     [Fact]
@@ -141,7 +141,11 @@ public sealed class MetadataArchiverTests : IDisposable
 
         // git log is meant to be the readable history, not a list of identical subjects.
         Git("log", "-1", "--pretty=%s").Should().Contain("1 album");
-        Git("log", "-1", "--pretty=%b").Should().Contain("Library/Radiohead/Kid A.yaml");
+
+        // ...and nothing beyond that subject. Which file moved is git's own record, printed on
+        // demand by --name-status; repeating it in the body would be a second copy that can drift.
+        Git("log", "-1", "--pretty=%b").Trim().Should().BeEmpty();
+        Git("log", "-1", "--name-status", "--pretty=").Should().Contain("Library/Radiohead/Kid A.yaml");
     }
 
     [Fact]
@@ -234,7 +238,7 @@ public sealed class MetadataArchiverTests : IDisposable
 
         result.Outcome.Should().Be(GitOutcome.Committed);
         result.Pushed.Should().BeTrue();
-        RunGit(remote, "log", "--oneline").Should().Contain("snapshot");
+        RunGit(remote, "log", "--oneline").Should().Contain("1 album");
 
         Directory.Delete(remote, recursive: true);
     }
@@ -264,7 +268,7 @@ public sealed class MetadataArchiverTests : IDisposable
 
         result.Outcome.Should().Be(GitOutcome.Committed);
         result.Pushed.Should().BeFalse();
-        Git("log", "--oneline").Should().Contain("snapshot");
+        Git("log", "--oneline").Should().Contain("1 album");
     }
 
     [Fact]
