@@ -99,6 +99,10 @@ const TAKEOUT_COUNTS: {
   label: string
   hint: string
 }[] = [
+  // The library first, then what you make of it. These two are everyone's — the export carries the
+  // whole catalogue, because ratings with the records stripped out are unreadable.
+  { key: 'artists', label: 'Artists', hint: 'every artist in the library, not only the ones you rated' },
+  { key: 'albums', label: 'Albums', hint: 'every album in the library' },
   { key: 'liked', label: 'Artists liked', hint: 'artists you gave a thumbs up' },
   { key: 'disliked', label: 'Artists passed', hint: 'artists you turned down' },
   { key: 'indifferent', label: 'Artists shrugged at', hint: 'artists you marked indifferent' },
@@ -116,7 +120,7 @@ function Takeout() {
 
   return (
     <div className="dev-tool">
-      <h2>Your data</h2>
+      <h2>Takeout</h2>
       <p>
         A zip of what the library holds and how you&rsquo;ve rated it, as plain text you can read
         without this app.
@@ -135,16 +139,12 @@ function Takeout() {
               </div>
             ))}
           </dl>
-          <p className="dev-muted">
-            Plus the library itself: {data.artists.toLocaleString()} artists and{' '}
-            {data.albums.toLocaleString()} albums.
-          </p>
-
           <div className="controls">
-            {/* A link, not a fetch. The browser saves the stream straight to disk, so a library-sized
-                zip never has to exist as a blob in this tab. */}
+            {/* A link, not a fetch: the browser saves the stream straight to disk, so a library-sized
+                zip never has to exist as a blob in this tab, and the `download` attribute names the
+                file without the button having to recite it. */}
             <a className="takeout-download" href={TAKEOUT_URL} download={data.fileName}>
-              Download {data.fileName}
+              Download
             </a>
           </div>
         </>
