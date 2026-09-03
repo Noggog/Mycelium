@@ -187,6 +187,39 @@ public class DiscoveryRatingServiceTests
     }
 
     /// <summary>
+    /// The wire flag has to survive the trip from query string to repo, because the whole failure it
+    /// guards against is silent: nothing errors when a verdict is confirmed that shouldn't be, the
+    /// artist just quietly stops being second-guessed forever. Asserted at this layer rather than only
+    /// in the engine because this is where the request's `confirm` becomes the engine's argument.
+    /// </summary>
+    [Fact]
+    public async Task Confirm_travels_from_the_request_to_the_repo()
+    {
+        _queue.TryConfirmVerdict(User, "Big Thief", DiscoveryStatus.Liked).Returns(true);
+
+        await _sut.RateOne(User, Username, Artist("Big Thief") with { Confirm = true });
+
+        await _queue.Received(1).TryConfirmVerdict(User, "Big Thief", DiscoveryStatus.Liked);
+    }
+
+    /// <summary>
+    /// The default, and the one that matters: a rating request that says nothing about confirmation is
+    /// not a confirmation. Every bulk client sends this shape.
+    /// </summary>
+    [Fact]
+    public async Task A_rating_that_does_not_ask_to_confirm_never_confirms()
+    {
+        _queue.TryConfirmVerdict(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DiscoveryStatus>())
+            .Returns(true);
+
+        await _sut.RateOne(User, Username, Artist("Big Thief"));
+
+        await _queue.DidNotReceive().TryConfirmVerdict(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DiscoveryStatus>());
+        await _queue.Received(1).Rate(User, "Big Thief", DiscoveryStatus.Liked, Arg.Any<string?>());
+    }
+
+    /// <summary>
     /// A shrug is a verdict like any other on the way into Plex: it stamps its own mood and strips
     /// <em>both</em> of the others. The strip set is asserted whole rather than by spot-check, because
     /// a leftover "_liked" beside a new "_indifferent" fails nothing — it just keeps the band in a

@@ -61,7 +61,8 @@ public class DiscoveryRatingService
         {
             // Record the verdict — that's what the UI is waiting on — and leave the frontier expansion
             // and the Plex write to the follow-up worker, so a thumb never blocks on the source APIs.
-            var depth = await _engine.RecordArtistVerdict(userId, item.Artist, status);
+            var depth = await _engine.RecordArtistVerdict(
+                userId, item.Artist, status, confirm: item.Confirm == true);
             // The queued Plex write mirrors the verdict as a per-user mood tag ("<username>_liked"/
             // "_disliked"/"_indifferent"), which a music smart playlist can filter on via "Artist Mood".
             // Stamp the new verdict and strip every *other* one, so the latest rating is the only tag
@@ -161,12 +162,27 @@ public class DiscoveryRatingService
 /// for why an album rejects "indifferent" instead of folding it.</param>
 /// <param name="Upgrade">True for a verdict on an <em>upgrade</em> card — see
 /// <see cref="DiscoveryEngine.RateUpgrade"/>.</param>
+/// <param name="Confirm">
+/// True only when this verdict is the user <em>re-affirming</em> one they were just shown — the thumb
+/// on a reconsider card. It is what lets the same verdict landing twice retire the artist from the
+/// sweep for good (<see cref="IUserQueueRepo.TryConfirmVerdict"/>).
+///
+/// <para><b>Why this is opt-in rather than inferred.</b> Confirmation used to be derived from the row
+/// alone: any like landing on an already-liked artist counted. That reads a repeat as a decision, and
+/// most repeats are not decisions — a migration script that likes every artist on a buy list re-likes
+/// the same band each time it appears on another playlist, and a library where 44% of artists span two
+/// or more playlists would silently confirm nearly half of them. A confirmed verdict leaves
+/// <c>GetUnconfirmedVerdicts</c> permanently, so the sweep can never second-guess it again and no UI
+/// affordance undoes it: the damage is invisible and unbounded. Whether a thumb is a re-affirmation is
+/// something only the caller knows, so the caller says so.</para>
+/// </param>
 public record DiscoveryRateItem(
     string Artist,
     string? Album,
     string? AlbumArt,
     string Verdict,
-    bool? Upgrade = null);
+    bool? Upgrade = null,
+    bool? Confirm = null);
 
 /// <summary>
 /// What became of one item of a discovery batch. Carries the artist/album back rather than leaving the

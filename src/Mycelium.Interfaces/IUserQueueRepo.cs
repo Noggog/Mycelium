@@ -106,6 +106,20 @@ public interface IUserQueueRepo
     /// </summary>
     Task<bool> TryConfirmVerdict(string userId, string artistName, DiscoveryStatus status);
 
+    /// <summary>
+    /// Drops the "this verdict is final" flag from this user's rows — all three kinds when
+    /// <paramref name="status"/> is null, otherwise just that verdict's — returning how many rows
+    /// actually carried one. The rows themselves are untouched: the verdict stays, it simply becomes
+    /// eligible for the sweep to question again.
+    ///
+    /// <para>This exists because a confirmation is otherwise a one-way door. It is set silently, has no
+    /// UI that shows it, and permanently removes the artist from
+    /// <see cref="GetUnconfirmedVerdicts"/> — so a caller that confirmed a verdict it shouldn't have
+    /// had no way back short of clearing the rating outright, which also throws away the verdict, the
+    /// Plex mood tag and the frontier expansion behind it.</para>
+    /// </summary>
+    Task<long> ClearConfirmations(string userId, DiscoveryStatus? status);
+
     /// <summary>Clears pending candidates (keeps Liked/Disliked) so the queue can be rebuilt from likes.</summary>
     Task DeletePending(string userId);
 

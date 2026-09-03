@@ -579,8 +579,12 @@ api.MapPost("/discovery/refresh", async (DiscoveryEngine engine) =>
 // opposite one it strips — exactly the same way. See that type for why a second copy would have been
 // the dangerous kind of duplication: a divergence in the *stripping* fails nothing and shows up months
 // later as a smart playlist matching music the user rejected.
+// `confirm=true` marks the verdict final — send it only from a reconsider card, where the thumb really
+// is the user re-affirming what they were just shown. Absent (the default) a repeat verdict is just a
+// repeat: it records, and the sweep may still question it. See DiscoveryRateItem.Confirm for why this
+// is opt-in rather than inferred from the row already holding the verdict.
 api.MapPost("/discovery/rate", async (
-        string artist, string? album, string? albumArt, string verdict, bool? upgrade,
+        string artist, string? album, string? albumArt, string verdict, bool? upgrade, bool? confirm,
         HttpContext http, DiscoveryRatingService ratings) =>
     {
         try
@@ -588,7 +592,7 @@ api.MapPost("/discovery/rate", async (
             await ratings.RateOne(
                 http.User.GetSubject()!,
                 http.User.FindFirst("preferred_username")?.Value,
-                new DiscoveryRateItem(artist, album, albumArt, verdict, upgrade));
+                new DiscoveryRateItem(artist, album, albumArt, verdict, upgrade, confirm));
             return Results.NoContent();
         }
         catch (ArgumentException ex)
@@ -612,6 +616,46 @@ api.MapPost("/discovery/rate", async (
 // to re-read its ratings to find out which. Over the cap is a 400, never a silent truncation — a client
 // told "OK" about 50 of the 60 albums it sent would wait forever on the other ten. Same auth as the
 // single route: this is the same act, in bulk.
+// Undo confirmations: drop the "this verdict is final" flag from the caller's own rows, so the
+// reconsider sweep may question them again. `verdict` (up/down/indifferent) narrows it to one kind;
+// omitted, it clears all three. The verdicts themselves are untouched — this is deliberately not
+// DELETE /discovery/rate, which throws the rating away along with its Plex tag and frontier expansion.
+//
+// Scoped to the caller rather than gated to DevUser: a confirmation is set silently and shows up
+// nowhere, so the person who needs to undo one is whoever it happened to, and it can only ever affect
+// their own rows.
+api.MapPost("/discovery/unconfirm", async (
+        string? verdict, HttpContext http, IUserQueueRepo queue) =>
+    {
+        DiscoveryStatus? status = null;
+        if (!string.IsNullOrWhiteSpace(verdict))
+        {
+            // Strict, unlike DiscoveryVerdict.ForArtist: its "anything that isn't up reads as down"
+            // fold is a rating contract, and applying it here would turn a typo (`verdict=liked`) into
+            // clearing the dislikes instead — the wrong set, silently, on an operation whose whole
+            // point is repairing a silent mistake.
+            status = verdict.ToLowerInvariant() switch
+            {
+                DiscoveryVerdict.Up => DiscoveryStatus.Liked,
+                DiscoveryVerdict.Down => DiscoveryStatus.Disliked,
+                DiscoveryVerdict.Indifferent => DiscoveryStatus.Indifferent,
+                _ => null,
+            };
+            if (status is null)
+            {
+                return Results.BadRequest(new
+                {
+                    error = $"Unknown verdict '{verdict}'. Use up, down, indifferent, or omit it to clear all three.",
+                });
+            }
+        }
+
+        var cleared = await queue.ClearConfirmations(http.User.GetSubject()!, status);
+        return Results.Ok(new { cleared });
+    })
+    .RequireAuthorization()
+    .WithName("ClearVerdictConfirmations");
+
 api.MapPost("/discovery/rate/batch", async (
         DiscoveryRateBatchRequest body, HttpContext http, DiscoveryRatingService ratings) =>
     {

@@ -97,9 +97,22 @@ export async function refreshQueue(): Promise<{ rebuilt: number }> {
   return (await res.json()) as { rebuilt: number }
 }
 
+// The feed sections whose whole purpose is to hand a verdict back for a rethink. A thumb on one of
+// these is the user re-affirming (or reversing) something they were just shown, which is the only
+// thing that should mark a verdict final — see `confirm` below.
+const RECONSIDER_KINDS: ReadonlySet<string> = new Set([
+  'ReconsiderArtist', 'SecondThoughtsArtist', 'IndifferentLikeArtist', 'IndifferentDislikeArtist',
+])
+
 // Thumb an artist or — when album is supplied — a missing album.
+//
+// Sends `confirm=true` only from a reconsider card. The server used to infer confirmation from the row
+// already holding the verdict, which meant any repeat thumb — including a bulk script's — retired the
+// artist from the sweep for good. Deriving it from the card's own kind keeps "thumb it again to
+// confirm" working exactly where it is offered, and nowhere else.
 export async function rate(item: FeedItem | RatedItem, verdict: Verdict): Promise<void> {
   const params = new URLSearchParams({ artist: item.artist.artistName, verdict })
+  if (!item.album && RECONSIDER_KINDS.has(item.kind)) params.set('confirm', 'true')
   if (item.album) {
     params.set('album', item.album)
     if (item.imageUrl) params.set('albumArt', item.imageUrl)
@@ -136,6 +149,19 @@ export async function snooze(item: FeedItem | RatedItem, duration: SnoozeDuratio
   if (!res.ok) {
     throw new Error(`Failed to snooze ${item.artist.artistName}: ${res.status} ${res.statusText}`)
   }
+}
+
+// Drop the "this verdict is final" flag from the caller's own rows so the reconsider sweep can
+// question them again — all three verdicts when none is named. The verdicts themselves survive; this
+// is the undo for a confirmation, not for a rating. Returns how many rows carried one.
+export async function clearConfirmations(verdict?: Verdict): Promise<{ cleared: number }> {
+  const params = new URLSearchParams()
+  if (verdict) params.set('verdict', verdict)
+  const res = await fetch(`/api/discovery/unconfirm?${params}`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to clear confirmations: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as { cleared: number }
 }
 
 // Clear a rating, returning the artist/album to the feed.

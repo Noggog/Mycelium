@@ -932,7 +932,7 @@ public class DiscoveryEngineTests
     {
         _queue.TryConfirmVerdict(User, "Editors", DiscoveryStatus.Indifferent).Returns(true);
 
-        await _sut.RecordArtistVerdict(User, "Editors", DiscoveryStatus.Indifferent);
+        await _sut.RecordArtistVerdict(User, "Editors", DiscoveryStatus.Indifferent, confirm: true);
 
         await _queue.Received(1).TryConfirmVerdict(User, "Editors", DiscoveryStatus.Indifferent);
     }
@@ -954,13 +954,14 @@ public class DiscoveryEngineTests
     [Fact]
     public async Task First_dislike_records_the_verdict_without_confirming_it()
     {
-        // TryConfirmVerdict is a no-op unless the row *already* held that verdict — the repo enforces
-        // that, so the engine may call it unconditionally, but nothing else about a first dislike changes.
-        _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Disliked).Returns(false);
-
+        // An ordinary thumb doesn't ask to confirm, so the engine never reaches for it. The repo's own
+        // "only when the row already held this verdict" guard still stands behind that, but it is no
+        // longer the only thing standing between a repeat and a permanent verdict.
         await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked);
 
         await _queue.Received(1).Rate(User, "Low", DiscoveryStatus.Disliked, null);
+        await _queue.DidNotReceive().TryConfirmVerdict(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DiscoveryStatus>());
     }
 
     [Fact]
@@ -970,7 +971,7 @@ public class DiscoveryEngineTests
         // overwrites it — otherwise every dislike would look like a repeat.
         _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Disliked).Returns(true);
 
-        await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked);
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked, confirm: true);
 
         Received.InOrder(() =>
         {
@@ -987,7 +988,7 @@ public class DiscoveryEngineTests
         Relates("Low", ("Codeine", null, 1)); // a like expands the frontier, which reads the graph
         _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Liked).Returns(true);
 
-        await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked);
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked, confirm: true);
 
         Received.InOrder(() =>
         {
@@ -996,12 +997,46 @@ public class DiscoveryEngineTests
         });
     }
 
+    /// <summary>
+    /// The regression this whole flag exists for. A bulk script re-likes an artist it already liked
+    /// every time that artist turns up on another playlist; inferring confirmation from the row alone
+    /// read each of those as "stood by it twice" and retired the artist from the sweep permanently. On
+    /// a library where 44% of artists span two or more playlists that silently disabled second-guessing
+    /// for nearly half of it, with no UI anywhere that showed it had happened.
+    /// </summary>
+    [Fact]
+    public async Task Re_rating_an_artist_without_asking_to_confirm_never_confirms()
+    {
+        Relates("Low", ("Codeine", null, 1));
+        // The repo would happily confirm: the row already holds this verdict.
+        _queue.TryConfirmVerdict(User, "Low", DiscoveryStatus.Liked).Returns(true);
+
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked);
+
+        await _queue.DidNotReceive().TryConfirmVerdict(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DiscoveryStatus>());
+        await _queue.Received(1).Rate(User, "Low", DiscoveryStatus.Liked, null);
+    }
+
+    /// <summary>
+    /// Confirmation is gated on the verdict being one that *can* be confirmed, not just on the caller
+    /// asking. A snooze is a deferred decision, so there is nothing to stand by.
+    /// </summary>
+    [Fact]
+    public async Task Asking_to_confirm_a_snooze_confirms_nothing()
+    {
+        await _sut.RecordArtistVerdict(User, "Low", DiscoveryStatus.Snoozed, confirm: true);
+
+        await _queue.DidNotReceive().TryConfirmVerdict(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DiscoveryStatus>());
+    }
+
     [Fact]
     public async Task Liking_an_artist_never_confirms_a_dislike()
     {
         Relates("Low", ("Codeine", null, 1)); // a like expands the frontier, which reads the graph
 
-        await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked);
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Liked, confirm: true);
 
         await _queue.DidNotReceive().TryConfirmVerdict(
             Arg.Any<string>(), Arg.Any<string>(), DiscoveryStatus.Disliked);
@@ -1010,7 +1045,7 @@ public class DiscoveryEngineTests
     [Fact]
     public async Task Disliking_an_artist_never_confirms_a_like()
     {
-        await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked);
+        await _sut.RateArtist(User, "Low", DiscoveryStatus.Disliked, confirm: true);
 
         await _queue.DidNotReceive().TryConfirmVerdict(
             Arg.Any<string>(), Arg.Any<string>(), DiscoveryStatus.Liked);

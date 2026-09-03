@@ -551,12 +551,14 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     ///
     /// A thumb landing on an artist that <em>already</em> holds that same verdict is the user standing
     /// by something the sweep offered back for a rethink — a re-rejection of a "second chance" card, or
-    /// a re-affirmed like on a "second thoughts" one. Either confirms the verdict permanently, so that
-    /// artist is never second-guessed again.
+    /// a re-affirmed like on a "second thoughts" one. Either confirms the verdict permanently — but only
+    /// when the caller passes <paramref name="confirm"/>, since a repeat verdict is not by itself a
+    /// re-affirmation (see <c>DiscoveryRateItem.Confirm</c>).
     /// </summary>
-    public async Task RateArtist(string userId, string artistName, DiscoveryStatus status)
+    public async Task RateArtist(
+        string userId, string artistName, DiscoveryStatus status, bool confirm = false)
     {
-        var depth = await RecordArtistVerdict(userId, artistName, status);
+        var depth = await RecordArtistVerdict(userId, artistName, status, confirm);
         await ApplyVerdictFollowUp(userId, artistName, status, depth);
     }
 
@@ -567,13 +569,21 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     /// leave <see cref="ApplyVerdictFollowUp"/> to a background worker; the rate-limited source APIs it
     /// would otherwise wait on turned a click into a multi-second stall.
     /// </summary>
-    public async Task<int> RecordArtistVerdict(string userId, string artistName, DiscoveryStatus status)
+    public async Task<int> RecordArtistVerdict(
+        string userId, string artistName, DiscoveryStatus status, bool confirm = false)
     {
         // Before Rate overwrites the previous verdict, while the row still carries it. Indifferent
         // confirms like the other two: it is the only thing that stops the sweep offering a shrug back,
         // and a shrug is second-guessed from both sides, so without it a band with polarised song
         // ratings would return every week for good.
-        if (status is DiscoveryStatus.Disliked or DiscoveryStatus.Liked or DiscoveryStatus.Indifferent
+        //
+        // `confirm` is required, and defaults to false, because the row alone cannot tell a
+        // re-affirmation from a repeat. This used to fire on any verdict landing on a row that already
+        // held it, which meant a bulk script re-rating its own likes retired them from the sweep
+        // wholesale — see DiscoveryRateItem.Confirm. The status check stays: only a verdict that can be
+        // confirmed is, whatever the caller asks for.
+        if (confirm
+            && status is DiscoveryStatus.Disliked or DiscoveryStatus.Liked or DiscoveryStatus.Indifferent
             && await _queue.TryConfirmVerdict(userId, artistName, status))
         {
             // The status itself, not a hand-rolled "up"/"down" — that ternary read every third verdict

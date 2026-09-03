@@ -406,6 +406,32 @@ public class UserQueueRepo : IUserQueueRepo
         return result.MatchedCount > 0;
     }
 
+    public async Task<long> ClearConfirmations(string userId, DiscoveryStatus? status)
+    {
+        var f = Builders<BsonDocument>.Filter;
+        // Unset rather than set-false so a cleared row is indistinguishable from one that was never
+        // confirmed: UnconfirmedVerdicts filters on Ne(field, true), which treats absent and false
+        // alike, and leaving `false` behind would be a second spelling of the same state.
+        var fields = status is null
+            ? new[] { FieldLikeConfirmed, FieldDislikeConfirmed, FieldIndifferentConfirmed }
+            : new[] { Verdict(status.Value).ConfirmField };
+
+        // Filtered to rows that actually carry one, so the reported count is confirmations removed
+        // rather than documents visited — the difference matters when this is run to undo a bulk
+        // mistake and the number is the only evidence of what it did.
+        var carries = fields.Select(x => f.Eq(x, true)).ToArray();
+        var filter = f.Eq(FieldUserId, userId) & f.Or(carries);
+        if (status is not null)
+        {
+            filter &= f.Eq(FieldStatus, Verdict(status.Value).Status);
+        }
+
+        var update = Builders<BsonDocument>.Update.Combine(
+            fields.Select(x => Builders<BsonDocument>.Update.Unset(x)));
+        var result = await Collection.UpdateManyAsync(filter, update);
+        return result.ModifiedCount;
+    }
+
     public async Task<DiscoveryCandidate[]> GetLiked(string userId)
     {
         var filter = Builders<BsonDocument>.Filter.Eq(FieldUserId, userId)
