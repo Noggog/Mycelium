@@ -172,6 +172,10 @@ meanings depending on the field, and does not record which. `is` means "is" on a
   stable forever, and the right thing to re-key on if names have drifted.
 - **Songs are identified by artist, album and title.** Not by file path or track id: both are local
   to the server that held them and neither would resolve on the system reading this.
+- **Do not re-key on the `deezer` block.** It is there to record a resolved — and sometimes
+  hand-corrected — link to a commercial catalogue, which is why it carries `pinned` and `unlinked`:
+  the decision is the point, and it would mean nothing without naming what was decided on. But a
+  store's id can be withdrawn or renumbered at any time. MusicBrainz is what to join on.
 
 ## What is deliberately absent
 

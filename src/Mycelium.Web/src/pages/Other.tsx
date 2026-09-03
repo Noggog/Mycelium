@@ -84,12 +84,13 @@ export default function Other() {
 // ---- Takeout: your own data, as a zip ----
 
 // Mycelium already writes the whole library's metadata into a git repository every night. This hands
-// one person their slice of exactly that: the same files, the same YAML, cut to their verdicts, their
-// stars, their playlists and the records they asked for. The library itself comes along whole,
-// because a list of ratings with the records removed is unreadable.
+// one person their slice of exactly that: the same files, the same YAML, cut to their own verdicts,
+// stars and playlists. The library itself comes along whole, because a list of ratings with the
+// records removed is unreadable.
 //
-// The counts are fetched up front rather than left to be discovered inside the zip — pressing a
-// download button and getting an archive of unknown contents is how these features end up unused.
+// The counts carry the explaining, so the prose doesn't have to — they say what is in the zip more
+// precisely than a paragraph could, and are fetched up front because pressing a download button and
+// getting an archive of unknown contents is how these features end up unused.
 
 // Every key here is one of the numeric ones — excluding `fileName` is what lets the render below
 // treat the value as a number without a cast.
@@ -103,8 +104,8 @@ const TAKEOUT_COUNTS: {
   { key: 'indifferent', label: 'Artists shrugged at', hint: 'artists you marked indifferent' },
   { key: 'songRatings', label: 'Song ratings', hint: 'your Plex star ratings, mirrored here' },
   { key: 'playlists', label: 'Playlists', hint: 'your Plex playlists and their tracks' },
-  { key: 'acquisitions', label: 'Records you asked for', hint: 'albums credited to you by name' },
-  { key: 'blocks', label: 'Blocks', hint: 'albums you told the downloader to leave alone' },
+  // Acquisitions and blocks are still *in* the export, and the summary still counts them — they just
+  // aren't worth a tile, being the two most people have none of.
 ]
 
 function Takeout() {
@@ -117,15 +118,8 @@ function Takeout() {
     <div className="dev-tool">
       <h2>Your data</h2>
       <p>
-        A zip of everything Mycelium has recorded about you: the artists you liked, passed on or were
-        indifferent to, the songs you rated, your playlists, and the records you asked for. It is the
-        same format the library is archived in &mdash; a folder per artist, a file per album, plain
-        text you can read without this app.
-      </p>
-      <p className="dev-muted">
-        The full artist and album list comes with it, since your ratings would mean nothing without
-        the records they point at. Nobody else&rsquo;s opinions do: no other person&rsquo;s stars,
-        playlists or verdicts appear anywhere in the file.
+        A zip of what the library holds and how you&rsquo;ve rated it, as plain text you can read
+        without this app.
       </p>
 
       {isPending && <p className="dev-status">Working out what you have&hellip;</p>}
