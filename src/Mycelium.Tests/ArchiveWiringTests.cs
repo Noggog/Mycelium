@@ -52,6 +52,10 @@ public class ArchiveWiringTests : IDisposable
     [InlineData(typeof(ArchiveBuilder))]
     [InlineData(typeof(IGitRepository))]
     [InlineData(typeof(MetadataArchiveConfig))]
+    // The takeout, which reuses the same builder. Registered by hand next to them, and notably not
+    // dependent on MetadataArchiveConfig — a deployment with no archive repository still owes people
+    // their own data.
+    [InlineData(typeof(TakeoutBuilder))]
     // Reached by the MongoDB module's scan — the archive's only read path.
     [InlineData(typeof(IArchiveDump))]
     // The two harvesters, reached by the Backend scan, plus the stores they write to, reached by the

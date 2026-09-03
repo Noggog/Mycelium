@@ -367,7 +367,7 @@ const ADD_COPY: Record<ManualAddResult, AddCopy> = {
   Added: { text: 'Queued to download.', tone: 'ok' },
   AlreadyQueued: { text: 'Already on the list.', tone: 'note' },
   AlreadyOwned: {
-    text: 'Already in the library — delete it in Plex and run “Refresh from Plex” in the dev panel '
+    text: 'Already in the library — delete it in Plex and run “Refresh from Plex” on the Other tab '
       + 'if you want it fetched again.',
     tone: 'note',
   },

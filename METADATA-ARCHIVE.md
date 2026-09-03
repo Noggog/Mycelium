@@ -1,7 +1,7 @@
 # Metadata Archive — owning the data in git
 
-Status: **phases 1, 3 and 4 built** (2026-08-29). Decisions in §7 are settled. Phase 2 (restore) is
-deliberately **not** being built — see the note under it.
+Status: **phases 1, 3, 4 and 5 built** (2026-09-02). Decisions in §7 are settled. Phase 2 (restore) is
+deliberately **not** being built — see the note under it. §8 covers the per-user takeout.
 
 ## Goal
 
@@ -345,9 +345,12 @@ Tokenised library sweep, `userTrackRatings` collection + repo, weekly `StarHarve
 Drop `smart=1`, add the items read, `userPlaylists` collection + repo, harvest on the same weekly
 pass, `playlists/<username>.jsonl`. Smart playlists as rules, manual as ordered tracks.
 
-**Phase 5 — Polish**
+**Phase 5 — Takeout** ✅ built
+A per-user export of the same files, from the app rather than from git. See §8.
+
+**Phase 6 — Polish**
 Human-readable digests (a `library.md` sorted by artist, so the repo browses nicely on a phone),
-archive status on the dev panel, a restore CLI.
+archive status on the panel, a restore CLI.
 
 ---
 
@@ -365,3 +368,68 @@ archive status on the dev panel, a restore CLI.
   commit-on-change later if the history proves too coarse.
 - **Q5 — Emails** → dropped. Username is the restore key; emails aren't needed and only make the
   repo more sensitive.
+
+---
+
+## 8. Takeout — handing one person their own copy
+
+The archive is the library's record. **Takeout** is the same record cut to one person and handed to
+them as a zip, from the *Other* tab (`GET /api/takeout`).
+
+The whole point is that it is not a second export format. Same dump, same `ArchiveBuilder`, same
+canonical YAML — `ArchiveScope.ForUser` is spliced in between, and nothing else changes. A field that
+starts being archived starts being exported the same day, which is the right default for a
+"give me my data" button and the wrong thing to have to remember.
+
+### Where the line is drawn
+
+Between **the library** and **what somebody thought of it**.
+
+| Kept whole | Cut to the caller |
+|---|---|
+| `artists` (the full artist and album list) | `userQueue` — artist verdicts |
+| `libraryTracks` (the track listing) | `userTrackRatings` — star ratings |
+| `albumMatchOverrides` (how releases are identified) | `userPlaylists` |
+| | `users` / `plexLinks` |
+| | `purchases`, by `addedBy` |
+| | `blockedAlbums`, by `blockedBy` |
+
+Trimming the artist list to what someone rated was considered and rejected: the album files are the
+frame the opinions hang on, and an export of ratings with the records removed is unreadable. The
+library is also not anybody's private data — it is the same list the app shows everyone on Browse.
+
+Two rows name a person rather than pointing at one. `purchases.addedBy` holds the username stamped
+when someone pressed *Download now*; `blockedAlbums.blockedBy` holds the OIDC subject on rows written
+since the block endpoint existed and a username on older ones. Both spellings are matched, or a
+person's own history would be withheld from them. An acquisition crediting nobody — which is most of
+them, since a like downloads automatically — belongs to no takeout.
+
+### Decisions
+
+- **Independent of `METADATA_REPO_PATH`.** Takeout touches no git repository and no filesystem, so a
+  deployment that never configured archiving still owes people their own data.
+- **The subject comes from the credential, never from a parameter.** There is deliberately no way to
+  ask for someone else's export, so there is no authorization decision to get wrong.
+- **Plain `RequireAuthorization`,** so an API token works too — a scripted "back up my ratings" is
+  exactly what this is for, and it is the caller's own data either way.
+- **A summary endpoint** (`GET /api/takeout/summary`) counts the rows the export will write, so the
+  page can say what is in the zip before anyone waits for one. It counts the scoped input rather than
+  a parallel query, so it cannot flatter the export.
+- **Streamed, not buffered.** A full library is tens of thousands of small YAML files; the response
+  body is somewhere to put them that isn't the server's heap.
+- **Its own README** (`ArchiveReadme.Takeout`), sharing the format section with the archive's. The
+  reader here is the person the data is about rather than a future migration, and what they need told
+  first is which parts of the tree are theirs.
+
+`TakeoutTests` is deliberately heavier than the archive's own tests, for one reason: a snapshot that
+keeps too much is a private repository with an extra field in it, whereas a takeout that keeps too
+much hands one user another user's ratings. The load-bearing test sweeps the *whole* export for any
+trace of a second person rather than checking field by field — so a field added later that starts
+carrying a username is caught by a test written before it existed.
+
+### Where it lives in the UI
+
+The old dev panel became the **Other** tab, visible to everyone. The takeout card renders for anyone
+signed in; the operator tooling behind it (Plex tags, sweeps, the similarity debugger) still renders
+only for `DEV_USERNAMES`, and every one of those endpoints re-checks server-side regardless. `/dev`
+redirects to `/other`.

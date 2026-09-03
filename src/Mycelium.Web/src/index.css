@@ -780,6 +780,52 @@ input[type='checkbox'] {
   color: var(--text-dim);
 }
 
+/* Takeout: what your export contains, before you commit to downloading it. A wrapping grid rather
+   than a table — there are only ever seven of these and they read as a scoreboard, not as rows. */
+.takeout-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 0.5rem;
+}
+.takeout-count {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+}
+.takeout-count dt {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.takeout-count dd {
+  margin: 0.2rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An anchor, because the download is a plain link — styled to match the buttons beside it so it
+   doesn't read as a stray piece of prose. */
+.takeout-download {
+  display: inline-block;
+  background: rgba(116, 88, 219, 0.16);
+  color: var(--text);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+}
+.takeout-download:hover {
+  border-color: var(--cyan);
+  box-shadow: var(--glow-cyan);
+  transform: translateY(-1px);
+}
+
 /* "You have MP3" on an upgrade card — tinted so it reads as a statement about the library rather
    than another neutral fact about the release. */
 .detail-chip.upgrade-chip {

@@ -4,7 +4,7 @@ import Browse from './pages/Browse'
 import Discover from './pages/Discover'
 import Purchases from './pages/Purchases'
 import Playlists from './pages/Playlists'
-import Dev from './pages/Dev'
+import Other from './pages/Other'
 
 export default function App() {
   return (
@@ -21,12 +21,15 @@ export default function App() {
         <Route path="/purchases" element={<Navigate to="/downloads" replace />} />
         {/* Ready-made Plex smart playlists, built in the user's own linked Plex account. */}
         <Route path="/playlists" element={<Playlists />} />
-        {/* Cleanup and the old similarity debugger were folded into the dev panel. Keep old links working. */}
-        <Route path="/cleanup" element={<Navigate to="/dev" replace />} />
-        <Route path="/related" element={<Navigate to="/dev" replace />} />
-        {/* Dev panel (Plex tag tooling + similarity debug). Visible only to DEV_USERNAMES; the
-            page itself gates on isDev and every endpoint re-checks server-side. */}
-        <Route path="/dev" element={<Dev />} />
+        {/* Cleanup and the old similarity debugger were folded into this page. Keep old links working. */}
+        <Route path="/cleanup" element={<Navigate to="/other" replace />} />
+        <Route path="/related" element={<Navigate to="/other" replace />} />
+        {/* Odds and ends: the takeout, for everyone, plus the operator tooling (Plex tags,
+            sweeps, similarity debug) that only DEV_USERNAMES sees. Every dev endpoint re-checks
+            server-side, so the page's own gate is cosmetic. */}
+        <Route path="/other" element={<Other />} />
+        {/* This was the dev panel before the takeout gave it a reason to exist for everyone. */}
+        <Route path="/dev" element={<Navigate to="/other" replace />} />
       </Routes>
     </Layout>
   )

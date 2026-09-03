@@ -183,7 +183,7 @@ public sealed class MetadataArchiverTests : IDisposable
         readme.Should().Contain("Library/");
         readme.Should().Contain("username");
         readme.Should().Contain("MusicBrainz");
-        readme.Should().Contain("Keep it private");
+        readme.Should().Contain("Keep them somewhere private");
     }
 
     [Fact]

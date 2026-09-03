@@ -199,7 +199,6 @@ function AuthBox() {
 }
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { user } = useAuth()
   const topbarRef = useRef<HTMLElement>(null)
 
   // The top bar wraps to two rows on narrow screens, so its height is variable. Publish the
@@ -234,12 +233,11 @@ export default function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/playlists" className={navClass}>
             Playlists
           </NavLink>
-          {/* Dev panel — shown only to DEV_USERNAMES users (Plex tag tooling + similarity debug). */}
-          {user?.isDev && (
-            <NavLink to="/dev" className={navClass}>
-              Dev
-            </NavLink>
-          )}
+          {/* Everyone's, now that it carries the takeout — the dev tooling behind it stays hidden
+              for anyone not in DEV_USERNAMES, so most people see a page with one card on it. */}
+          <NavLink to="/other" className={navClass}>
+            Other
+          </NavLink>
         </nav>
         <div className="topbar-end">
           <VolumeControl />

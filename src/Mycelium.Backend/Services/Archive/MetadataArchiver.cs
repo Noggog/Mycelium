@@ -23,33 +23,6 @@ public record ArchiveResult(GitOutcome Outcome, string? CommitSha = null, bool P
 public class MetadataArchiver
 {
     /// <summary>
-    /// The collections the archive keeps. The ones left out are all re-derivable and would churn:
-    /// `relatedArtists` (rebuilt from Deezer/ListenBrainz on a staleness clock), `missingAlbums`
-    /// (delete-and-reinsert per artist on every sync), `deezerAlbumArtists` (a memo cache),
-    /// `recommendations` (vestigial) and `appSettings` (a UI toggle).
-    /// </summary>
-    private const string Users = "users";
-    private const string PlexLinks = "plexLinks";
-    private const string Artists = "artists";
-    private const string ArtistVerdicts = "userQueue";
-    private const string Purchases = "purchases";
-    private const string Blocks = "blockedAlbums";
-    private const string MatchOverrides = "albumMatchOverrides";
-
-    /// <summary>
-    /// Star ratings, harvested out of Plex by <c>StarHarvester</c>. Read from Mongo like everything
-    /// else — the archive deliberately never talks to Plex itself, so it keeps one source and one
-    /// failure mode, and a Plex outage can't stop the rest of the snapshot being taken.
-    /// </summary>
-    private const string TrackRatings = "userTrackRatings";
-
-    /// <summary>Playlists, harvested out of Plex by <c>PlaylistHarvester</c>. Same reasoning.</summary>
-    private const string Playlists = "userPlaylists";
-
-    /// <summary>The library's track listing, so an album file can carry a real one.</summary>
-    private const string LibraryTracks = "libraryTracks";
-
-    /// <summary>
     /// Directories the archive owns outright, so a file that stops being produced (a user who was
     /// deleted, say) is removed rather than left behind for ever. Anything else in the repository —
     /// a README, notes, whatever else you put there — is left alone.
@@ -94,19 +67,7 @@ public class MetadataArchiver
                 return new ArchiveResult(GitOutcome.Failed, Error: "Archive repository is not usable");
             }
 
-            var input = new ArchiveInput(
-                await _dump.Dump(Users),
-                await _dump.Dump(PlexLinks),
-                await _dump.Dump(Artists),
-                await _dump.Dump(ArtistVerdicts),
-                await _dump.Dump(Purchases),
-                await _dump.Dump(Blocks),
-                await _dump.Dump(MatchOverrides),
-                await _dump.Dump(TrackRatings),
-                await _dump.Dump(Playlists),
-                await _dump.Dump(LibraryTracks));
-
-            var files = _builder.Build(input);
+            var files = _builder.Build(await ArchiveCollections.Read(_dump));
 
             // Written once, on the first snapshot that finds it missing. The archive is meant to be
             // read by something that isn't this app — a migration script for whatever replaces Plex,

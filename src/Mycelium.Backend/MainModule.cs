@@ -137,6 +137,12 @@ public class MainModule : Autofac.Module
         builder.RegisterType<GitRepository>().As<IGitRepository>().AsSelf().SingleInstance();
         builder.RegisterType<MetadataArchiver>().AsSelf().SingleInstance();
 
+        // The same pipeline pointed at one person, for the takeout download. Registered alongside its
+        // neighbours rather than with the scanned services for the same namespace reason — and note it
+        // deliberately does *not* depend on MetadataArchiveConfig: a deployment with no archive
+        // repository configured can still hand someone their own data.
+        builder.RegisterType<TakeoutBuilder>().AsSelf().SingleInstance();
+
         builder.RegisterAssemblyTypes(typeof(LibraryProvider).Assembly)
             .InNamespacesOf(
                 typeof(LibraryProvider))

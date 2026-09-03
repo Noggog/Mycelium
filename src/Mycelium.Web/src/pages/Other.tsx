@@ -29,46 +29,133 @@ import {
   type PlexServerTokenStatus,
   type RebuildResult,
 } from '../api/dev'
+import { getTakeoutSummary, TAKEOUT_URL, type TakeoutSummary } from '../api/takeout'
 import type { AudioQuality } from '../types'
 
-// The in-app dev panel: tooling that's only shown to (and only usable by) DEV_USERNAMES users.
-// Absorbs the old Related (dev) similarity debugger and adds the Plex tag maintenance controls.
-export default function Dev() {
+// The odds and ends that don't belong on Discover, Browse, Download or Playlists.
+//
+// Everyone gets this page, but almost everything on it is operator tooling — the Plex tag
+// maintenance, the sweeps, the similarity debugger that Related (dev) used to be. So the takeout,
+// which is the one thing here that belongs to whoever is looking at it, renders for everybody, and
+// the rest only for DEV_USERNAMES. That gate is cosmetic: every dev endpoint re-checks server-side,
+// so this only decides which controls are worth showing rather than which ones work.
+export default function Other() {
   const { user, isLoading } = useAuth()
 
   if (isLoading) {
     return (
       <section>
-        <h1>Dev tools</h1>
+        <h1>Other</h1>
         <p><em>…</em></p>
       </section>
     )
   }
 
-  // The route is rendered for everyone, but the panel is dev-only. The server enforces the same gate
-  // on every endpoint, so this is just to avoid showing controls that would 403.
-  if (!user?.isDev) {
+  if (!user) {
     return (
       <section>
-        <h1>Dev tools</h1>
-        <p><em>Not available for this account.</em></p>
+        <h1>Other</h1>
+        <p><em>Log in to download your data.</em></p>
       </section>
     )
   }
 
   return (
     <section>
-      <h1>Dev tools</h1>
-      <PlexServerToken />
-      <CatalogRefresh />
-      <QualitySweep />
-      <UserQuality />
-      <CleanupTool />
-      <PlexTagTools />
-      <SimilarityWarm />
-      <QueueRebuild />
-      <SimilarityDebug />
+      <h1>Other</h1>
+      <Takeout />
+      {user.isDev && (
+        <>
+          <PlexServerToken />
+          <CatalogRefresh />
+          <QualitySweep />
+          <UserQuality />
+          <CleanupTool />
+          <PlexTagTools />
+          <SimilarityWarm />
+          <QueueRebuild />
+          <SimilarityDebug />
+        </>
+      )}
     </section>
+  )
+}
+
+// ---- Takeout: your own data, as a zip ----
+
+// Mycelium already writes the whole library's metadata into a git repository every night. This hands
+// one person their slice of exactly that: the same files, the same YAML, cut to their verdicts, their
+// stars, their playlists and the records they asked for. The library itself comes along whole,
+// because a list of ratings with the records removed is unreadable.
+//
+// The counts are fetched up front rather than left to be discovered inside the zip — pressing a
+// download button and getting an archive of unknown contents is how these features end up unused.
+
+// Every key here is one of the numeric ones — excluding `fileName` is what lets the render below
+// treat the value as a number without a cast.
+const TAKEOUT_COUNTS: {
+  key: Exclude<keyof TakeoutSummary, 'fileName'>
+  label: string
+  hint: string
+}[] = [
+  { key: 'liked', label: 'Artists liked', hint: 'artists you gave a thumbs up' },
+  { key: 'disliked', label: 'Artists passed', hint: 'artists you turned down' },
+  { key: 'indifferent', label: 'Artists shrugged at', hint: 'artists you marked indifferent' },
+  { key: 'songRatings', label: 'Song ratings', hint: 'your Plex star ratings, mirrored here' },
+  { key: 'playlists', label: 'Playlists', hint: 'your Plex playlists and their tracks' },
+  { key: 'acquisitions', label: 'Records you asked for', hint: 'albums credited to you by name' },
+  { key: 'blocks', label: 'Blocks', hint: 'albums you told the downloader to leave alone' },
+]
+
+function Takeout() {
+  const { data, isPending, isError, error } = useQuery({
+    queryKey: ['takeout-summary'],
+    queryFn: getTakeoutSummary,
+  })
+
+  return (
+    <div className="dev-tool">
+      <h2>Your data</h2>
+      <p>
+        A zip of everything Mycelium has recorded about you: the artists you liked, passed on or were
+        indifferent to, the songs you rated, your playlists, and the records you asked for. It is the
+        same format the library is archived in &mdash; a folder per artist, a file per album, plain
+        text you can read without this app.
+      </p>
+      <p className="dev-muted">
+        The full artist and album list comes with it, since your ratings would mean nothing without
+        the records they point at. Nobody else&rsquo;s opinions do: no other person&rsquo;s stars,
+        playlists or verdicts appear anywhere in the file.
+      </p>
+
+      {isPending && <p className="dev-status">Working out what you have&hellip;</p>}
+      {isError && <p className="error">{(error as Error).message}</p>}
+
+      {data && (
+        <>
+          <dl className="takeout-counts">
+            {TAKEOUT_COUNTS.map(({ key, label, hint }) => (
+              <div key={key} className="takeout-count" title={hint}>
+                <dt>{label}</dt>
+                <dd>{data[key].toLocaleString()}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="dev-muted">
+            Plus the library itself: {data.artists.toLocaleString()} artists and{' '}
+            {data.albums.toLocaleString()} albums.
+          </p>
+
+          <div className="controls">
+            {/* A link, not a fetch. The browser saves the stream straight to disk, so a library-sized
+                zip never has to exist as a blob in this tab. */}
+            <a className="takeout-download" href={TAKEOUT_URL} download={data.fileName}>
+              Download {data.fileName}
+            </a>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

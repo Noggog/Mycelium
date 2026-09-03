@@ -224,7 +224,7 @@ static IResult DeezerBusy() => Results.Problem(
 // Nothing is linked. Distinct from a rejection: telling someone to re-mint a credential they have
 // never minted sends them looking for a token that doesn't exist.
 static IResult PlexNotLinked() => Results.Problem(
-    "Plex isn't connected. Link it from the dev panel (Dev tools \u2192 Plex connection).",
+    "Plex isn't connected. Link it from the Other tab (\u201cPlex connection\u201d).",
     statusCode: StatusCodes.Status502BadGateway);
 
 static IResult PlexTokenRejected() => Results.Problem(
@@ -865,6 +865,39 @@ api.MapPost("/collections/rate/batch", async (
     })
     .RequireAuthorization()
     .WithName("RateCollectionBatch");
+
+// --- Takeout: a copy of your own data ---
+// The same files the nightly archive commits, cut to one person and zipped: the whole library (an
+// export of your ratings with the records removed would be unreadable), but only your verdicts, your
+// stars, your playlists and the records you asked for. Nobody else's opinions travel with it.
+//
+// Plain RequireAuthorization, so an API token can pull it too — it is the caller's own data either
+// way, and a scripted "back up my ratings" is exactly the use this exists for. The subject comes from
+// the credential and is never a parameter: there is deliberately no way to ask for someone else's.
+var takeout = api.MapGroup("/takeout").RequireAuthorization();
+
+// What the download would contain, so the page can say so before anyone waits on a zip. Counts the
+// very rows the export writes, so it cannot flatter it.
+takeout.MapGet("/summary", async (HttpContext http, TakeoutBuilder builder) =>
+        Results.Ok(await builder.Summary(http.User.GetSubject()!)))
+    .WithName("TakeoutSummary");
+
+takeout.MapGet("", async (HttpContext http, TakeoutBuilder builder) =>
+    {
+        var built = await builder.Build(http.User.GetSubject()!);
+
+        // Streamed rather than buffered: a full library is tens of thousands of small YAML files, and
+        // the response body is somewhere to put them that isn't this process's heap.
+        return Results.Stream(
+            stream =>
+            {
+                TakeoutBuilder.WriteZip(stream, built.Files);
+                return Task.CompletedTask;
+            },
+            "application/zip",
+            built.Summary.FileName);
+    })
+    .WithName("Takeout");
 
 // --- API tokens for unattended automation ---
 // Long-lived credentials that authenticate as an existing user, so the seeding and playlist-
