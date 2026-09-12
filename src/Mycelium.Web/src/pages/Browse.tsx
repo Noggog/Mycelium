@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getArtists } from '../api/artists'
@@ -19,6 +19,7 @@ import {
 import { getRelated } from '../api/related'
 import { useArtAccent } from '../art/artColors'
 import { useDebounced } from '../hooks/useDebounced'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
 import { rateFeedback } from '../effects/effectsBus'
 import type {
   ArtistAlbumItem,
@@ -184,9 +185,18 @@ function SourcePicker({
   onClose: () => void
   onApplied: () => void
 }) {
+  useEscapeToClose(onClose)
+
   const key = source.source
   const label = sourceLabel(key)
   const [query, setQuery] = useState(artist)
+  // The box opens prefilled with the library's name, and the reason you're here is usually that
+  // that name is what the source can't find. Select it on open so typing a correction replaces it
+  // instead of appending to it — a caret parked at the end means select-all before you can start.
+  const searchRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    searchRef.current?.select()
+  }, [])
   // Search on a pause, not per keystroke — MusicBrainz allows one call a second, and typing a name
   // through would spend the whole budget answering prefixes nobody asked about.
   const searched = useDebounced(query.trim())
@@ -226,6 +236,7 @@ function SourcePicker({
         </p>
 
         <input
+          ref={searchRef}
           className="picker-search"
           type="text"
           value={query}

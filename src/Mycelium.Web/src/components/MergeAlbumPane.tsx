@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getMergeCandidates, mergeAlbum } from '../api/discovery'
+import { useEscapeToClose } from '../hooks/useEscapeToClose'
 import { IconCheck, IconX } from './icons'
 
 // "Already in library?" — resolve by hand a release the diff calls missing but the library already
@@ -22,6 +23,8 @@ export function MergeAlbumPane({
   onClose: () => void
   onMerged: () => void
 }) {
+  useEscapeToClose(onClose)
+
   const [query, setQuery] = useState('')
   // Debounced so typing a title doesn't fire a library query per keystroke.
   const [search, setSearch] = useState('')
@@ -54,10 +57,14 @@ export function MergeAlbumPane({
           Merge “{album}” ({artist}) into an album already in your library.
         </p>
 
+        {/* Focused on open: the suggestions are a guess, and the common case is that none of them
+            fit and you already know the title you're looking for. Typing it should be the first
+            thing you can do. The pane is mounted only while open, so this fires on every open. */}
         <input
           className="picker-search"
           type="text"
           value={query}
+          autoFocus
           placeholder="Search your library by album or artist…"
           onChange={(e) => setQuery(e.target.value)}
         />
