@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import { usePlexLink } from '../auth/usePlexLink'
 import VolumeControl from './VolumeControl'
 import MyceliumBackdrop from './MyceliumBackdrop'
+import BackdropToggle from './BackdropToggle'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
@@ -240,6 +241,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           </NavLink>
         </nav>
         <div className="topbar-end">
+          <BackdropToggle />
           <VolumeControl />
           <AuthBox />
         </div>

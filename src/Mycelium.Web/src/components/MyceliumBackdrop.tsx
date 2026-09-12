@@ -7,6 +7,7 @@ import {
   setSporePointer,
   clearSporePointer,
 } from '../effects/effectsBus'
+import { useBackdropEnabled } from '../effects/backdropPreference'
 
 /**
  * Ambient floating-spore layers with parallax depth:
@@ -19,6 +20,10 @@ import {
  *
  * Both honour prefers-reduced-motion (single static frame) and pause while the
  * tab is hidden. Mount once near the app root; positioning lives in index.css.
+ *
+ * The whole backdrop is also switchable — off by default on mobile, and toggled
+ * from the topbar (see effects/backdropPreference.ts). Switched off it renders
+ * nothing at all, so the simulations are destroyed rather than merely paused.
  */
 const FAR: SporeFieldOptions = {
   // Calm bulk. Nudged brighter than the near layer since it reads through the
@@ -44,11 +49,14 @@ const GROWTH: MyceliumFieldOptions = {
 }
 
 export default function MyceliumBackdrop() {
+  const enabled = useBackdropEnabled()
   const growthRef = useRef<HTMLCanvasElement>(null)
   const farRef = useRef<HTMLCanvasElement>(null)
   const nearRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
+    // Switched off the canvases aren't rendered, so the refs are null and this
+    // bails before allocating a field or binding a listener.
     const growthCanvas = growthRef.current
     const farCanvas = farRef.current
     const nearCanvas = nearRef.current
@@ -109,7 +117,9 @@ export default function MyceliumBackdrop() {
       for (const off of unregister) off()
       for (const f of fields) f.destroy()
     }
-  }, [])
+  }, [enabled])
+
+  if (!enabled) return null
 
   return (
     <>

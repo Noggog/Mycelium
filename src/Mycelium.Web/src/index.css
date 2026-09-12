@@ -356,6 +356,49 @@ code {
 }
 
 /* ========================================================================== */
+/* Backdrop toggle                                                             */
+/* ========================================================================== */
+
+/* The spore/mycelium switch, sat left of the volume control. Off it goes grey
+   and flat; on it picks up the salmon glow the backdrop itself is drawn in, so
+   the button reads as the thing it controls. */
+.backdrop-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  /* Sized up from the 18px glyph — this is the one topbar control a phone user
+     is likely to reach for, and it sits right beside the volume slider. */
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0.3rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.backdrop-toggle:hover {
+  color: var(--text);
+  background: rgba(116, 88, 219, 0.14);
+  border-color: var(--border);
+}
+
+.backdrop-toggle.is-on {
+  color: var(--salmon-light);
+}
+
+.backdrop-toggle .backdrop-icon {
+  display: block;
+}
+
+.backdrop-toggle.is-on .backdrop-icon {
+  filter: drop-shadow(0 0 5px rgba(250, 115, 118, 0.55));
+}
+
+/* ========================================================================== */
 /* Volume control                                                              */
 /* ========================================================================== */
 
