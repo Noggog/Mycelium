@@ -1983,20 +1983,6 @@ a.disc-row-link:hover .disc-name {
   color: var(--text-dim);
   font-size: 0.85rem;
 }
-/* The Browse readout's "Recommended by …" line: each liked artist is a link-styled button that drills
-   the readout into it. */
-.detail-recommender {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--text);
-  cursor: pointer;
-}
-.detail-recommender:hover {
-  color: var(--cyan-hover);
-  text-shadow: var(--glow-cyan);
-}
 
 /* Recommendation / metadata chips ("via …", album by, etc.). */
 .detail-chips {
@@ -2024,12 +2010,19 @@ a.disc-row-link:hover .disc-name {
 /* A chip that links somewhere (the "recommended via" source artists → their Browse page). Brightens
    in its own hue on hover rather than inheriting the global cyan link glow, so it still reads as a
    chip and not as body-copy link. */
-a.detail-chip {
+a.detail-chip,
+button.detail-chip {
   cursor: pointer;
   text-decoration: none;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
-a.detail-chip.via:hover {
+/* Browse's chips drill the readout in place, so they're buttons rather than anchors — same look. */
+button.detail-chip {
+  font-family: inherit;
+  line-height: inherit;
+}
+a.detail-chip.via:hover,
+button.detail-chip.via:hover {
   color: var(--salmon-white);
   background: rgba(225, 96, 99, 0.26);
   border-color: rgba(250, 115, 118, 0.75);

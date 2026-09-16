@@ -1046,9 +1046,10 @@ function RelatedTab({ artist, onExplore }: { artist: string; onExplore: (sel: Se
   )
 }
 
-// "Recommended by boygenius, Snail Mail" — the liked artists whose similarity edges point at this one.
-// Each name drills the readout into that artist, the same walk the Related tab offers in the other
-// direction. Renders nothing until there is something to say.
+// "Recommended via" — the liked artists whose similarity edges point at this one, drawn the way the
+// Discover readout draws a recommendation's sources. Each chip drills the readout into that artist in
+// place (the Related tab's walk, the other direction) rather than opening a tab as Discover's do, since
+// here there is no feed to keep your place in. Renders nothing until there is something to say.
 function RecommendedBy({ artist, onExplore }: { artist: string; onExplore: (sel: SelectedArtist) => void }) {
   const { data } = useQuery({
     queryKey: ['recommended-by', artist],
@@ -1058,21 +1059,21 @@ function RecommendedBy({ artist, onExplore }: { artist: string; onExplore: (sel:
   if (!data || data.length === 0) return null
 
   return (
-    <div className="detail-meta detail-recommended-by">
-      Recommended by{' '}
-      {data.map((source, i) => (
-        <span key={source}>
-          {i > 0 && ', '}
+    <>
+      <div className="detail-section-label">Recommended via</div>
+      <div className="detail-chips">
+        {data.slice(0, 8).map((source) => (
           <button
-            className="detail-recommender"
+            className="detail-chip via"
+            key={source}
             title={`Explore ${source}`}
             onClick={() => onExplore({ name: source, imageUrl: null })}
           >
             {source}
           </button>
-        </span>
-      ))}
-    </div>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -1154,8 +1155,6 @@ function DetailPane({
             <div className="detail-meta">{formatFans(libItem.deezerFans)} fans on Deezer</div>
           )}
 
-          {user && <RecommendedBy artist={name} onExplore={onExplore} />}
-
           {libItem && libItem.genres.length > 0 && (
             <div className="detail-chips">
               {libItem.genres.slice(0, 6).map((g) => (
@@ -1163,6 +1162,8 @@ function DetailPane({
               ))}
             </div>
           )}
+
+          {user && <RecommendedBy artist={name} onExplore={onExplore} />}
 
           {/* Thumbs work for any selected artist: an owned one records a library rating, a related
               stranger drilled into from the Related tab gets liked straight into the buy list.
