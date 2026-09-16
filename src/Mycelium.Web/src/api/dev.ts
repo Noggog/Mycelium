@@ -91,8 +91,8 @@ export async function syncRecommendedTags(): Promise<RecommendedSyncResult> {
 }
 
 // Put every user's "<username>_disliked" mood on the anchor record, so Plex has minted a tag id for it
-// before they have rejected anything — without one, Deep Frontier cannot write its exclusion rule at
-// all. The nightly sync and a new user's first login both do this; this just runs it now, and reports
+// before they have rejected anything — without one, neither Frontier can write its exclusion rule
+// (and Deep Frontier isn't offered at all). The nightly sync and a new user's first login both do this; this just runs it now, and reports
 // which record it found so a library that hasn't got it doesn't fail silently.
 export async function seedMoodTags(): Promise<MoodSeedResult> {
   const res = await fetch('/api/dev/plex-tags/seed', { method: 'POST' })

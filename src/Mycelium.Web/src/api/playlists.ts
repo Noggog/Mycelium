@@ -87,7 +87,7 @@ export interface StockPlaylist {
   description: string | null
   // What the rules actually do, one clause per line. Generated alongside the filter, so a clause is
   // only present when the rule behind it is: the reject floor follows the user's rating scale, and
-  // Deep Frontier only claims to exclude rejected artists when there is a tag to exclude by.
+  // both Frontiers only claim to exclude rejected artists when there is a tag to exclude by.
   details: string[]
   state: StockPlaylistState
   matchedTitle: string | null

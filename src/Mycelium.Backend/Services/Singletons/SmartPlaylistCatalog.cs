@@ -54,7 +54,7 @@ public record StockPlaylistDefinition(
 /// <param name="DislikedArtistMoodTagId">
 /// The tag id of this user's "&lt;username&gt;_disliked" <em>artist</em> mood — the thumbs-down twin of
 /// the liked one — or null when nobody has been thumbed down yet. Unlike the others this is only ever
-/// used to <em>exclude</em>: see <see cref="SmartPlaylistCatalog.DeepFrontier"/>.
+/// used to <em>exclude</em>: see <see cref="SmartPlaylistCatalog.RejectExclusions"/>.
 /// </param>
 /// <param name="DislikedAlbumMoodTagId">
 /// The same tag in the <em>album</em> vocabulary, for the collections that carry their verdict on the
@@ -209,6 +209,9 @@ public static class SmartPlaylistCatalog
     /// exact — the rule counts a skip as a hearing (see <see cref="FrontierRules"/>).
     /// </summary>
     private const string StaleDetail = "Not heard in 1+ years";
+
+    /// <summary>The bullet for <see cref="RejectExclusions"/>, on whichever Frontier carries them.</summary>
+    private const string RejectDetail = "Excludes Mycelium rejected artists and their albums";
 
     /// <summary>
     /// The "never play again" clause, naming <em>this</em> user's worst score — 1★ on a whole-star
@@ -390,6 +393,13 @@ public static class SmartPlaylistCatalog
     /// exactly those records. Each of the three is optional — a tag has no id until something carries
     /// it — and with none of them there is nothing to narrow by, which is what
     /// <see cref="DeepFrontier"/> is for.</para>
+    ///
+    /// <para><b>A rejection overrides a recommendation.</b> The recommended marker is derived and only
+    /// reconciled on the sweep's next pass, so an artist thumbed down since can still be carrying it —
+    /// and a liked collection can sit under an act the user rejected. The same
+    /// <see cref="RejectExclusions"/> Deep Frontier carries are subtracted here too. Unlike there, they
+    /// are not required: this playlist is already narrowed to music the user vouched for, so without a
+    /// reject tag it is still honest, just without the bullet that promises the exclusion.</para>
     /// </summary>
     private static StockPlaylistDefinition Frontier(StockPlaylistOptions options)
     {
@@ -407,26 +417,56 @@ public static class SmartPlaylistCatalog
             tags.Add(new PlexCondition("album.mood", PlexOp.Is, options.LikedAlbumMoodTagId));
         }
 
+        var exclusions = RejectExclusions(options);
+        var details = new List<string>
+        {
+            StaleDetail,
+            FloorDetail(options.HalfStars),
+            "Includes Mycelium approved or recommended artists and their albums",
+        };
+        if (exclusions.Count > 0)
+        {
+            details.Add(RejectDetail);
+        }
+
         return new StockPlaylistDefinition(
             Id: FrontierId,
             Title: "Frontier",
             Description: "New or forgotten music in your wheelhouse",
-            Details: new[]
-            {
-                StaleDetail,
-                FloorDetail(options.HalfStars),
-                "Includes Mycelium approved or recommended artists and their albums",
-            },
+            Details: details,
             // Flattened because a single surviving tag must be a bare condition, not a one-child
             // bracket Plex's editor would drop on the user's next save.
             Filter: tags.Count == 0
                 ? null
                 : Sorted(PlexGroup.Flatten(PlexGroup.All(
-                    FrontierRules(options.HalfStars).Append(PlexGroup.Any(tags.ToArray())).ToArray()))),
+                    FrontierRules(options.HalfStars)
+                        .Append(PlexGroup.Any(tags.ToArray()))
+                        .Concat(exclusions)
+                        .ToArray()))),
             Unavailable: tags.Count == 0
                 ? $"Approve an artist first — {NoTag("liked", "recommended")}"
                 : null,
             Art: PlaylistArt.Frontier);
+    }
+
+    /// <summary>
+    /// "Not something the user thumbed down": one <c>is not</c> per verdict vocabulary that has a tag on
+    /// the server — the artist mood for ordinary acts, the album mood for collections. Empty when
+    /// nothing has been rejected yet. Each is its own <c>and</c>-ed term; see <see cref="DeepFrontier"/>
+    /// for why that is the right shape.
+    /// </summary>
+    private static List<PlexFilter> RejectExclusions(StockPlaylistOptions options)
+    {
+        var exclusions = new List<PlexFilter>();
+        if (options.DislikedArtistMoodTagId is not null)
+        {
+            exclusions.Add(new PlexCondition("artist.mood", PlexOp.IsNot, options.DislikedArtistMoodTagId));
+        }
+        if (options.DislikedAlbumMoodTagId is not null)
+        {
+            exclusions.Add(new PlexCondition("album.mood", PlexOp.IsNot, options.DislikedAlbumMoodTagId));
+        }
+        return exclusions;
     }
 
     /// <summary>
@@ -457,15 +497,7 @@ public static class SmartPlaylistCatalog
     /// </summary>
     private static StockPlaylistDefinition DeepFrontier(StockPlaylistOptions options)
     {
-        var exclusions = new List<PlexFilter>();
-        if (options.DislikedArtistMoodTagId is not null)
-        {
-            exclusions.Add(new PlexCondition("artist.mood", PlexOp.IsNot, options.DislikedArtistMoodTagId));
-        }
-        if (options.DislikedAlbumMoodTagId is not null)
-        {
-            exclusions.Add(new PlexCondition("album.mood", PlexOp.IsNot, options.DislikedAlbumMoodTagId));
-        }
+        var exclusions = RejectExclusions(options);
 
         return new StockPlaylistDefinition(
             Id: DeepFrontierId,
@@ -477,7 +509,7 @@ public static class SmartPlaylistCatalog
             {
                 StaleDetail,
                 FloorDetail(options.HalfStars),
-                "Excludes Mycelium rejected artists and their albums",
+                RejectDetail,
             },
             Filter: exclusions.Count == 0
                 ? null

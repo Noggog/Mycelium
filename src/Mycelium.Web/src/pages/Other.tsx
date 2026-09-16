@@ -724,8 +724,8 @@ function PlexTagTools() {
       setStatus(
         r.anchor
           ? `Seeded ${r.seeded} user(s) on "${r.anchor}".`
-          : "No anchor record in the library — nothing seeded. Deep Frontier can't exclude rejected " +
-            'artists until someone thumbs one down.',
+          : "No anchor record in the library — nothing seeded. Frontier and Deep Frontier can't " +
+            'exclude rejected artists until someone thumbs one down.',
       ),
     onError: (e) => setStatus((e as Error).message),
   })
@@ -750,8 +750,8 @@ function PlexTagTools() {
       </p>
       <p>
         <em>Seed</em> puts everyone's <code>_disliked</code> mood on one deliberately chosen record, so
-        Plex has minted a tag id for it before anyone has rejected anything — without one, Deep
-        Frontier can't write its "not rejected" rule at all. Runs nightly and on a new user's first
+        Plex has minted a tag id for it before anyone has rejected anything — without one, neither
+        Frontier can write its "not rejected" rule, and Deep Frontier isn't offered at all. Runs nightly and on a new user's first
         login; this just runs it now, and says which record it landed on.
       </p>
 

@@ -139,7 +139,7 @@ Each is independently buildable and testable.
     Indifferent. A Liked artist is a taste anchor (the old "seed"); score/sources/
     depth rank the pending recommended ones. Indifferent is decided but grows
     nothing — it leaves the feed and the frontier, and unlike a dislike it is *not*
-    subtracted from the Deep Frontier playlist, so the band keeps playing. The
+    subtracted from the Frontier playlists, so the band keeps playing. The
     weekly reconsider sweep second-guesses it from both sides, which is how a shrug
     eventually resolves into a real verdict.
   - `userAlbumRatings` — per (user, artist, album) verdict on a missing album.

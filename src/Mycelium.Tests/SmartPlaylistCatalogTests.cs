@@ -338,12 +338,14 @@ public class SmartPlaylistCatalogTests
     public void The_frontier_bullets_name_this_users_reject_floor(bool halfStars, string expected)
     {
         var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions(
-            LikedArtist, RecommendedArtistMoodTagId: RecommendedArtist, HalfStars: halfStars));
+            LikedArtist, RecommendedArtistMoodTagId: RecommendedArtist,
+            DislikedArtistMoodTagId: DislikedArtist, HalfStars: halfStars));
 
         definitions.Single(d => d.Id == SmartPlaylistCatalog.FrontierId)
             .Details.Should().Equal(
                 "Not heard in 1+ years", expected,
-                "Includes Mycelium approved or recommended artists and their albums");
+                "Includes Mycelium approved or recommended artists and their albums",
+                "Excludes Mycelium rejected artists and their albums");
         definitions.Single(d => d.Id == SmartPlaylistCatalog.DeepFrontierId)
             .Details.Should().Equal(
                 "Not heard in 1+ years", expected,
@@ -383,7 +385,8 @@ public class SmartPlaylistCatalogTests
                 Filter(SmartPlaylistCatalog.FrontierId, recommendedTagId: RecommendedArtist))
             .Should().Be(
                 "type=8&sort=titleSort" + FrontierBody
-                + "&and=1&push=1&artist.mood=749936&or=1&artist.mood=901122&pop=1");
+                + "&and=1&push=1&artist.mood=749936&or=1&artist.mood=901122&pop=1"
+                + RejectExclusion);
     }
 
     /// <summary>
@@ -411,7 +414,44 @@ public class SmartPlaylistCatalogTests
     public void Frontier_stays_a_single_condition_when_only_one_tag_exists()
     {
         PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.FrontierId))
-            .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&artist.mood=749936");
+            .Should().Be("type=8&sort=titleSort" + FrontierBody + "&and=1&artist.mood=749936" + RejectExclusion);
+    }
+
+    /// <summary>
+    /// A rejection outranks a recommendation: the marker is only reconciled on the sweep's next pass, so
+    /// the same reject exclusions Deep Frontier carries are subtracted here — both vocabularies, each
+    /// its own term, after the narrowing group.
+    /// </summary>
+    [Fact]
+    public void Frontier_excludes_rejected_artists_and_albums()
+    {
+        var frontier = SmartPlaylistCatalog
+            .Build(new StockPlaylistOptions(
+                LikedArtist, RecommendedArtistMoodTagId: RecommendedArtist,
+                DislikedArtistMoodTagId: DislikedArtist, DislikedAlbumMoodTagId: DislikedAlbum,
+                HalfStars: true))
+            .Single(d => d.Id == SmartPlaylistCatalog.FrontierId);
+
+        PlexFilterSerializer.Serialize(frontier.Filter!).Should().Be(
+            "type=8&sort=titleSort" + FrontierBody
+            + "&and=1&push=1&artist.mood=749936&or=1&artist.mood=901122&pop=1"
+            + RejectExclusion + "&and=1&album.mood!=700002");
+        frontier.Details.Should().Contain("Excludes Mycelium rejected artists and their albums");
+    }
+
+    /// <summary>
+    /// Unlike Deep Frontier, a missing reject tag doesn't withhold Frontier — it is already narrowed to
+    /// music the user vouched for. It just doesn't promise an exclusion it can't write.
+    /// </summary>
+    [Fact]
+    public void Frontier_without_a_reject_tag_is_still_offered_but_makes_no_exclusion_claim()
+    {
+        var frontier = SmartPlaylistCatalog.Build(new StockPlaylistOptions(LikedArtist))
+            .Single(d => d.Id == SmartPlaylistCatalog.FrontierId);
+
+        frontier.Filter.Should().NotBeNull();
+        PlexFilterSerializer.Serialize(frontier.Filter!).Should().NotContain("!=");
+        frontier.Details.Should().NotContain("Excludes Mycelium rejected artists and their albums");
     }
 
     /// <summary>

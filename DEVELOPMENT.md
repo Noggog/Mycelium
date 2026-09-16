@@ -114,7 +114,7 @@ taste about. The stock "My Library" smart playlist matches either.
 
 An artist carries at most one verdict tag: a new one goes on and every other comes off
 (`ArtistTag.OtherVerdictTags`). `_indifferent` is the odd one out in that it is written but referenced
-by no playlist rule — Deep Frontier subtracts only `_disliked`, so a shrugged-at band stays in rotation
+by no playlist rule — both Frontiers subtract only `_disliked`, so a shrugged-at band stays in rotation
 by construction, which is the whole point of the verdict. It is written anyway so Plex can tell "I
 shrugged at this" from "never rated", and so the dev panel's wipe-and-reapply round-trips the full set.
 Collections take two verdicts, not three: indifference is an artist verdict, and the album routes
