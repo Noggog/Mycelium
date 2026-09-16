@@ -820,6 +820,13 @@ api.MapDelete("/discovery/rate", async (
     .RequireAuthorization()
     .WithName("ClearRating");
 
+// The user's liked artists that recommend this one — the Browse readout's "Recommended by" line.
+// Reads stored similarity edges only, so it never waits on Deezer.
+api.MapGet("/discovery/recommended-by", async (string artist, HttpContext http, DiscoveryEngine engine) =>
+        Results.Ok(await engine.RecommendedBy(http.User.GetSubject()!, artist)))
+    .RequireAuthorization()
+    .WithName("GetRecommendedBy");
+
 // Every rating the user has made, for the review page (albums that now exist are filtered out).
 api.MapGet("/discovery/ratings", async (HttpContext http, DiscoveryEngine engine) =>
         Results.Ok(await engine.GetRatings(http.User.GetSubject()!)))

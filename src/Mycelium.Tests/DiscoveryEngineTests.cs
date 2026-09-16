@@ -401,6 +401,25 @@ public class DiscoveryEngineTests
         names.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// Browse's "Recommended by" line: every liked artist whose edges point at the band, owned or not,
+    /// matched case-insensitively and sorted — and never the band itself, when it is liked too.
+    /// </summary>
+    [Fact]
+    public async Task RecommendedBy_lists_the_liked_artists_pointing_at_an_artist()
+    {
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Snail Mail", "NSYNC", "boygenius", "Big Thief" });
+        Relates("Snail Mail", ("nsync", null, 1));
+        Relates("NSYNC", ("NSYNC", null, 1));
+        Relates("boygenius", ("NSYNC", null, 2), ("Phoebe Bridgers", null, 1));
+        Relates("Big Thief", ("Alex G", null, 1));
+
+        var by = await _sut.RecommendedBy(User, "NSYNC");
+
+        by.Should().Equal("boygenius", "Snail Mail");
+        await _related.Received().GetRelated(new ArtistKey("boygenius"), false, true);
+    }
+
     [Fact]
     public async Task Library_sections_exclude_already_rated_owned_artists()
     {

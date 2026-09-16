@@ -87,6 +87,17 @@ export async function getArtistDiscography(artist: string): Promise<ArtistAlbumI
   return (await res.json()) as ArtistAlbumItem[]
 }
 
+// The user's liked artists that recommend this one (their stored similarity edges point at it), sorted
+// by name. Any artist — owned or not, rated or not. Empty when nothing they like points here.
+export async function getRecommendedBy(artist: string): Promise<string[]> {
+  const params = new URLSearchParams({ artist })
+  const res = await fetch(`/api/discovery/recommended-by?${params}`)
+  if (!res.ok) {
+    throw new Error(`Failed to load what recommends ${artist}: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as string[]
+}
+
 // Dev-only: rebuild the pending recommendations for every user from their liked artists (keeps
 // ratings). Returns the number of users rebuilt.
 export async function refreshQueue(): Promise<{ rebuilt: number }> {

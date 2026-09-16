@@ -142,6 +142,34 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
         .ToArray();
 
     /// <summary>
+    /// The user's liked artists whose stored similarity edges point at <paramref name="artistName"/> —
+    /// the "via boygenius, Snail Mail" provenance a feed card carries, for any one artist on demand,
+    /// whether or not it is owned, rated or queued. Browse shows it on the artist readout. Same
+    /// readOnly edge reads as <see cref="OwnedRecommendedByLiked"/>, so it never waits on a source
+    /// fetch; an artist never lists itself.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RecommendedBy(string userId, string artistName)
+    {
+        var by = new List<string>();
+        foreach (var likedArtist in await _queue.GetLikedArtistNames(userId))
+        {
+            if (likedArtist.Equals(artistName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var unified = await _related.GetRelated(new ArtistKey(likedArtist), readOnly: true);
+            if (unified.Related.Any(r =>
+                    r.ArtistKey.ArtistName.Equals(artistName, StringComparison.OrdinalIgnoreCase)))
+            {
+                by.Add(likedArtist);
+            }
+        }
+
+        return by.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>
     /// The full (unpaged) list of feed items for one category, with umbrella credits ("Various
     /// Artists", "Original Soundtrack", cast recordings) dropped. Filtering here rather than
     /// per-category catches every way one can reach a card — a stale queue row written before this rule

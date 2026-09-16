@@ -10,6 +10,7 @@ import {
   clearRating,
   getArtistDiscography,
   getRatings,
+  getRecommendedBy,
   rate,
   seedArtist,
   unblockAlbum,
@@ -1045,6 +1046,36 @@ function RelatedTab({ artist, onExplore }: { artist: string; onExplore: (sel: Se
   )
 }
 
+// "Recommended by boygenius, Snail Mail" — the liked artists whose similarity edges point at this one.
+// Each name drills the readout into that artist, the same walk the Related tab offers in the other
+// direction. Renders nothing until there is something to say.
+function RecommendedBy({ artist, onExplore }: { artist: string; onExplore: (sel: SelectedArtist) => void }) {
+  const { data } = useQuery({
+    queryKey: ['recommended-by', artist],
+    queryFn: () => getRecommendedBy(artist),
+    staleTime: 60 * 1000,
+  })
+  if (!data || data.length === 0) return null
+
+  return (
+    <div className="detail-meta detail-recommended-by">
+      Recommended by{' '}
+      {data.map((source, i) => (
+        <span key={source}>
+          {i > 0 && ', '}
+          <button
+            className="detail-recommender"
+            title={`Explore ${source}`}
+            onClick={() => onExplore({ name: source, imageUrl: null })}
+          >
+            {source}
+          </button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
 // The right-hand readout for the artist selected in the list (desktop) / a bottom drawer (mobile): a
 // big hero, the Deezer link-out / fans / genres, the rate + correct actions, and a tab strip whose
 // panels are the artist's albums (discography drill-down) and the artists related to them.
@@ -1122,6 +1153,8 @@ function DetailPane({
           {libItem?.deezerFans != null && (
             <div className="detail-meta">{formatFans(libItem.deezerFans)} fans on Deezer</div>
           )}
+
+          {user && <RecommendedBy artist={name} onExplore={onExplore} />}
 
           {libItem && libItem.genres.length > 0 && (
             <div className="detail-chips">
@@ -1473,6 +1506,8 @@ export default function Browse() {
     queryClient.invalidateQueries({ queryKey: ['ratings'] })
     queryClient.invalidateQueries({ queryKey: ['feed'] })
     queryClient.invalidateQueries({ queryKey: ['purchases'] })
+    // A like or unlike changes which artists count as recommending the others.
+    queryClient.invalidateQueries({ queryKey: ['recommended-by'] })
   }
 
   // Thumbing an artist — works for any selected artist, owned or not (a related artist drilled into
