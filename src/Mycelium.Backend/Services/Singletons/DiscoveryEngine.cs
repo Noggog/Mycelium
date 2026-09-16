@@ -29,6 +29,16 @@ public interface IVerdictFollowUp
 }
 
 /// <summary>
+/// The seam <see cref="MusicBrainzRelinker"/> rebuilds through once it has repaired edges, extracted
+/// like the others so that job is unit-testable without the whole engine.
+/// </summary>
+public interface IDiscoveryQueueRebuilder
+{
+    /// <inheritdoc cref="DiscoveryEngine.RebuildAll"/>
+    Task<int> RebuildAll();
+}
+
+/// <summary>
 /// The seam <see cref="RecommendedArtistTagger"/> reads through — "which artists that the library
 /// already has does this user's frontier point at, and haven't they thumbed yet". Implemented by
 /// <see cref="DiscoveryEngine"/>; extracted for the same reason as <see cref="IQueueReplenisher"/>, so
@@ -52,7 +62,7 @@ public interface IRecommendedLibraryArtists
 /// Recommendations never re-add an artist that's owned, already-decided, or the frontier itself, so
 /// the frontier only moves outward.
 /// </summary>
-public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommendedLibraryArtists
+public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommendedLibraryArtists, IDiscoveryQueueRebuilder
 {
     private readonly IUserQueueRepo _queue;
     private readonly IRelatedArtistReader _related;

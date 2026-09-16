@@ -147,6 +147,45 @@ export async function getSimilarityWarmStatus(): Promise<SimilarityWarmStatus> {
   return (await res.json()) as SimilarityWarmStatus
 }
 
+// Progress of a MusicBrainz relink pass (mirrors MusicBrainzRelinkStatus on the backend).
+export interface MusicBrainzRelinkStatus {
+  running: boolean
+  processed: number
+  total: number
+  // Stored name already matched — accepted without a search.
+  kept: number
+  // Re-searched, same MBID.
+  unchanged: number
+  // Re-searched, different MBID (or re-derived for an artist with no stored link to compare).
+  relinked: number
+  // Nothing goes by the name — link and ListenBrainz edges removed.
+  cleared: number
+  // Pinned or detached by hand.
+  skipped: number
+  errors: number
+  queuesRebuilt: boolean
+  currentArtist: string | null
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+// Start (or, if one is running, just re-read) a re-check of every automatic MusicBrainz link.
+export async function startMusicBrainzRelink(): Promise<MusicBrainzRelinkStatus> {
+  const res = await fetch('/api/dev/similarity/musicbrainz-relink', { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to start MusicBrainz relink: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as MusicBrainzRelinkStatus
+}
+
+export async function getMusicBrainzRelinkStatus(): Promise<MusicBrainzRelinkStatus> {
+  const res = await fetch('/api/dev/similarity/musicbrainz-relink')
+  if (!res.ok) {
+    throw new Error(`Failed to get MusicBrainz relink status: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as MusicBrainzRelinkStatus
+}
+
 // ---- The server's own Plex credential ----
 // The token every library read is made with, as opposed to the per-user tokens in api/playlists.ts.
 // It is minted here and stored in Mongo — there is no environment variable for it.

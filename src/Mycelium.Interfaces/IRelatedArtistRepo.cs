@@ -24,4 +24,10 @@ public interface IRelatedArtistRepo
     /// stale edges derived from the wrong identity don't linger (a null re-resolve won't overwrite them).
     /// </summary>
     Task DeleteAllSources(ArtistKey artist);
+
+    /// <summary>
+    /// Every artist holding a non-empty edge set from <paramref name="source"/> — including artists
+    /// outside the library (liked, not yet owned), which have edges but no catalog row to find them by.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetArtistNamesWithEdges(string source);
 }

@@ -1249,6 +1249,17 @@ devSim.MapGet("/warm", (SimilarityGraphWarmer warmer) =>
         Results.Ok(warmer.GetStatus()))
     .WithName("DevSimilarityWarmStatus");
 
+// Re-check every automatic MusicBrainz link against the stricter name match, fixing the wrong ones
+// and their ListenBrainz edges; pins and unlinks are left alone. Same single-flight POST-to-start,
+// GET-to-poll shape as the warm above, and for the same reason: MusicBrainz's ~1 req/s.
+devSim.MapPost("/musicbrainz-relink", (MusicBrainzRelinker relinker) =>
+        Results.Ok(relinker.Start()))
+    .WithName("DevMusicBrainzRelink");
+
+devSim.MapGet("/musicbrainz-relink", (MusicBrainzRelinker relinker) =>
+        Results.Ok(relinker.GetStatus()))
+    .WithName("DevMusicBrainzRelinkStatus");
+
 // The shared "to buy" list: every user's liked non-owned artists + liked albums not yet acquired,
 // persisted with a status (pending → sent → in-library). Reconciles on read so it's always current.
 // Auth-gated, but not scoped to the caller — this is the library maintainer's unified queue.

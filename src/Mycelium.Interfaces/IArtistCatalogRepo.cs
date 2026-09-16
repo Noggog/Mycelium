@@ -89,6 +89,12 @@ public interface IArtistCatalogRepo
     Task SetAlbumReleaseGroup(string artist, string album, string? releaseGroupMbid);
 
     /// <summary>
+    /// Forgets every album release group resolved for an artist, hits and misses alike, so the backfill
+    /// asks again. For when the artist's MBID changes: each lookup was scoped to the old one.
+    /// </summary>
+    Task ClearAlbumReleaseGroups(ArtistKey artist);
+
+    /// <summary>
     /// Names of present catalog artists that encode multiple artists joined by ';' (a Plex
     /// multi-value artifact, e.g. "Nina Simone;Hot Chip") — candidates for cleanup.
     /// </summary>

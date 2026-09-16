@@ -73,6 +73,24 @@ public class RelatedArtistRepo : IRelatedArtistRepo
         await Collection.DeleteManyAsync(
             Builders<BsonDocument>.Filter.Eq(FieldArtist, artist.ArtistName));
 
+    public async Task<IReadOnlyList<string>> GetArtistNamesWithEdges(string source)
+    {
+        var filter = Builders<BsonDocument>.Filter.And(
+            Builders<BsonDocument>.Filter.Eq(FieldSource, source),
+            // "related.0 exists" is "the array has at least one element".
+            Builders<BsonDocument>.Filter.Exists($"{FieldRelated}.0"));
+        var cursor = await Collection.FindAsync(filter, new FindOptions<BsonDocument>
+        {
+            Projection = Builders<BsonDocument>.Projection.Include(FieldArtist),
+        });
+
+        return (await cursor.ToListAsync())
+            .Select(d => d.TryGetValue(FieldArtist, out var a) && a.IsString ? a.AsString : null)
+            .Where(a => !string.IsNullOrEmpty(a))
+            .Select(a => a!)
+            .ToArray();
+    }
+
     private static ArtistRelations ToArtistRelations(BsonDocument doc)
     {
         var artist = doc.TryGetValue(FieldArtist, out var a) && !a.IsBsonNull ? a.AsString : "";

@@ -10,16 +10,12 @@ namespace Mycelium.ListenBrainz.Services;
 public interface IMusicBrainzApi
 {
     /// <summary>
-    /// Resolve an artist name to its strongest MusicBrainz match (highest search score), or null if
-    /// none/error. The returned <see cref="MusicBrainzArtist.Id"/> is the MBID.
+    /// Free-text artist search in relevance order: empty when MusicBrainz answered with nothing, null
+    /// when it didn't answer at all. The two must stay apart — a caller that records "no such artist"
+    /// would otherwise turn a rate-limit blip into a permanent miss. Name resolution picks from these
+    /// with <see cref="MusicBrainzArtistMatch"/>; the "Correct association" picker shows them as-is.
     /// </summary>
-    Task<MusicBrainzArtist?> SearchArtist(string artistName);
-
-    /// <summary>
-    /// Free-text artist search in relevance order (empty if none/error), powering the "Correct
-    /// association" picker when the top hit is wrong.
-    /// </summary>
-    Task<MusicBrainzArtist[]> SearchArtists(string query, int limit);
+    Task<MusicBrainzArtist[]?> SearchArtists(string query, int limit);
 
     /// <summary>Look up a MusicBrainz artist by its MBID (name, disambiguation), or null if none/error.</summary>
     Task<MusicBrainzArtist?> GetArtist(string mbid);

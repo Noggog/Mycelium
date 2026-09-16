@@ -52,7 +52,7 @@ public class ListenBrainzIngestionServiceTests
         var result = await Build().EnsureRelated(Radiohead);
 
         result.Should().BeSameAs(fresh);
-        await _musicBrainz.DidNotReceive().SearchArtist(Arg.Any<string>());
+        await _musicBrainz.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
         await _listenBrainz.DidNotReceive().GetSimilarArtists(Arg.Any<string>());
         await _repo.DidNotReceive().Upsert(Arg.Any<ArtistRelations>());
     }
@@ -61,7 +61,7 @@ public class ListenBrainzIngestionServiceTests
     public async Task Missing_entry_resolves_mbid_fetches_and_persists_tagged_listenbrainz()
     {
         _repo.Get(Radiohead, "listenbrainz").Returns((ArtistRelations?)null);
-        _musicBrainz.SearchArtist("Radiohead").Returns(MbArtist(RadioheadMbid, "Radiohead"));
+        _musicBrainz.SearchArtists("Radiohead", Arg.Any<int>()).Returns(new[] { MbArtist(RadioheadMbid, "Radiohead") });
         _listenBrainz.GetSimilarArtists(RadioheadMbid).Returns(new[]
         {
             Similar("mbid-muse", "Muse", 9000),
@@ -84,7 +84,7 @@ public class ListenBrainzIngestionServiceTests
     public async Task The_seed_itself_and_blank_names_are_filtered_out()
     {
         _repo.Get(Radiohead, "listenbrainz").Returns((ArtistRelations?)null);
-        _musicBrainz.SearchArtist("Radiohead").Returns(MbArtist(RadioheadMbid, "Radiohead"));
+        _musicBrainz.SearchArtists("Radiohead", Arg.Any<int>()).Returns(new[] { MbArtist(RadioheadMbid, "Radiohead") });
         _listenBrainz.GetSimilarArtists(RadioheadMbid).Returns(new[]
         {
             Similar(RadioheadMbid, "Radiohead"), // the seed is included in the response — drop it
@@ -102,19 +102,44 @@ public class ListenBrainzIngestionServiceTests
     }
 
     [Fact]
-    public async Task No_mbid_match_does_not_persist_and_returns_existing()
+    public async Task Unreachable_musicbrainz_does_not_persist_and_returns_existing()
     {
         var existing = new ArtistRelations(Radiohead, "listenbrainz",
             new[] { new RelatedArtist(new ArtistKey("Muse"), null) },
             DateTimeOffset.UtcNow - TimeSpan.FromDays(99));
         _repo.Get(Radiohead, "listenbrainz").Returns(existing);
-        _musicBrainz.SearchArtist("Radiohead").Returns((MusicBrainzArtist?)null); // no match / unreachable
+        _musicBrainz.SearchArtists("Radiohead", Arg.Any<int>()).Returns((MusicBrainzArtist[]?)null);
 
         var result = await Build().EnsureRelated(Radiohead);
 
         result.Should().BeSameAs(existing);
         await _listenBrainz.DidNotReceive().GetSimilarArtists(Arg.Any<string>());
         await _repo.DidNotReceive().Upsert(Arg.Any<ArtistRelations>());
+    }
+
+    /// <summary>
+    /// A confirmed no-match replaces whatever edges are stored with none: they came from an MBID the
+    /// artist no longer resolves to — the "Noel Brass Jr." inheriting Canadian Brass's neighbours case.
+    /// </summary>
+    [Fact]
+    public async Task Confirmed_no_match_replaces_stale_edges_with_none()
+    {
+        var existing = new ArtistRelations(new ArtistKey("Noel Brass Jr."), "listenbrainz",
+            new[] { new RelatedArtist(new ArtistKey("*NSYNC"), null) },
+            DateTimeOffset.UtcNow - TimeSpan.FromDays(99));
+        _repo.Get(existing.Artist, "listenbrainz").Returns(existing);
+        _musicBrainz.SearchArtists("Noel Brass Jr.", Arg.Any<int>())
+            .Returns(new[] { MbArtist("mbid-canadian-brass", "Canadian Brass") });
+
+        ArtistRelations? upserted = null;
+        await _repo.Upsert(Arg.Do<ArtistRelations>(x => upserted = x));
+
+        var result = await Build().EnsureRelated(existing.Artist);
+
+        upserted.Should().NotBeNull();
+        upserted!.Related.Should().BeEmpty();
+        result.Related.Should().BeEmpty();
+        await _listenBrainz.DidNotReceive().GetSimilarArtists(Arg.Any<string>());
     }
 
     [Fact]
@@ -126,7 +151,7 @@ public class ListenBrainzIngestionServiceTests
 
         result.Source.Should().Be("listenbrainz");
         result.Related.Should().BeEmpty();
-        await _musicBrainz.DidNotReceive().SearchArtist(Arg.Any<string>());
+        await _musicBrainz.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
         await _listenBrainz.DidNotReceive().GetSimilarArtists(Arg.Any<string>());
     }
 
@@ -135,12 +160,12 @@ public class ListenBrainzIngestionServiceTests
     {
         var fresh = new ArtistRelations(Radiohead, "listenbrainz", Array.Empty<RelatedArtist>(), DateTimeOffset.UtcNow);
         _repo.Get(Radiohead, "listenbrainz").Returns(fresh);
-        _musicBrainz.SearchArtist("Radiohead").Returns(MbArtist(RadioheadMbid, "Radiohead"));
+        _musicBrainz.SearchArtists("Radiohead", Arg.Any<int>()).Returns(new[] { MbArtist(RadioheadMbid, "Radiohead") });
         _listenBrainz.GetSimilarArtists(RadioheadMbid).Returns(Array.Empty<ListenBrainzSimilarArtist>());
 
         await Build().EnsureRelated(Radiohead, forceRefresh: true);
 
-        await _musicBrainz.Received(1).SearchArtist("Radiohead");
+        await _musicBrainz.Received(1).SearchArtists("Radiohead", Arg.Any<int>());
         await _repo.Received(1).Upsert(Arg.Any<ArtistRelations>());
     }
 }

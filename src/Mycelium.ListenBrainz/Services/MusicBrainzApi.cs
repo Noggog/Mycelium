@@ -36,13 +36,7 @@ public class MusicBrainzApi : IMusicBrainzApi
         _logger = logger;
     }
 
-    public async Task<MusicBrainzArtist?> SearchArtist(string artistName)
-    {
-        // Results come back in descending search-score order; the first is the strongest match.
-        return (await SearchArtists(artistName, 1)).FirstOrDefault();
-    }
-
-    public async Task<MusicBrainzArtist[]> SearchArtists(string query, int limit)
+    public async Task<MusicBrainzArtist[]?> SearchArtists(string query, int limit)
     {
         var qs = HttpUtility.ParseQueryString(string.Empty);
         qs["query"] = query;
@@ -51,7 +45,7 @@ public class MusicBrainzApi : IMusicBrainzApi
         var url = $"{_endpointInfo.MusicBrainzBaseUri}/ws/2/artist?{qs}";
 
         var result = await Get<MusicBrainzSearchResult>(url);
-        return result?.Artists.ToArray() ?? Array.Empty<MusicBrainzArtist>();
+        return result?.Artists.ToArray();
     }
 
     public async Task<MusicBrainzArtist?> GetArtist(string mbid)

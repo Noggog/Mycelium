@@ -386,6 +386,11 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
                 Builders<BsonDocument>.Update.Push(FieldAlbumIdentities, entry)));
     }
 
+    public Task ClearAlbumReleaseGroups(ArtistKey artist) =>
+        Collection.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName),
+            Builders<BsonDocument>.Update.Unset(FieldAlbumIdentities));
+
     /// <summary>Album title -> resolved release-group MBID (null where the lookup came back empty).</summary>
     private static Dictionary<string, string?> Identities(BsonDocument doc)
     {

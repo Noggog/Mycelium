@@ -53,13 +53,26 @@ public class ListenBrainzIngestionService : ISimilaritySource
             return existing;
         }
 
-        var identity = await _resolver.ResolveIdentity(artist.ArtistName);
+        var resolution = await _resolver.Resolve(artist.ArtistName);
+        if (resolution.Unreachable)
+        {
+            // MusicBrainz didn't answer. Don't persist an empty result — it'd suppress retries on a
+            // transient failure — serve whatever we already have.
+            _logger.LogWarning("MusicBrainz unreachable for {Artist}; keeping existing edges", artist.ArtistName);
+            return existing ?? Empty(artist);
+        }
+
+        var identity = resolution.Identity;
         if (identity == null)
         {
-            // No MBID (or MusicBrainz unreachable). Don't persist an empty result — it'd suppress
-            // retries on a transient failure — serve whatever we already have.
-            _logger.LogWarning("MusicBrainz had no MBID for {Artist}; keeping existing edges", artist.ArtistName);
-            return existing ?? Empty(artist);
+            // A confirmed no-match (or a detached artist). Recorded as empty rather than left alone:
+            // any edges already stored came from an MBID this artist no longer has — typically an
+            // earlier, looser match to some other act — and keeping them would keep recommending that
+            // act's neighbours. Re-asked once the empty entry goes stale, like any other.
+            var none = Empty(artist);
+            await _repo.Upsert(none);
+            _logger.LogInformation("No MusicBrainz artist for {Artist}; recorded no ListenBrainz edges", artist.ArtistName);
+            return none;
         }
 
         var related = (await _listenBrainz.GetSimilarArtists(identity.Mbid))

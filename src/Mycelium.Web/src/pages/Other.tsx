@@ -15,6 +15,7 @@ import {
   clearPlexTags,
   completePlexServerTokenLink,
   getPlexServerToken,
+  getMusicBrainzRelinkStatus,
   getSimilarityWarmStatus,
   getUserQualities,
   reapplyPlexTags,
@@ -24,6 +25,7 @@ import {
   runQualitySweep,
   setUserQuality,
   startPlexServerTokenLink,
+  startMusicBrainzRelink,
   startSimilarityWarm,
   verifyPlexServerToken,
   type PlexServerTokenStatus,
@@ -73,6 +75,7 @@ export default function Other() {
           <CleanupTool />
           <PlexTagTools />
           <SimilarityWarm />
+          <MusicBrainzRelink />
           <QueueRebuild />
           <SimilarityDebug />
         </>
@@ -681,6 +684,81 @@ function SimilarityWarm() {
             <>
               ✓ Done. Processed {status.processed} / {status.total}
               {status.errors > 0 ? `, ${status.errors} error(s)` : ''}.
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---- MusicBrainz relink ----
+
+function MusicBrainzRelink() {
+  const queryClient = useQueryClient()
+
+  const { data: status } = useQuery({
+    queryKey: ['dev', 'musicbrainz-relink'],
+    queryFn: getMusicBrainzRelinkStatus,
+    refetchInterval: (query) => (query.state.data?.running ? 1500 : false),
+  })
+
+  const start = useMutation({
+    mutationFn: startMusicBrainzRelink,
+    onSuccess: (s) => queryClient.setQueryData(['dev', 'musicbrainz-relink'], s),
+  })
+
+  const running = status?.running ?? false
+  const pct = status && status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0
+  const tally = status
+    ? [
+        `${status.kept} kept`,
+        `${status.unchanged} unchanged`,
+        `${status.relinked} relinked`,
+        `${status.cleared} cleared`,
+        `${status.skipped} manual`,
+        ...(status.errors > 0 ? [`${status.errors} error(s)`] : []),
+      ].join(', ')
+    : ''
+
+  return (
+    <div className="dev-tool">
+      <h2>Relink MusicBrainz</h2>
+      <p>
+        Links used to take MusicBrainz's top search hit whatever its name, so an act it doesn't know
+        could inherit another act's ListenBrainz neighbours. This re-checks every automatic link: ones
+        whose stored name matches are kept without a search, the rest are searched again and either
+        moved to the right artist or cleared, and their similarity edges re-fetched. Pinned and
+        unlinked artists are never touched. If anything changed, every recommendation queue is
+        rebuilt at the end. Runs in the background (~1 request/second); an artist MusicBrainz didn't
+        answer for is left as it was, so it's safe to run again.
+      </p>
+
+      <div className="controls">
+        <button
+          onClick={() => {
+            if (window.confirm('Re-check every automatic MusicBrainz link and fix the wrong ones?')) {
+              start.mutate()
+            }
+          }}
+          disabled={running || start.isPending}
+        >
+          {running ? 'Relinking…' : 'Relink MusicBrainz'}
+        </button>
+      </div>
+
+      {start.isError && <p className="error">{(start.error as Error).message}</p>}
+
+      {status && (status.running || status.finishedAt) && (
+        <p className="dev-status">
+          {status.running ? (
+            <>
+              Processed {status.processed} / {status.total} ({pct}%) — {tally}
+              {status.currentArtist ? ` — ${status.currentArtist}` : ''}
+            </>
+          ) : (
+            <>
+              ✓ Done. {tally}.{status.queuesRebuilt ? ' Recommendation queues rebuilt.' : ''}
             </>
           )}
         </p>

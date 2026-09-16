@@ -37,14 +37,15 @@ public class MusicBrainzArtistResolverTests
         var result = await _sut.ResolveIdentity("ALEX");
 
         result.Should().Be(pinned);
-        await _musicBrainz.DidNotReceive().SearchArtist(Arg.Any<string>());
+        await _musicBrainz.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
     }
 
     [Fact]
     public async Task No_override_falls_back_to_name_search_and_captures_the_mbid()
     {
         _catalog.GetMusicBrainz(Alex).Returns(((MusicBrainzIdentity, bool)?)null);
-        _musicBrainz.SearchArtist("ALEX").Returns(new MusicBrainzArtist { Id = SearchMbid, Name = "Alex Warren" });
+        _musicBrainz.SearchArtists("ALEX", Arg.Any<int>())
+            .Returns(new[] { new MusicBrainzArtist { Id = SearchMbid, Name = "Alex" } });
 
         var result = await _sut.ResolveIdentity("ALEX");
 
@@ -53,18 +54,82 @@ public class MusicBrainzArtistResolverTests
             Arg.Is<MusicBrainzIdentity>(i => i.Mbid == SearchMbid), false);
     }
 
+    /// <summary>
+    /// The top hit is not an answer unless it goes by the name: "ALEX" is not "Alex Warren". A confirmed
+    /// no-match also takes down a stored automatic link, and the album release groups resolved under it.
+    /// </summary>
+    [Fact]
+    public async Task A_top_hit_with_another_name_is_no_match_and_clears_the_stored_link()
+    {
+        _catalog.GetMusicBrainz(Alex).Returns((new MusicBrainzIdentity(SearchMbid, "Alex Warren"), false));
+        _musicBrainz.SearchArtists("ALEX", Arg.Any<int>())
+            .Returns(new[] { new MusicBrainzArtist { Id = SearchMbid, Name = "Alex Warren", Score = 100 } });
+
+        var result = await _sut.Resolve("ALEX");
+
+        result.Identity.Should().BeNull();
+        result.Unreachable.Should().BeFalse();
+        await _catalog.Received(1).ClearMusicBrainzOverride(Alex);
+        await _catalog.Received(1).ClearAlbumReleaseGroups(Alex);
+        (await _cache.GetStringAsync("musicbrainz:artist:v2:alex")).Should().Be("");
+    }
+
+    [Fact]
+    public async Task An_alias_match_further_down_the_results_is_accepted()
+    {
+        _catalog.GetMusicBrainz(Arg.Any<ArtistKey>()).Returns(((MusicBrainzIdentity, bool)?)null);
+        _musicBrainz.SearchArtists("NSYNC", Arg.Any<int>()).Returns(new[]
+        {
+            new MusicBrainzArtist { Id = "mbid-other", Name = "Sync", Score = 100 },
+            new MusicBrainzArtist
+            {
+                Id = "mbid-nsync", Name = "*NSYNC", Score = 90,
+                Aliases = new() { new MusicBrainzAlias { Name = "NSYNC" } },
+            },
+        });
+
+        (await _sut.ResolveIdentity("NSYNC"))!.Mbid.Should().Be("mbid-nsync");
+    }
+
+    [Fact]
+    public async Task An_unanswered_search_is_not_cached_and_moves_nothing()
+    {
+        _catalog.GetMusicBrainz(Alex).Returns((new MusicBrainzIdentity(SearchMbid, "Alex"), false));
+        _musicBrainz.SearchArtists("ALEX", Arg.Any<int>()).Returns((MusicBrainzArtist[]?)null);
+
+        var result = await _sut.Resolve("ALEX");
+
+        result.Unreachable.Should().BeTrue();
+        (await _cache.GetStringAsync("musicbrainz:artist:v2:alex")).Should().BeNull();
+        await _catalog.DidNotReceive().ClearMusicBrainzOverride(Arg.Any<ArtistKey>());
+        await _catalog.DidNotReceive().ClearAlbumReleaseGroups(Arg.Any<ArtistKey>());
+    }
+
+    [Fact]
+    public async Task Fresh_bypasses_a_cached_guess()
+    {
+        _catalog.GetMusicBrainz(Alex).Returns(((MusicBrainzIdentity, bool)?)null);
+        await _cache.SetStringAsync("musicbrainz:artist:v2:alex", $"{SearchMbid}\tAlex Warren\t");
+        _musicBrainz.SearchArtists("ALEX", Arg.Any<int>())
+            .Returns(new[] { new MusicBrainzArtist { Id = PinnedMbid, Name = "Alex" } });
+
+        var result = await _sut.Resolve("ALEX", fresh: true);
+
+        result.Identity!.Mbid.Should().Be(PinnedMbid);
+    }
+
     [Fact]
     public async Task Cache_hit_still_captures_the_mbid_onto_an_empty_catalog()
     {
         // A warm (Redis) cache must not stop the catalog from being populated for the Sources tab.
         _catalog.GetMusicBrainz(Alex).Returns(((MusicBrainzIdentity, bool)?)null);
         // Cached value shape is "mbid\tname\tdisambiguation".
-        await _cache.SetStringAsync("musicbrainz:artist:v1:alex", $"{SearchMbid}\tAlex Warren\t");
+        await _cache.SetStringAsync("musicbrainz:artist:v2:alex", $"{SearchMbid}\tAlex Warren\t");
 
         var result = await _sut.ResolveIdentity("ALEX");
 
         result!.Mbid.Should().Be(SearchMbid);
-        await _musicBrainz.DidNotReceive().SearchArtist(Arg.Any<string>()); // served from cache
+        await _musicBrainz.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>()); // served from cache
         await _catalog.Received(1).SetMusicBrainzIdentity(Alex,
             Arg.Is<MusicBrainzIdentity>(i => i.Mbid == SearchMbid), false);
     }
@@ -74,7 +139,7 @@ public class MusicBrainzArtistResolverTests
     {
         var identity = new MusicBrainzIdentity(SearchMbid, "Alex Warren", null);
         _catalog.GetMusicBrainz(Alex).Returns((identity, false));
-        await _cache.SetStringAsync("musicbrainz:artist:v1:alex", $"{SearchMbid}\tAlex Warren\t");
+        await _cache.SetStringAsync("musicbrainz:artist:v2:alex", $"{SearchMbid}\tAlex Warren\t");
 
         await _sut.ResolveIdentity("ALEX");
 

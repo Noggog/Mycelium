@@ -24,6 +24,20 @@ public class MusicBrainzArtist
 
     [JsonProperty("type")]
     public string? Type { get; set; }
+
+    /// <summary>
+    /// The other names the act goes by ("NSYNC" for "*NSYNC"). Included in search results without
+    /// asking; a lookup by id leaves it null unless <c>inc=aliases</c> is requested.
+    /// </summary>
+    [JsonProperty("aliases")]
+    public List<MusicBrainzAlias>? Aliases { get; set; }
+}
+
+/// <summary>One alias on a <see cref="MusicBrainzArtist"/>.</summary>
+public class MusicBrainzAlias
+{
+    [JsonProperty("name")]
+    public string? Name { get; set; }
 }
 
 /// <summary>Envelope of a MusicBrainz <c>/ws/2/artist</c> search: <c>{ "artists": [ ... ] }</c>.</summary>
