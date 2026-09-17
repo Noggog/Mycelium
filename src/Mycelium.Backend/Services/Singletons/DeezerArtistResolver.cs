@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
+using Mycelium.Deezer;
 using Mycelium.Deezer.Models;
 using Mycelium.Deezer.Services;
 using Mycelium.Interfaces;
@@ -251,13 +252,29 @@ public class DeezerArtistResolver
         await _cache.RemoveAsync(NameCacheKey(artistName));
     }
 
-    /// <summary>Free-text Deezer artist search for the "Correct association" picker.</summary>
-    public async Task<IReadOnlyList<DeezerIdentity>> SearchArtists(string query, int limit) =>
-        (await _deezer.SearchArtists(query, limit) ?? Array.Empty<DeezerArtist>())
+    /// <summary>
+    /// Free-text Deezer artist search for the "Correct association" picker. A pasted artist link is
+    /// looked up by id instead, for the artist a name search won't surface; a bare number is looked up
+    /// by id too, but ahead of the name search rather than in place of it, since it may be a name.
+    /// </summary>
+    public async Task<IReadOnlyList<DeezerIdentity>> SearchArtists(string query, int limit)
+    {
+        if (DeezerArtistLink.TryParseUrl(query) is { } linked)
+        {
+            return ToIdentity(await _deezer.GetArtist(linked)) is { } hit ? [hit] : [];
+        }
+
+        var byId = DeezerArtistLink.TryParseBareId(query) is { } id
+            ? ToIdentity(await _deezer.GetArtist(id))
+            : null;
+
+        var byName = (await _deezer.SearchArtists(query, limit) ?? Array.Empty<DeezerArtist>())
             .Select(ToIdentity)
-            .Where(i => i != null)
-            .Select(i => i!)
-            .ToArray();
+            .Where(i => i != null && i.Id != byId?.Id)
+            .Select(i => i!);
+
+        return (byId is null ? byName : byName.Prepend(byId)).ToArray();
+    }
 
     // v2: the cached value changed shape (CachedArtist -> DeezerIdentity), so bump the key to ignore
     // any stale v1 entries lingering in a persistent cache (Redis) rather than mis-deserializing them.

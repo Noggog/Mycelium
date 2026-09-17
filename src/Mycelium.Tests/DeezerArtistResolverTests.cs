@@ -147,4 +147,27 @@ public class DeezerArtistResolverTests
         result.Should().BeNull();
         await _catalog.DidNotReceive().SetDeezerIdentity(Arg.Any<ArtistKey>(), Arg.Any<DeezerIdentity>(), true);
     }
+
+    [Fact]
+    public async Task Search_looks_up_a_pasted_artist_link_by_id_without_a_name_search()
+    {
+        _deezer.GetArtist(1588149).Returns(new DeezerArtist { id = 1588149, name = "Norska", nb_fan = 900 });
+
+        var result = await _sut.SearchArtists("https://www.deezer.com/us/artist/1588149?utm_source=x", 10);
+
+        result.Should().ContainSingle().Which.Id.Should().Be(1588149);
+        await _deezer.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
+    }
+
+    [Fact]
+    public async Task Search_puts_a_bare_id_hit_ahead_of_the_name_search()
+    {
+        // "311" is a band as well as a plausible id, so both answers are offered.
+        _deezer.GetArtist(311).Returns(new DeezerArtist { id = 311, name = "Somebody" });
+        DeezerReturns("311", new DeezerArtist { id = 1386, name = "311" }, new DeezerArtist { id = 311, name = "Somebody" });
+
+        var result = await _sut.SearchArtists("311", 10);
+
+        result.Select(i => i.Id).Should().Equal(311, 1386);
+    }
 }

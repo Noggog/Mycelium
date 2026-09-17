@@ -233,7 +233,10 @@ function SourcePicker({
           <button className="auth-btn" onClick={onClose}>Close</button>
         </div>
         <p>
-          <em>Pick the right {label} artist — use the ↗ link to confirm before applying.</em>
+          <em>
+            Pick the right {label} artist — use the ↗ link to confirm before applying.
+            {key === 'deezer' && ' Not in the results? Paste its Deezer link or id.'}
+          </em>
         </p>
 
         <input
@@ -242,7 +245,7 @@ function SourcePicker({
           type="text"
           value={query}
           autoFocus
-          placeholder={`Search ${label}…`}
+          placeholder={key === 'deezer' ? 'Search Deezer, or paste an artist link or id…' : `Search ${label}…`}
           onChange={(e) => setQuery(e.target.value)}
         />
 
