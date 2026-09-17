@@ -79,6 +79,32 @@ public class StreamripArlStore
     }
 
     /// <summary>
+    /// The configured ARL, or null when there isn't one.
+    ///
+    /// <para>This relaxes the rule stated above, so it is worth saying why. The class deliberately
+    /// exposes <see cref="HasArl"/> rather than the value, because the Download page only ever needed
+    /// a yes/no and a credential has no business travelling back out to a browser. Confirming upgrade
+    /// availability needs the value itself: the check is a gateway call authenticated as the download
+    /// account, and there is no other way to ask (see <see cref="Mycelium.Deezer.Services.IDeezerQualityProbe"/>).</para>
+    ///
+    /// <para>The terms it keeps: in-process only, handed straight to the probe, never logged, never
+    /// cached here, and never reachable from an endpoint. Read per use rather than held, so replacing
+    /// the ARL from the page takes effect on the next probe with nothing to invalidate.</para>
+    /// </summary>
+    public virtual string? Read()
+    {
+        try
+        {
+            return File.Exists(ConfigPath) ? FindArl(File.ReadAllText(ConfigPath)) : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read streamrip config at {Path}", ConfigPath);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Writes <paramref name="arl"/> into the <c>[deezer]</c> table, replacing whatever was there.
     /// The caller is expected to have validated it against Deezer first — this only reports whether
     /// the file could be updated. Takes effect immediately: <c>rip</c> re-reads its config on every

@@ -52,6 +52,7 @@ public class MissingAlbumRefresher
     private readonly IAlbumMatchOverrideRepo _overrides;
     private readonly IDeezerAlbumArtistRepo _albumArtists;
     private readonly UserQualityService _qualities;
+    private readonly UpgradeAvailability _upgrades;
     private readonly ILogger<MissingAlbumRefresher> _logger;
 
     // How many /album/{id} lookups to have in flight at once. DeezerApi paces every call through a
@@ -68,6 +69,7 @@ public class MissingAlbumRefresher
         IAlbumMatchOverrideRepo overrides,
         IDeezerAlbumArtistRepo albumArtists,
         UserQualityService qualities,
+        UpgradeAvailability upgrades,
         ILogger<MissingAlbumRefresher> logger)
     {
         _catalog = catalog;
@@ -77,6 +79,7 @@ public class MissingAlbumRefresher
         _overrides = overrides;
         _albumArtists = albumArtists;
         _qualities = qualities;
+        _upgrades = upgrades;
         _logger = logger;
     }
 
@@ -441,6 +444,19 @@ public class MissingAlbumRefresher
                     upgradeable ? ownedQuality : null,
                     alternatePressing));
             }
+        }
+
+        // An upgrade candidate so far only means "we hold this, and worse than somebody here is
+        // entitled to" — our side of the question. Whether Deezer has anything better is the other
+        // side, and asking costs a call per candidate, so it is paid on the sweep and not in front of
+        // a click (the same line ArtistResolution already draws). A drill-down therefore shows rows the
+        // sweep hasn't reached yet, which is the status quo rather than a regression.
+        //
+        // Nothing is dropped unless Deezer positively said so — see UpgradeAvailability, where an
+        // unconfirmable candidate is offered exactly as it was before the pre-check existed.
+        if (resolution == ArtistResolution.Full && missing.Any(m => m.IsUpgrade))
+        {
+            missing = (await _upgrades.Confirm(missing)).ToList();
         }
 
         return (all, missing);

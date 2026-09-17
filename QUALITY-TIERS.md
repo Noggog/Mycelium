@@ -14,6 +14,7 @@
 > | Upgrade detection | `MissingAlbum.OwnedQuality`, diffed against the ceiling, filtered per user into the `UpgradeAlbum` feed category (shown with missing albums) |
 > | Skip / snooze | `AlbumBlockScope.Upgrade` + `RetryAfter`; a thumbs-down is a skip, "Deezer has nothing better" a 180-day snooze |
 > | The swap | `LibraryPathMap`, `LibraryTrash` (move-aside + manifest, never delete), `UpgradeSwap` (complete *and* strictly-better gates) |
+> | Availability pre-check | `DeezerQualityProbe` (gateway `FILESIZE_FLAC`, tri-state) + `UpgradeAvailability`, consulted from the sweep — added 2026-09-17, reversing the "go blind" decision below |
 >
 > **Deviations from the plan below, all deliberate:** gap-fill replaced the
 > periodic full sweep (per-album reads are ~14ms, so new arrivals resolve within
@@ -463,6 +464,99 @@ private-API dependency onto a per-album path, runs into Akamai bot protection
 (`_abck`/`bm_sz` cookies) at sweep volume, and makes recommendations depend on a
 credential that expires. Not worth it for a once-ever determination.)*
 
+### Reversed 2026-09-17: the pre-check is in
+
+The rejected alternative is now `DeezerQualityProbe` + `UpgradeAvailability`,
+consulted from `FetchAndDiff`. Two of the three objections above turned out to
+be weaker than they read, and the third was answered rather than accepted.
+
+**"Akamai at sweep volume" assumed a sweep.** That assumption died in the same
+sitting — the bulk sweep was dropped for feed-driven trickle, a few paragraphs
+down. The verdict is persisted where the post-hoc snooze already goes
+(`AlbumBlockScope.Upgrade` + `RetryAfter`), so it is one call per album *ever*,
+not per pass: a few dozen a night in steady state, paced at 400ms, on a session
+minted once and reused. That is not a volume signature.
+
+**"Recommendations depend on a credential that expires" is true, and turned out
+to be the whole design rather than an objection to it.** Measured while
+building this: the gateway's per-track sizes are scoped to the asking account,
+and a session with no lossless entitlement is answered `FILESIZE_FLAC: 0` *and*
+`FILESIZE_MP3_320: 0` for every track. Checked against Daft Punk's *Discovery*,
+which returns fourteen tracks of zeroes to a guest — and an expired ARL **is** a
+guest, because the gateway answers `USER_ID: 0` and carries on rather than
+refusing.
+
+So the hazard was never a failure. It is a well-formed 200 carrying a confident
+wrong "no", and the naive implementation writes off the entire library from one
+expired cookie without a single error to show for it. The shape that survives it
+is a tri-state — available / unavailable / **unknown** — where `LossyOnly` is
+returned *only* from a session that positively reported `web_lossless`, the same
+flag `DeezerSessionCheck` already reads. Everything else is `Unknown`.
+
+**`Unknown` offers the album anyway.** This is the load-bearing line. No
+credential, a dead one, a non-HiFi account, Deezer unreachable, a response shape
+we don't recognise — all degrade to exactly the blind behaviour decided on
+2026-08-24, which is known-acceptable, and nothing is persisted, so the next
+sweep asks again. "Try again later" needs no scheduling: it falls out of not
+writing a verdict. Suppressing on `Unknown` would be the silent-kill, and is the
+one thing this must never do.
+
+The asymmetry driving all of it: a false *yes* costs one drain slot and
+self-corrects via `NoBetterQualityAvailable`; a false *no* is a 180-day snooze
+on an album that was upgradeable, invisibly, at library scale. Only a
+positively-entitled session earns the right to say no.
+
+This is the same distinction the codebase already draws twice — `IDeezerApi`
+telling an empty result (a real miss) apart from `null` (never answered), and
+`AudioQuality?` using null-means-unknown so the lifted comparison is safe by
+default. Third instance, same reasoning.
+
+**What it deliberately doesn't cover.** The probe runs on
+`ArtistResolution.Full` only — the nightly sweep — never in front of a click,
+the same line that enum already draws. A drill-down therefore shows candidates
+the sweep hasn't reached yet. `DiscographyAlbum.OwnedQuality` is untouched too,
+so the Browse badge can still read "upgradeable" for an album the sweep has
+since ruled out; the badge doesn't consult upgrade verdicts today either, so
+that is pre-existing rather than new.
+
+**"Lossless exists" is the wrong question; "would the download come out
+better" is the right one.** The first two albums probed against the real gateway
+were 14/14 and 2/12. The second is the instructive one: the ladder fills the ten
+gaps at 320, so what lands reads *lossy* under `AudioQualityTier.Majority`,
+loses `UpgradeSwap`'s strictly-better gate, and leaves the MP3 exactly where it
+was. A pre-check keyed on "has any FLAC" would have offered it and spent the
+slot anyway — so the check applies `Majority` to the album it predicts will
+land, reusing the same function the library is tiered by rather than restating
+the arithmetic.
+
+**Spot check against the real candidate population (2026-09-17).** Probed the
+lossy albums this document names by title — the "genuinely-mostly-MP3" list
+above, plus the misses it calls systematic:
+
+| album | Deezer | verdict |
+|---|---|---|
+| Rye Rye vs. Filthy Fidgets | 16 tracks, 13 FLAC | offer |
+| Flying Lotus — *Pattern+Grid World* | 7 tracks, 0 FLAC | suppressed |
+| Ufomammut — *Idolum* | 7 tracks, 0 FLAC | suppressed |
+| Richard M. Jones — *Black Rider* | 4 tracks, 1 FLAC | suppressed (1/4) |
+| Mathias Grassow, gorse panshawe, Hearts of Space | no match | never a row |
+
+Three of the four matched albums would be suppressed — including *Black Rider*,
+the own-5/Deezer-4 case set aside as "accepted, silent music loss": the quality
+rule catches it before the completeness gate has to.
+
+**Caveat, and it is a large one: n=4, and not a random four.** These are the
+albums this document picked out *because* they are mostly MP3, which skews
+heavily toward obscure and unreleased material. It is evidence that the dud rate
+is not negligible, not a measurement of it.
+
+**The real count is still owed** and needs a working Plex token or the Mongo
+tunnel — derive the 291 in-scope candidates, probe each, count. The 15-of-40
+Deezer miss rate above does not answer it: those are albums with *no match at
+all*, which never produce an upgrade row in the first place. What matters is the
+share of matched-but-lossy candidates with no usable FLAC, and the spot check
+says that share is worth knowing.
+
 ### Skip vs snooze
 
 Two distinct verdicts, both needed:
@@ -587,8 +681,9 @@ eventually, not before the first attempt.
   incidentally handled for free by the promote-only-if-complete rule above.
 - **Albums missing from Deezer.** Simply don't offer the upgrade.
 - **Ratings/play-count loss on swap.** Accepted; not worth guarding.
-- **Gateway pre-check of FLAC availability.** Rejected in favour of blind +
-  skip.
+- **Gateway pre-check of FLAC availability.** ~~Rejected in favour of blind +
+  skip.~~ Reversed 2026-09-17 — see *the pre-check is in*, above. Blind remains
+  the fallback for every case the check can't answer.
 
 ## Operational notes for the first sweep
 

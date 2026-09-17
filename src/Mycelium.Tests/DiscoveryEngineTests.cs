@@ -42,6 +42,7 @@ public class DiscoveryEngineTests
             // A lossless ceiling: these cases are about which albums are missing, and an owned album
             // with no recorded quality is never upgradeable whatever the ceiling is.
             new UserQualityService(_users, AudioQuality.Lossless),
+            InertUpgradeAvailability.Instance(),
             NullLogger<MissingAlbumRefresher>.Instance);
         _sut = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,

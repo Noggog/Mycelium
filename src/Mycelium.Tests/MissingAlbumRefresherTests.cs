@@ -37,6 +37,7 @@ public class MissingAlbumRefresherTests
             // lossy tier. (Ceiling() never drops below the default, which is deliberate: a user
             // created tomorrow would out-rank everyone, so the diff has to have covered them.)
             new UserQualityService(_users, AudioQuality.Lossy),
+            InertUpgradeAvailability.Instance(),
             NullLogger<MissingAlbumRefresher>.Instance);
 
         _catalog.GetAllPresent().Returns(new[] { new CatalogArtist(new ArtistKey(Artist), null, default) });

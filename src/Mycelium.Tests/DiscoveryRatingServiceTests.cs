@@ -63,6 +63,7 @@ public class DiscoveryRatingServiceTests
         var quality = new UserQualityService(_users, AudioQuality.Lossless);
         var refresher = new MissingAlbumRefresher(
             _catalog, resolver, _deezer, _missing, _overrides, _albumArtists, quality,
+            InertUpgradeAvailability.Instance(),
             NullLogger<MissingAlbumRefresher>.Instance);
         var engine = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,
