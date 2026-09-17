@@ -371,8 +371,9 @@ public class ArchiveBuilder
 
             // Pending rows are the recommendation queue, not taste: the replenisher rebuilds them from
             // the similarity graph, so archiving them would churn constantly while preserving nothing
-            // anyone chose.
-            if (subject is null || artist is null || status is null || status == "Pending")
+            // anyone chose. Snoozed rows are the same queue deferred for a while — "not now" is not a
+            // verdict, and it expires on its own.
+            if (subject is null || artist is null || status is null || status is "Pending" or "Snoozed")
             {
                 continue;
             }
@@ -393,7 +394,7 @@ public class ArchiveBuilder
     private static JsonObject Verdict(JsonObject source, string status)
     {
         var row = new JsonObject { ["verdict"] = status };
-        Copy(source, row, "decidedAt", "snoozeUntil");
+        Copy(source, row, "decidedAt");
 
         // The three per-verdict flags collapse to one, since a row only carries a single verdict.
         // "I meant it" is a hand-made decision nothing can re-derive.

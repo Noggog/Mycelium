@@ -401,6 +401,24 @@ public class ArchiveBuilderTests
         File(files, "Library/Suggested/metadata.yaml").Should().NotContain("ratings");
     }
 
+    [Fact]
+    public void Snoozed_queue_rows_are_not_taste_and_are_dropped()
+    {
+        var files = new ArchiveBuilder().Build(Input(
+            users: [User("sub-1", "kelsey")],
+            artists: [Artist("Later")],
+            artistVerdicts:
+            [
+                new JsonObject
+                {
+                    ["userId"] = "sub-1", ["artist"] = "Later", ["status"] = "Snoozed",
+                    ["snoozeUntil"] = "2026-10-01T00:00:00Z",
+                },
+            ]));
+
+        File(files, "Library/Later/metadata.yaml").Should().NotContain("ratings").And.NotContain("snooze");
+    }
+
     // ---- users ----
 
     [Fact]
