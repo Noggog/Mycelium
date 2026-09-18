@@ -408,13 +408,12 @@ function Monitor({
   busy: boolean
 }) {
   const current = s.current[0]
+  // Nothing to say while idle: the counts below already show what's queued.
   const activity = current
     ? `⬇ Downloading: ${current.album ?? current.artist.artistName} — ${current.artist.artistName}`
-    : s.queued > 0
-      ? s.automatic
-        ? `Idle — ${s.queued} album${s.queued === 1 ? '' : 's'} queued (auto)`
-        : `${s.queued} album${s.queued === 1 ? '' : 's'} queued — use Download now`
-      : 'Idle — queue empty'
+    : s.queued > 0 && !s.automatic
+      ? `${s.queued} album${s.queued === 1 ? '' : 's'} queued — use Download now`
+      : null
 
   // What the drainer does next. The wait between two albums wins when there is one, since it's the
   // nearer event; otherwise it's the next automatic sweep — which only means anything on auto, as the
@@ -471,7 +470,7 @@ function Monitor({
         </button>
         <span className="dl-backend">backend: {s.backend}</span>
       </div>
-      <div className={current ? 'dl-activity active' : 'dl-activity'}>{activity}</div>
+      {activity && <div className={current ? 'dl-activity active' : 'dl-activity'}>{activity}</div>}
       {next && <div className="dl-next">{next.label} <strong>{countdown(next.at, now)}</strong></div>}
       {s.blocking !== 'None' && <BlockedBanner failure={s.blocking} onFixed={onFixed} />}
       <div className="dl-counts">
@@ -479,20 +478,6 @@ function Monitor({
         <span>Downloading <strong>{s.downloading}</strong></span>
         <span>Complete <strong>{s.complete}</strong></span>
         <span>Failed <strong>{s.failed}</strong></span>
-      </div>
-      {/* Reads batch-first: the batch cadence is what sets the pace (3 albums every 30m ≈ one per
-          10m), while the per-item wait only spaces albums out inside a batch. The ± is the random
-          spread applied to both waits. */}
-      <div className="dl-throttle">
-        {s.fastUntil && s.automatic
-          ? 'fast · queueing everything'
-          : s.automatic
-            ? `auto · batch ${s.batchSize} every ~${s.batchIntervalMinutes}m`
-            : s.fastUntil
-              ? 'manual only · fast waiting on automatic'
-              : `manual only · batch ${s.batchSize}`}
-        {' · '}~{s.itemDelaySeconds}s between items
-        {s.jitterPercent > 0 ? ` (±${s.jitterPercent}%)` : ''}
       </div>
     </div>
   )
@@ -564,14 +549,6 @@ function PasteAlbum({ onAdded }: { onAdded: () => void }) {
   return (
     <div className="dl-section paste-album">
       <h2 className="feed-section-title">Add an album by link</h2>
-      {/* Kept to one line at the page's 720px measure — the placeholder below already shows the URL
-          shape, so saying "paste a Deezer album URL" here only bought a wrapped, orphaned line. */}
-      <p className="disc-sub">
-        <em>
-          For releases nothing recommends — compilations, reissues, anything filed under an artist
-          the library doesn't follow.
-        </em>
-      </p>
       <div className="paste-album-row">
         <input
           type="text"
@@ -821,7 +798,6 @@ export default function Purchases() {
     .sort((a, b) =>
       upgradeRank(a) - upgradeRank(b)
       || (b.upgrade?.at ?? b.requestedAt).localeCompare(a.upgrade?.at ?? a.requestedAt))
-  const upgradesAttention = upgrades.filter(needsAttention).length
   const upgradesActive = upgrades.filter((i) => i.status !== 'InLibrary').length
   const items = all.filter((i) => i.kind !== 'UpgradeAlbum')
   // Only albums are actionable here — they're what the downloader can grab. Liked artists still seed
@@ -969,12 +945,6 @@ export default function Purchases() {
           <h2 className="feed-section-title">
             Complete <span className="feed-count">{sent.length}</span>
           </h2>
-          <p className="disc-sub">
-            <em>
-              Downloaded — these clear themselves once the album turns up in your library, which the
-              server re-checks every few minutes for a while after the download.
-            </em>
-          </p>
           <div className="disc-list">
             {sent.map((item) =>
               row(
@@ -1001,16 +971,6 @@ export default function Purchases() {
           <h2 className="feed-section-title">
             Upgrades <span className="feed-count">{upgrades.length}</span>
           </h2>
-          <p className="disc-sub">
-            <em>
-              {upgradesAttention > 0
-                ? `${upgradesAttention} need${upgradesAttention === 1 ? 's' : ''} attention. `
-                : ''}
-              Better copies of albums you already own. The old copy is moved aside, not deleted.
-              Finished upgrades clear once Plex has kept their match; the rest stay for 30 days or
-              until dismissed.
-            </em>
-          </p>
           <div className="disc-list">
             {upgrades.map((item) => (
               <UpgradeRow

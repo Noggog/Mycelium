@@ -2640,11 +2640,6 @@ button.detail-chip.via:hover {
 .dl-counts strong {
   color: var(--cyan);
 }
-.dl-throttle {
-  margin-top: 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-faint);
-}
 .dl-spinner {
   font-size: 1.2rem;
   color: var(--good);
