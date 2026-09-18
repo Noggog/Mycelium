@@ -45,27 +45,33 @@ public class UpgradeMatchKeeperTests
         _library.QueryAlbumMatch(AlbumKey).Returns(match);
     }
 
-    private PurchaseItem Upgrade(string? replacedMatch = OldMatch, DateTimeOffset? sentAt = null)
+    private PurchaseItem Upgrade(
+        UpgradeMatchCheck match = UpgradeMatchCheck.Waiting, DateTimeOffset? checkingSince = null)
     {
+        var since = checkingSince ?? DateTimeOffset.UtcNow;
         var item = new PurchaseItem(
             "album:children of bodom hate crew deathroll", FeedKind.UpgradeAlbum,
             new ArtistKey("Children of Bodom"), "Hate Crew Deathroll", null, 0, Array.Empty<string>(),
-            PurchaseStatus.InLibrary, DateTimeOffset.UtcNow, sentAt ?? DateTimeOffset.UtcNow, 1,
-            OwnedQuality: AudioQuality.Lossy, ReplacedPlexMatch: replacedMatch);
+            PurchaseStatus.InLibrary, DateTimeOffset.UtcNow, since, 1,
+            OwnedQuality: AudioQuality.Lossy,
+            Upgrade: new UpgradeReport(since, ReplacedQuality: AudioQuality.Lossy,
+                NewQuality: AudioQuality.Lossless, Match: match, OldMatch: OldMatch,
+                MatchCheckSince: since));
         _purchases.Seed(item);
         return item;
     }
 
-    private string? Saved() => _purchases.Items.Single().ReplacedPlexMatch;
+    private UpgradeReport Report() => _purchases.Items.Single().Upgrade!;
 
     [Fact]
     public async Task Remember_saves_the_match_of_the_copy_being_replaced()
     {
-        var item = Upgrade(replacedMatch: null);
+        var item = Upgrade(UpgradeMatchCheck.None);
 
         await Sut().Remember(item, AlbumKey);
 
-        Saved().Should().Be(OldMatch);
+        Report().OldMatch.Should().Be(OldMatch);
+        Report().Match.Should().Be(UpgradeMatchCheck.Waiting);
     }
 
     [Fact]
@@ -73,11 +79,11 @@ public class UpgradeMatchKeeperTests
     {
         // A local:// id is Plex saying "not matched to anything" — there is no release to go back to.
         Plex(AudioQuality.Lossy, "local://12345");
-        var item = Upgrade(replacedMatch: null);
+        var item = Upgrade(UpgradeMatchCheck.None);
 
         await Sut().Remember(item, AlbumKey);
 
-        Saved().Should().BeNull();
+        Report().Match.Should().Be(UpgradeMatchCheck.NotMatched);
     }
 
     [Fact]
@@ -88,7 +94,7 @@ public class UpgradeMatchKeeperTests
         await Sut().CheckPending();
 
         await _matcher.DidNotReceiveWithAnyArgs().RematchAlbum(default, default!, default!);
-        Saved().Should().BeNull();
+        Report().Match.Should().Be(UpgradeMatchCheck.Kept);
     }
 
     [Fact]
@@ -102,7 +108,8 @@ public class UpgradeMatchKeeperTests
         await Sut().CheckPending();
 
         await _matcher.Received(1).RematchAlbum(AlbumKey, OldMatch, "Hate Crew Deathroll");
-        Saved().Should().BeNull();
+        Report().Match.Should().Be(UpgradeMatchCheck.Rematched);
+        Report().NewMatch.Should().Be(OtherMatch);
     }
 
     [Fact]
@@ -115,7 +122,7 @@ public class UpgradeMatchKeeperTests
 
         await Sut().CheckPending();
 
-        Saved().Should().Be(OldMatch);
+        Report().Match.Should().Be(UpgradeMatchCheck.Waiting);
     }
 
     [Fact]
@@ -127,18 +134,40 @@ public class UpgradeMatchKeeperTests
         await Sut().CheckPending();
 
         await _matcher.Received(1).RematchAlbum(AlbumKey, OldMatch, "Hate Crew Deathroll");
-        Saved().Should().Be(OldMatch);
+        Report().Match.Should().Be(UpgradeMatchCheck.Waiting);
+        // What Plex picked is kept even while retrying, so the page can say what it's matched to.
+        Report().NewMatch.Should().Be(OtherMatch);
     }
 
     [Fact]
-    public async Task It_gives_up_after_the_settle_window_rather_than_polling_forever()
+    public async Task It_gives_up_after_the_settle_window_and_flags_a_fix_match()
     {
-        Upgrade(sentAt: DateTimeOffset.UtcNow - TimeSpan.FromDays(1));
-        Plex(AudioQuality.Lossy, OldMatch);
+        Upgrade(checkingSince: DateTimeOffset.UtcNow - TimeSpan.FromDays(1));
+        Plex(AudioQuality.Lossless, OtherMatch);
 
         await Sut().CheckPending();
 
-        Saved().Should().BeNull();
+        Report().Match.Should().Be(UpgradeMatchCheck.NeedsFixMatch);
+    }
+
+    [Fact]
+    public async Task Recheck_after_a_fix_match_by_hand_confirms_it()
+    {
+        Upgrade(UpgradeMatchCheck.NeedsFixMatch, DateTimeOffset.UtcNow - TimeSpan.FromDays(1));
+        Plex(AudioQuality.Lossless, OldMatch);
+
+        (await Sut().Recheck("album:children of bodom hate crew deathroll")).Should().BeTrue();
+
+        Report().Match.Should().Be(UpgradeMatchCheck.Kept);
+    }
+
+    [Fact]
+    public async Task Recheck_refuses_an_upgrade_with_no_match_to_go_back_to()
+    {
+        var item = Upgrade(UpgradeMatchCheck.NotMatched);
+        _purchases.Seed(item with { Upgrade = item.Upgrade! with { OldMatch = "local://1" } });
+
+        (await Sut().Recheck(item.Id)).Should().BeFalse();
     }
 
     [Fact]
@@ -150,6 +179,6 @@ public class UpgradeMatchKeeperTests
         var act = () => Sut().CheckPending();
 
         await act.Should().NotThrowAsync();
-        Saved().Should().Be(OldMatch);
+        Report().Match.Should().Be(UpgradeMatchCheck.Waiting);
     }
 }

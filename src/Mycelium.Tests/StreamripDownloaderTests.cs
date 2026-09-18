@@ -141,6 +141,7 @@ public class StreamripDownloaderTests : IDisposable
                     Substitute.For<ILibraryQuery>(), Substitute.For<ILibraryMatcher>(),
                     Substitute.For<IArtistCatalogRepo>(), new FakePurchaseRepo(), DownloaderConfigForTests.Default,
                     NullLogger<UpgradeMatchKeeper>.Instance),
+                new FakePurchaseRepo(),
                 NullLogger<UpgradeSwap>.Instance),
             NullLogger<StreamripDownloader>.Instance);
 

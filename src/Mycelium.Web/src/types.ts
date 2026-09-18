@@ -349,6 +349,38 @@ export interface PurchaseItem {
   // `includeCompleted=true` — an automation client polling the ids it queued, which needs to see the
   // acquisition finish rather than watch the row disappear.
   inLibraryAt: string | null
+  // For an UpgradeAlbum row: what the last attempt to swap it in did. Null until an upgrade has
+  // reached the swap. Finished upgrades stay on the Download page for a while (recentUpgrades=true)
+  // so this can be read after the row has landed.
+  upgrade: UpgradeReport | null
+}
+
+// Mirrors UpgradeMatchCheck (UpgradeReport.cs): whether the upgraded album kept the Plex match its
+// star ratings are stored against.
+export type UpgradeMatchCheck =
+  | 'None'
+  | 'Waiting'
+  | 'Kept'
+  | 'Rematched'
+  | 'NeedsFixMatch'
+  | 'NotMatched'
+
+// Mirrors UpgradeReport (UpgradeReport.cs).
+export interface UpgradeReport {
+  at: string
+  // Why the swap was refused ("got 9 of 10 tracks"); null when it went ahead.
+  refusalDetail: string | null
+  replacedQuality: AudioQuality | null
+  newQuality: AudioQuality | null
+  filesMoved: number
+  // Where the old copy's files went — to recover them, or delete them once happy.
+  movedTo: string | null
+  albumFolder: string | null
+  match: UpgradeMatchCheck
+  oldMatch: string | null
+  // What Plex matched the new copy to, when it differed from the old copy's match.
+  newMatch: string | null
+  matchCheckSince: string | null
 }
 
 // Mirror ManualAddResult / ManualAddOutcome (IPurchaseRepo.cs) — the answer to pasting a Deezer

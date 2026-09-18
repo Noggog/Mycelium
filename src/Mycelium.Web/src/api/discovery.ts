@@ -203,7 +203,9 @@ export async function getRatings(): Promise<RatedItem[]> {
 // types. The filter exists for the automation client, which doesn't go through this module; nothing in
 // the SPA has a set of ids to narrow by.
 export async function getPurchases(): Promise<PurchaseItem[]> {
-  const res = await fetch('/api/purchases')
+  // recentUpgrades: keep finished upgrades on the page for a while, so the Upgrades section can say
+  // how they went (what moved where, whether ratings survived) after the row has landed.
+  const res = await fetch('/api/purchases?recentUpgrades=true')
   if (!res.ok) {
     throw new Error(`Failed to load wishlist: ${res.status} ${res.statusText}`)
   }
@@ -298,6 +300,16 @@ export async function removeManualPurchase(id: string): Promise<void> {
 }
 
 // Undo — move a downloaded/queued item back to "pending".
+// Check a finished upgrade's Plex match again — after a Fix Match by hand, or to retry a rematch that
+// didn't take. Answers with the row as it now stands.
+export async function recheckUpgrade(id: string): Promise<PurchaseItem> {
+  const res = await fetch(`/api/purchases/upgrade/recheck?id=${encodeURIComponent(id)}`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to recheck the Plex match: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as PurchaseItem
+}
+
 export async function unsendPurchase(id: string): Promise<void> {
   const res = await fetch(`/api/purchases/unsend?id=${encodeURIComponent(id)}`, { method: 'POST' })
   if (!res.ok) {

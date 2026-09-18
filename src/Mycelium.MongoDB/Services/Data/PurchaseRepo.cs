@@ -31,7 +31,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldAcquiredQuality = "acquiredQuality";
     private const string FieldOwnedQuality = "ownedQuality";
     private const string FieldAddedBy = "addedBy";
-    private const string FieldReplacedPlexMatch = "replacedPlexMatch";
+    private const string FieldUpgrade = "upgrade";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -144,12 +144,55 @@ public class PurchaseRepo : IPurchaseRepo
         return result.ModifiedCount > 0;
     }
 
-    public Task SetReplacedPlexMatch(string id, string? match) =>
+    public Task SetUpgrade(string id, UpgradeReport? report) =>
         Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", id),
-            match is null
-                ? Builders<BsonDocument>.Update.Unset(FieldReplacedPlexMatch)
-                : Builders<BsonDocument>.Update.Set(FieldReplacedPlexMatch, match));
+            report is null
+                ? Builders<BsonDocument>.Update.Unset(FieldUpgrade)
+                : Builders<BsonDocument>.Update.Set(FieldUpgrade, ToBson(report)));
+
+    private static BsonValue Nullable(string? value) => value is null ? BsonNull.Value : value;
+
+    private static BsonDocument ToBson(UpgradeReport r) => new()
+    {
+        { "at", r.At.UtcDateTime },
+        { "refusalDetail", Nullable(r.RefusalDetail) },
+        { "replacedQuality", Nullable(r.ReplacedQuality?.ToString()) },
+        { "newQuality", Nullable(r.NewQuality?.ToString()) },
+        { "filesMoved", r.FilesMoved },
+        { "movedTo", Nullable(r.MovedTo) },
+        { "albumFolder", Nullable(r.AlbumFolder) },
+        { "match", r.Match.ToString() },
+        { "oldMatch", Nullable(r.OldMatch) },
+        { "newMatch", Nullable(r.NewMatch) },
+        { "matchCheckSince", r.MatchCheckSince is { } since ? since.UtcDateTime : BsonNull.Value },
+    };
+
+    private static UpgradeReport? UpgradeFrom(BsonDocument doc)
+    {
+        if (!doc.TryGetValue(FieldUpgrade, out var value) || !value.IsBsonDocument)
+        {
+            return null;
+        }
+
+        var u = value.AsBsonDocument;
+        string? Str(string f) => u.TryGetValue(f, out var v) && v.IsString ? v.AsString : null;
+        DateTimeOffset? Date(string f) =>
+            u.TryGetValue(f, out var v) && v.IsValidDateTime ? v.ToUniversalTime() : null;
+
+        return new UpgradeReport(
+            At: Date("at") ?? DateTimeOffset.MinValue,
+            RefusalDetail: Str("refusalDetail"),
+            ReplacedQuality: AudioQualityTier.Parse(Str("replacedQuality")),
+            NewQuality: AudioQualityTier.Parse(Str("newQuality")),
+            FilesMoved: u.TryGetValue("filesMoved", out var n) && n.IsNumeric ? n.ToInt32() : 0,
+            MovedTo: Str("movedTo"),
+            AlbumFolder: Str("albumFolder"),
+            Match: Enum.TryParse<UpgradeMatchCheck>(Str("match"), out var m) ? m : UpgradeMatchCheck.None,
+            OldMatch: Str("oldMatch"),
+            NewMatch: Str("newMatch"),
+            MatchCheckSince: Date("matchCheckSince"));
+    }
 
     public async Task<bool> SetStatus(
         string id,
@@ -239,6 +282,6 @@ public class PurchaseRepo : IPurchaseRepo
             // field existed — which reads as "finished, arrival time unknown" rather than "unfinished",
             // since Status is still what says the row is done.
             inLibraryAt,
-            StrN(FieldReplacedPlexMatch));
+            UpgradeFrom(doc));
     }
 }

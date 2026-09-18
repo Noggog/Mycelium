@@ -47,7 +47,7 @@ public class UpgradeSwapTests : IDisposable
             new LibraryTrash(NullLogger<LibraryTrash>.Instance, new LibraryTrashConfig(trashRoot)),
             new UpgradeMatchKeeper(_query, Substitute.For<ILibraryMatcher>(), _catalog, _purchases,
                 DownloaderConfigForTests.Default, NullLogger<UpgradeMatchKeeper>.Instance),
-            NullLogger<UpgradeSwap>.Instance);
+            _purchases, NullLogger<UpgradeSwap>.Instance);
 
     /// <summary>Puts an owned album on disk and tells the fake library where Plex thinks it is.</summary>
     private string[] ExistingAlbum(params string[] fileNames)
@@ -162,7 +162,27 @@ public class UpgradeSwapTests : IDisposable
 
         await Sut().PrepareForPromotion(item, _staged, landed: 1, expected: 1);
 
-        _purchases.Items.Single().ReplacedPlexMatch.Should().Be("plex://album/blue-rev");
+        var report = _purchases.Items.Single().Upgrade!;
+        report.OldMatch.Should().Be("plex://album/blue-rev");
+        report.Match.Should().Be(UpgradeMatchCheck.Waiting);
+        // And what the swap did, for the Download page to show.
+        report.FilesMoved.Should().Be(1);
+        report.MovedTo.Should().NotBeNull();
+        report.ReplacedQuality.Should().Be(AudioQuality.Lossy);
+        report.NewQuality.Should().Be(AudioQuality.Lossless);
+    }
+
+    [Fact]
+    public async Task A_refusal_is_recorded_on_the_row_with_its_reason()
+    {
+        ExistingAlbum("01.mp3", "02.mp3", "03.mp3");
+        Downloaded("01.flac", "02.flac");
+        var item = Upgrade();
+        _purchases.Seed(item);
+
+        await Sut().PrepareForPromotion(item, _staged, landed: 2, expected: 3);
+
+        _purchases.Items.Single().Upgrade!.RefusalDetail.Should().Be("got 2 of 3 tracks");
     }
 
     [Fact]

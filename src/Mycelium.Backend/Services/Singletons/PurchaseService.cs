@@ -98,16 +98,34 @@ public class PurchaseService
     /// this method was written for must not accumulate every record ever acquired.</para>
     /// </summary>
     public async Task<PurchaseItem[]> GetActive(
-        IReadOnlyCollection<long>? deezerAlbumIds = null, bool includeCompleted = false)
+        IReadOnlyCollection<long>? deezerAlbumIds = null, bool includeCompleted = false,
+        bool recentUpgrades = false)
     {
         await Reconcile();
         var rows = deezerAlbumIds is null
             ? await _purchases.GetAll()
             : await _purchases.GetByDeezerAlbumIds(deezerAlbumIds);
+        var since = DateTimeOffset.UtcNow - RecentUpgradeWindow;
         return rows
-            .Where(p => includeCompleted || p.Status != PurchaseStatus.InLibrary)
+            .Where(p => includeCompleted
+                        || p.Status != PurchaseStatus.InLibrary
+                        || (recentUpgrades && IsRecentUpgrade(p, since)))
             .ToArray();
     }
+
+    /// <summary>
+    /// How long a finished upgrade stays on the Download page. Long enough to notice one that needs a
+    /// Fix Match, or to go and clear out the old copy; after that it's history.
+    /// </summary>
+    public static readonly TimeSpan RecentUpgradeWindow = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// A finished upgrade the page should still show: swapped in recently, or still waiting on (or
+    /// needing) its Plex match to be sorted out — that one stays until it is, however old.
+    /// </summary>
+    private static bool IsRecentUpgrade(PurchaseItem p, DateTimeOffset since) =>
+        p.Kind == FeedKind.UpgradeAlbum && p.Upgrade is { } u
+        && (u.At >= since || u.Match is UpgradeMatchCheck.Waiting or UpgradeMatchCheck.NeedsFixMatch);
 
     /// <summary>Moves a downloaded/queued item back to <see cref="PurchaseStatus.Pending"/> (undo).</summary>
     public Task<bool> Unsend(string id) => _purchases.SetStatus(id, PurchaseStatus.Pending);

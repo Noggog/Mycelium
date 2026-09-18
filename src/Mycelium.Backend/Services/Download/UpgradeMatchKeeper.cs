@@ -43,33 +43,66 @@ public class UpgradeMatchKeeper
     }
 
     /// <summary>
-    /// Saves what the copy about to be replaced is matched to. Called before its files move, so the
+    /// The report to save before the old copy's files move: what it is matched to, so a new copy that
+    /// Plex matches to a different release can be put back once it lands. Saved before the move so the
     /// answer is on the row even if the process dies between the swap and Plex's rescan.
     /// </summary>
-    public async Task Remember(PurchaseItem item, int albumRatingKey)
+    public async Task<UpgradeReport> Remember(PurchaseItem item, int albumRatingKey)
     {
         var match = await _library.QueryAlbumMatch(albumRatingKey);
+        var now = DateTimeOffset.UtcNow;
+        UpgradeReport report;
         if (match is null || !match.StartsWith(AgentMatchPrefix, StringComparison.Ordinal))
         {
             _logger.LogInformation(
                 "{Artist} — {Album} isn't matched in Plex ({Match}); no match to carry across the upgrade",
                 item.Artist.ArtistName, item.Album, match ?? "no match");
-            await _purchases.SetReplacedPlexMatch(item.Id, null);
-            return;
+            report = new UpgradeReport(now, Match: UpgradeMatchCheck.NotMatched, OldMatch: match);
+        }
+        else
+        {
+            report = new UpgradeReport(
+                now, Match: UpgradeMatchCheck.Waiting, OldMatch: match, MatchCheckSince: now);
         }
 
-        await _purchases.SetReplacedPlexMatch(item.Id, match);
+        await _purchases.SetUpgrade(item.Id, report);
+        return report;
     }
 
-    /// <summary>Whether any upgrade is still waiting for its match to be checked.</summary>
+    /// <summary>Whether this row is an upgrade still waiting for its match to be checked.</summary>
     public static bool IsPending(PurchaseItem item) =>
-        item.Kind == FeedKind.UpgradeAlbum && item.ReplacedPlexMatch is not null;
+        item.Kind == FeedKind.UpgradeAlbum && item.Upgrade?.Match == UpgradeMatchCheck.Waiting;
+
+    /// <summary>
+    /// Starts checking a finished upgrade's match again — after a Fix Match by hand, say, or to give a
+    /// rematch that didn't take another go — and runs the first check straight away. Returns false when
+    /// the row isn't an upgrade with a saved match to check against.
+    /// </summary>
+    public async Task<bool> Recheck(string id)
+    {
+        var item = (await _purchases.GetAll()).FirstOrDefault(p => p.Id == id);
+        if (item?.Kind != FeedKind.UpgradeAlbum || item.Upgrade?.OldMatch is not { } old
+            || !old.StartsWith(AgentMatchPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var restarted = item with
+        {
+            Upgrade = item.Upgrade with
+            {
+                Match = UpgradeMatchCheck.Waiting, MatchCheckSince = DateTimeOffset.UtcNow,
+            },
+        };
+        await _purchases.SetUpgrade(id, restarted.Upgrade);
+        await Check(restarted);
+        return true;
+    }
 
     /// <summary>
     /// Checks every upgrade whose new copy may have landed, rematching any that Plex matched to a
     /// different release. An upgrade that hasn't shown up yet is left for the next pass; one still
-    /// unresolved after the settle window is given up on with a warning naming the match to restore
-    /// by hand.
+    /// unresolved after the settle window is marked as needing a Fix Match by hand.
     /// </summary>
     public async Task CheckPending()
     {
@@ -90,17 +123,19 @@ public class UpgradeMatchKeeper
 
     private async Task Check(PurchaseItem item)
     {
-        var wanted = item.ReplacedPlexMatch!;
+        var report = item.Upgrade!;
+        var wanted = report.OldMatch!;
+        string? current = null;
         var key = await AlbumRatingKey(_catalog, item);
         if (key is { } albumKey && await IsTheNewCopy(item, albumKey))
         {
-            var current = await _library.QueryAlbumMatch(albumKey);
+            current = await _library.QueryAlbumMatch(albumKey);
             if (current == wanted)
             {
                 _logger.LogInformation(
                     "Upgraded {Artist} — {Album} kept its Plex match, so its ratings carried over",
                     item.Artist.ArtistName, item.Album);
-                await _purchases.SetReplacedPlexMatch(item.Id, null);
+                await _purchases.SetUpgrade(item.Id, report with { Match = UpgradeMatchCheck.Kept });
                 return;
             }
 
@@ -111,18 +146,26 @@ public class UpgradeMatchKeeper
                     "Plex matched the upgraded {Artist} — {Album} to {Current}; rematched it to {Wanted}, "
                     + "the release the old copy had, which is where its ratings are",
                     item.Artist.ArtistName, item.Album, current ?? "nothing", wanted);
-                await _purchases.SetReplacedPlexMatch(item.Id, null);
+                await _purchases.SetUpgrade(
+                    item.Id, report with { Match = UpgradeMatchCheck.Rematched, NewMatch = current });
                 return;
+            }
+
+            // Remember what Plex picked even while still retrying, so the page can say so.
+            if (current != report.NewMatch)
+            {
+                report = report with { NewMatch = current };
+                await _purchases.SetUpgrade(item.Id, report);
             }
         }
 
-        if ((item.SentAt ?? item.RequestedAt) + _config.SettleWindow < DateTimeOffset.UtcNow)
+        if ((report.MatchCheckSince ?? report.At) + _config.SettleWindow < DateTimeOffset.UtcNow)
         {
             _logger.LogWarning(
                 "Gave up confirming the Plex match of the upgraded {Artist} — {Album}. If its ratings "
                 + "are missing, use Fix Match in Plex and pick the release matching {Wanted}",
                 item.Artist.ArtistName, item.Album, wanted);
-            await _purchases.SetReplacedPlexMatch(item.Id, null);
+            await _purchases.SetUpgrade(item.Id, report with { Match = UpgradeMatchCheck.NeedsFixMatch });
         }
     }
 
@@ -135,7 +178,7 @@ public class UpgradeMatchKeeper
     {
         var quality = (await _library.QueryAlbumQuality(new[] { albumKey }))
             .GetValueOrDefault(albumKey);
-        return item.OwnedQuality < quality;
+        return (item.Upgrade?.ReplacedQuality ?? item.OwnedQuality) < quality;
     }
 
     /// <summary>

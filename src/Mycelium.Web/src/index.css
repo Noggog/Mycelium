@@ -3597,3 +3597,57 @@ a.playlist-badge.is-link:hover {
   font-size: 0.8rem;
 }
 
+
+/* Upgrades section on the Download page. A row carries more than a queue row: a status line saying
+   how the swap went (and whether ratings survived it), plus a collapsible record of what moved where. */
+.up-row {
+  align-items: flex-start;
+}
+.up-row .disc-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.up-quality {
+  color: var(--cyan);
+}
+.up-status {
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.up-status.good {
+  color: var(--good);
+}
+.up-status.bad {
+  color: var(--bad);
+}
+.up-status.dim {
+  color: var(--text-dim);
+}
+.up-details {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.up-details summary {
+  cursor: pointer;
+  color: var(--text-faint);
+}
+.up-details dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0.35rem 0 0;
+}
+.up-details dt {
+  color: var(--text-faint);
+}
+.up-details dd {
+  margin: 0;
+  /* Paths and plex:// ids are long unbroken strings; let them wrap rather than widen the row. */
+  overflow-wrap: anywhere;
+}
+.up-details code {
+  font-size: 0.74rem;
+  color: var(--text);
+}

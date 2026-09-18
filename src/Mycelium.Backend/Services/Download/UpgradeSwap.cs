@@ -69,6 +69,7 @@ public class UpgradeSwap
     private readonly LibraryPathMap _paths;
     private readonly LibraryTrash _trash;
     private readonly UpgradeMatchKeeper _matches;
+    private readonly IPurchaseRepo _purchases;
     private readonly ILogger<UpgradeSwap> _logger;
 
     public UpgradeSwap(
@@ -77,6 +78,7 @@ public class UpgradeSwap
         LibraryPathMap paths,
         LibraryTrash trash,
         UpgradeMatchKeeper matches,
+        IPurchaseRepo purchases,
         ILogger<UpgradeSwap> logger)
     {
         _library = library;
@@ -84,6 +86,7 @@ public class UpgradeSwap
         _paths = paths;
         _trash = trash;
         _matches = matches;
+        _purchases = purchases;
         _logger = logger;
     }
 
@@ -96,6 +99,19 @@ public class UpgradeSwap
     /// <param name="expected">How many Deezer says the album has; 0 when it wouldn't say.</param>
     public async Task<SwapOutcome> PrepareForPromotion(
         PurchaseItem item, string stagedDir, int landed, int expected)
+    {
+        var outcome = await Swap(item, stagedDir, landed, expected);
+        if (!outcome.Swapped)
+        {
+            // Kept on the row, not just logged, so the Download page can say why this album wasn't
+            // replaced — "got 9 of 10 tracks" is the answer to "why is this still MP3?".
+            await _purchases.SetUpgrade(
+                item.Id, new UpgradeReport(DateTimeOffset.UtcNow, RefusalDetail: outcome.Detail));
+        }
+        return outcome;
+    }
+
+    private async Task<SwapOutcome> Swap(PurchaseItem item, string stagedDir, int landed, int expected)
     {
         // Gate 1: completeness. Deezer's per-track gaps mean a lossless request can come back short,
         // and swapping that in would lose tracks the library already had — the one failure worse than
@@ -159,7 +175,7 @@ public class UpgradeSwap
 
         // Saved before anything moves, so a copy that Plex matches to a different release — which
         // makes its ratings look lost — can be put back once it lands (see UpgradeMatchKeeper).
-        await _matches.Remember(item, located!.Value.Key);
+        var report = await _matches.Remember(item, located!.Value.Key);
 
         var result = _trash.MoveAside(
             present,
@@ -171,6 +187,14 @@ public class UpgradeSwap
             "Upgrade for {Artist} — {Album}: moved {Moved} existing file(s) aside to {Where}; "
             + "promoting the {Acquired} copy in their place",
             item.Artist.ArtistName, item.Album, result.Moved, result.Destination, acquired);
+        await _purchases.SetUpgrade(item.Id, report with
+        {
+            ReplacedQuality = item.OwnedQuality,
+            NewQuality = acquired,
+            FilesMoved = result.Moved,
+            MovedTo = result.Destination,
+            AlbumFolder = albumDir,
+        });
         return SwapOutcome.Ok(albumDir);
     }
 

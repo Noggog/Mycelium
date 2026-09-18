@@ -361,57 +361,66 @@ comment describes streamrip's defaults rather than the deployed config. Worth
 re-reading that comment when implementing — it's accurate about staging, stale
 about promotion.)
 
-### Ratings on swap — likely fine, but verify
+### Ratings on swap — they follow the Plex match
 
-An earlier draft of this doc claimed a swap destroys star ratings. **That was
-overstated.** What the server actually shows:
+An earlier version of this section said ratings live on the track item's
+ratingKey, so a swap would keep them as long as the ratingKeys held. **That was
+wrong, and the first real upgrade showed it.**
 
-- `userRating` lives on the **track item's ratingKey** (a Plex DB row), not on
-  the file. Plex matches by tags and agent GUID (`plex://track/…`,
-  `plex://album/…`), not by filename. Album-level ratings are unused here — 2 of
-  3,000 sampled.
-- **All three roots are locations inside one section**, so even a
-  mediadrop → `/media/music` migration is a move *within a single library*,
-  matched by the same GUID:
+Plex stores `userRating` against what an item is **matched** to: the agent
+guid (`plex://album/…` and the `plex://track/…` ids under it) plus the account.
+It is not stored against the file or the ratingKey. A swap brings in new files,
+which Plex indexes as new items. They get the old ratings back only if Plex
+matches them to the same release.
 
-      section 1: Music Hub | agent: tv.plex.agents.music
-        loc 57  /media/music
-        loc 58  /mediadrop/Music
-        loc 61  /media/download/music
+Measured on 2026-09-18: Children of Bodom — *Hate Crew Deathroll*, MP3 → FLAC.
+Plex matched the FLAC copy to a different release than the MP3s had, and every
+track rating disappeared except the first track's (whose track guid presumably
+matched in both releases). A **Fix Match back to the original release restored
+all of them.** Deezer often serves a remaster or reissue, so expect this to
+happen regularly rather than rarely.
 
-**The real risk is scan timing, not path identity.** `autoEmptyTrash = True`, so
-a scan that catches the album mid-swap (old moved aside, new not yet promoted)
-trashes those items and their ratings. But Plex is not watching the filesystem:
+**What the code does about it** (`UpgradeMatchKeeper`):
 
-      watchMusicSections               = False
-      FSEventLibraryUpdatesEnabled     = False
-      FSEventLibraryPartialScanEnabled = False
-      ScheduledLibraryUpdatesEnabled   = True
+1. Before any file moves, `UpgradeSwap` saves the old album's match on the row
+   (`UpgradeReport.OldMatch`). An album that was never matched (`local://…`)
+   has no release to keep and is marked `NotMatched`.
+2. After the promote, each settle pass finds the album in Plex. It checks that
+   Plex is listing the *new* copy (its quality beats what was held, so the old
+   copy still listed before the rescan isn't taken as confirmation), then
+   compares the match.
+3. Same match → `Kept`. A different match → rematch via
+   `PUT /library/metadata/{key}/match?guid=…&name=…` (what "Fix Match" does),
+   read it back, → `Rematched`. Still different after the settle window →
+   `NeedsFixMatch`, surfaced on the Download page's Upgrades section with a
+   Recheck button.
 
-It only looks on its schedule or when triggered — and Mycelium already owns that
-trigger (`PLEX_RESCAN_AFTER_DOWNLOAD`, `PlexLibraryScanner`). Do move-aside and
-promote as one uninterrupted operation, then request the rescan, and the gap
-never becomes observable.
+Rematching beats capturing and re-applying each rating (the approach an
+earlier version of this section proposed). It restores every account's ratings
+at once, including accounts that never linked Plex to Mycelium, which
+`/:/rate` can only reach through each user's own token. Re-rating stays a
+possible fallback if rematching ever proves unreliable.
 
-**Still unverified:** whether Plex reuses the track item when the *extension*
-changes. All 20,000 tracks sampled have exactly one Media entry, so the library
-holds no existing multi-version case to observe.
+The trade-off: rematching pins the upgrade to the old release, so bonus tracks
+on a deluxe or remastered edition have no counterpart there and stay unrated.
+For keeping existing ratings, that is the right call.
 
-**Test before building on it.** Pick one of the 291 in-scope lossy albums, record
-its track ratingKeys and `userRating` values, run the real swap (move aside →
-promote a hand-fetched FLAC → trigger rescan), re-read. Reversible, since the old
-copy is in the trash rather than deleted. If ratingKeys hold, ratings survive.
+**Scan timing is still a smaller risk.** `autoEmptyTrash = True`, so a scan
+that catches the album mid-swap (old moved aside, new not yet promoted) trashes
+its items. Plex isn't watching the filesystem (`watchMusicSections`,
+`FSEventLibraryUpdatesEnabled` and `FSEventLibraryPartialScanEnabled` are all
+off; only scheduled scans run), and move-aside and promote run back to back
+before Mycelium asks for its debounced rescan, so that window is rarely hit.
+Because ratings follow the match rather than the item, an item trashed by an
+unlucky scan loses nothing that the rematch can't restore.
 
-**Either way, capture-and-reapply is cheap insurance rather than a core feature:**
-read the old album's `index`/`title` → `userRating` before the swap, verify after
-the rescan, and restore via
-`/:/rate?key={ratingKey}&rating={n}&identifier=com.plexapp.plugins.library` only
-if they actually vanished. Correct regardless of how the test comes out.
+**Play history isn't known to survive.** Whether play counts follow the match
+the way ratings do is unverified. If they don't, they can't be restored
+(`/:/scrobble` only increments), which is probably acceptable where losing
+ratings wouldn't be.
 
 Scale, for context: 16.1% of tracks carry a rating and 66.8% have plays; of the
-671 upgrade candidates, 407 have rated tracks and 620 have play history. Play
-counts can't be restored (only `/:/scrobble` increments) — that loss is probably
-acceptable where a rating loss wouldn't be.
+671 upgrade candidates, 407 have rated tracks and 620 have play history.
 
 ### mediadrop is organised by contributor, not artist
 

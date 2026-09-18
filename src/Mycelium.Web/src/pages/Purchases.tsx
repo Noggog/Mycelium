@@ -9,6 +9,7 @@ import {
   getDownloadStatus,
   getPurchases,
   rate,
+  recheckUpgrade,
   removeManualPurchase,
   setDeezerArl,
   setDownloadsAutomatic,
@@ -21,6 +22,7 @@ import type {
   DownloadFailure,
   DownloadSnapshot,
   FeedItem,
+  AudioQuality,
   ManualAddResult,
   PurchaseItem,
 } from '../types'
@@ -216,6 +218,143 @@ function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode
           )}
         </span>
       </Link>
+      <div className="disc-actions">{actions}</div>
+    </div>
+  )
+}
+
+// How each tier reads. The app's vocabulary is Lossy/Lossless; these are the names a listener uses
+// (same labels as the Discover upgrade card).
+const QUALITY_LABEL: Record<AudioQuality, string> = {
+  Lossy: 'MP3',
+  Lossless: 'FLAC',
+}
+
+type Tone = 'good' | 'bad' | 'dim'
+
+// Where an upgrade stands, in one line. Plex keeps star ratings against the release an album is
+// matched to, so "did it keep its match" is the part of an upgrade most worth reporting: a copy
+// matched to a different release comes up unrated, and nothing else on screen would say so.
+function upgradeStatus(item: PurchaseItem): { text: string; tone: Tone } {
+  const u = item.upgrade
+  switch (item.status) {
+    case 'Pending':
+      return { text: 'Waiting to download', tone: 'dim' }
+    case 'Queued':
+      return { text: 'Queued…', tone: 'dim' }
+    case 'Downloading':
+      return { text: 'Downloading…', tone: 'dim' }
+    case 'Failed': {
+      const note = FAILURE_COPY[item.failure]?.note ?? "Couldn't download"
+      // The refusal detail is the specific answer ("got 9 of 10 tracks"); the note alone only says
+      // which gate refused. Only these two failures come from the swap, so only they can own the
+      // detail — a download that failed before reaching it would otherwise show a stale reason.
+      const fromSwap = item.failure === 'UpgradeNotPossible' || item.failure === 'NoBetterQualityAvailable'
+      const detail = fromSwap ? u?.refusalDetail : null
+      return { text: detail ? `${note} — ${detail}` : note, tone: 'bad' }
+    }
+  }
+
+  // Sent or InLibrary: downloaded, and — if the report says so — swapped in.
+  if (!u || u.refusalDetail || u.filesMoved === 0) {
+    return { text: 'Downloaded — waiting for Plex to pick it up', tone: 'dim' }
+  }
+  switch (u.match) {
+    case 'Waiting':
+      return { text: 'Swapped in — checking Plex kept its ratings…', tone: 'dim' }
+    case 'Kept':
+      return { text: 'Upgraded · Plex kept its match, ratings carried over', tone: 'good' }
+    case 'Rematched':
+      return {
+        text: 'Upgraded · Plex matched a different release, so it was rematched and ratings restored',
+        tone: 'good',
+      }
+    case 'NeedsFixMatch':
+      return {
+        text: 'Upgraded, but Plex matched a different release and rematching didn\u2019t take — ratings '
+          + 'may be missing. Use Fix Match in Plex, then Recheck.',
+        tone: 'bad',
+      }
+    case 'NotMatched':
+      return { text: 'Upgraded · the old copy wasn\u2019t matched in Plex, so there were no ratings to carry', tone: 'dim' }
+    default:
+      return { text: 'Upgraded', tone: 'good' }
+  }
+}
+
+// Wants a person to act: a failed download, or ratings Plex may have dropped.
+const needsAttention = (item: PurchaseItem) =>
+  item.status === 'Failed' || item.upgrade?.match === 'NeedsFixMatch'
+
+// Rank for the section: what needs attention, then what's moving, then what's waiting, then history.
+function upgradeRank(item: PurchaseItem) {
+  if (needsAttention(item)) return 0
+  if (item.status === 'Downloading' || item.status === 'Queued' || item.status === 'Sent') return 1
+  if (item.upgrade?.match === 'Waiting') return 1
+  if (item.status === 'Pending') return 2
+  return 3
+}
+
+function UpgradeRow({ item, actions }: { item: PurchaseItem; actions: ReactNode }) {
+  const accent = useArtAccent(item.imageUrl)
+  const accentStyle = accent ? ({ '--art-accent': accent } as CSSProperties) : undefined
+  const u = item.upgrade
+  const from = u?.replacedQuality ?? item.ownedQuality
+  const to = u?.newQuality ?? item.targetQuality
+  const status = upgradeStatus(item)
+  // Only a swap that actually moved something has anything to show underneath.
+  const swapped = u && !u.refusalDetail && u.filesMoved > 0
+  return (
+    <div className="disc-row up-row" style={accentStyle}>
+      <Avatar item={item} />
+      <div className="disc-row-main">
+        <Link
+          className="disc-row-link"
+          to={`/browse?artist=${encodeURIComponent(item.artist.artistName)}`}
+          title={`Go to ${item.artist.artistName} in Browse`}
+        >
+          <div className="disc-name">{item.album}</div>
+          <span className="disc-provenance">
+            {item.artist.artistName}
+            {from && to && (
+              <span className="up-quality">
+                {' · '}{QUALITY_LABEL[from]} → {QUALITY_LABEL[to]}
+              </span>
+            )}
+          </span>
+        </Link>
+        <div className={`up-status ${status.tone}`}>{status.text}</div>
+        {swapped && (
+          <details className="up-details">
+            <summary>Details</summary>
+            <dl>
+              <dt>Old copy</dt>
+              <dd>
+                {u.filesMoved} file{u.filesMoved === 1 ? '' : 's'} moved to <code>{u.movedTo}</code>
+              </dd>
+              {u.albumFolder && (
+                <>
+                  <dt>New copy</dt>
+                  <dd><code>{u.albumFolder}</code></dd>
+                </>
+              )}
+              {u.oldMatch && (
+                <>
+                  <dt>Plex match</dt>
+                  <dd>
+                    <code>{u.oldMatch}</code>
+                    {u.newMatch && (
+                      <> — Plex picked <code>{u.newMatch}</code> for the new copy</>
+                    )}
+                  </dd>
+                </>
+              )}
+              <dt>Swapped</dt>
+              <dd>{new Date(u.at).toLocaleString()}</dd>
+            </dl>
+          </details>
+        )}
+      </div>
       <div className="disc-actions">{actions}</div>
     </div>
   )
@@ -552,7 +691,8 @@ export default function Purchases() {
       queryClient.invalidateQueries({ queryKey: ['feed'] })
     },
   })
-  const busy = download.isPending || unsend.isPending || remove.isPending
+  const recheck = useMutation({ mutationFn: (id: string) => recheckUpgrade(id), onSuccess: invalidate })
+  const busy = download.isPending || unsend.isPending || remove.isPending || recheck.isPending
 
   // The remove (✕) action shared by pending/failed rows — cancels the want before it downloads. An
   // upgrade row isn't a want being dropped (the record is already on the shelf), so it says what it
@@ -582,6 +722,69 @@ export default function Purchases() {
       <IconWrench />
     </button>
   )
+  // What an upgrade row offers depends on how far it got. Once the swap has happened there's no
+  // taking it back from here (the old copy is in the trash folder, recoverable by hand), so a finished
+  // row only offers Recheck — and only when its ratings may need rescuing.
+  const upgradeActions = (item: PurchaseItem): ReactNode => {
+    switch (item.status) {
+      case 'Pending':
+        return (
+          <>
+            <button
+              className="disc-btn up"
+              title="Download now"
+              disabled={busy}
+              onClick={() => download.mutate(item.id)}
+            >
+              <IconDownload />
+            </button>
+            {removeBtn(item)}
+          </>
+        )
+      case 'Queued':
+        return (
+          <>
+            <button
+              className="disc-btn"
+              title="Cancel download — back to waiting"
+              disabled={busy}
+              onClick={() => unsend.mutate(item.id)}
+            >
+              <IconUndo />
+            </button>
+            {removeBtn(item)}
+          </>
+        )
+      case 'Downloading':
+        return <span className="dl-spinner" title="Downloading">⬇</span>
+      case 'Failed':
+        return (
+          <>
+            <button
+              className="disc-btn up"
+              title="Retry download"
+              disabled={busy}
+              onClick={() => download.mutate(item.id)}
+            >
+              Retry
+            </button>
+            {removeBtn(item)}
+          </>
+        )
+      default:
+        return item.upgrade?.match === 'NeedsFixMatch' ? (
+          <button
+            className="disc-btn up"
+            title="Check the Plex match again, and rematch it to the old copy's release if it has drifted"
+            disabled={busy}
+            onClick={() => recheck.mutate(item.id)}
+          >
+            Recheck
+          </button>
+        ) : null
+    }
+  }
+
   const mergingItem = mergingId ? (data ?? []).find((i) => i.id === mergingId) : undefined
 
   if (!user) {
@@ -593,7 +796,17 @@ export default function Purchases() {
     )
   }
 
-  const items = data ?? []
+  const all = data ?? []
+  // Upgrades get their own section: they replace something already in the library, so what matters
+  // about them — what moved where, whether ratings survived — isn't what matters about a gap.
+  const upgrades = all
+    .filter((i) => i.kind === 'UpgradeAlbum' && i.album)
+    .sort((a, b) =>
+      upgradeRank(a) - upgradeRank(b)
+      || (b.upgrade?.at ?? b.requestedAt).localeCompare(a.upgrade?.at ?? a.requestedAt))
+  const upgradesAttention = upgrades.filter(needsAttention).length
+  const upgradesActive = upgrades.filter((i) => i.status !== 'InLibrary').length
+  const items = all.filter((i) => i.kind !== 'UpgradeAlbum')
   // Only albums are actionable here — they're what the downloader can grab. Liked artists still seed
   // recommendations, but they're managed on the Artists page, not shown as wishlist rows.
   // Everything in the download pipeline shows in the "Downloading now" section: the one actively
@@ -604,7 +817,8 @@ export default function Purchases() {
   const pendingAlbums = items.filter((i) => i.status === 'Pending' && i.album)
   const sent = items.filter((i) => i.status === 'Sent' && i.album)
   const failed = items.filter((i) => i.status === 'Failed' && i.album)
-  const shownCount = downloading.length + pendingAlbums.length + sent.length + failed.length
+  const shownCount =
+    downloading.length + pendingAlbums.length + sent.length + failed.length + upgradesActive
 
   const row = (item: PurchaseItem, actions: ReactNode) => (
     <PurchaseRow key={item.id} item={item} actions={actions} />
@@ -632,7 +846,7 @@ export default function Purchases() {
       {isError && <p className="error">Failed to load wishlist: {(error as Error).message}</p>}
       {isPending && <p><em>Loading…</em></p>}
 
-      {data && shownCount === 0 && (
+      {data && shownCount === 0 && upgrades.length === 0 && (
         <p>
           <em>
             Nothing here yet. Thumbs-up albums on the <Link to="/">Discover</Link> page, or add an
@@ -762,6 +976,33 @@ export default function Purchases() {
               ),
             )}
           </div>
+        </div>
+      )}
+
+      {upgrades.length > 0 && (
+        <div className="dl-section">
+          <h2 className="feed-section-title">
+            Upgrades <span className="feed-count">{upgrades.length}</span>
+          </h2>
+          <p className="disc-sub">
+            <em>
+              {upgradesAttention > 0
+                ? `${upgradesAttention} need${upgradesAttention === 1 ? 's' : ''} attention. `
+                : ''}
+              Better copies of albums you already own. The old copy is moved aside, not deleted, and
+              finished upgrades stay here for 30 days.
+            </em>
+          </p>
+          <div className="disc-list">
+            {upgrades.map((item) => (
+              <UpgradeRow
+                key={item.id}
+                item={item}
+                actions={upgradeActions(item)}
+              />
+            ))}
+          </div>
+          {recheck.isError && <p className="error">{(recheck.error as Error).message}</p>}
         </div>
       )}
 

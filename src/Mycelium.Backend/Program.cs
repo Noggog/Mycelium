@@ -1283,12 +1283,16 @@ devSim.MapGet("/musicbrainz-relink", (MusicBrainzRelinker relinker) =>
 // because nobody wants it any more" are the same observation — the row is simply gone. Meant to be
 // paired with `ids`, where the result stays bounded by what the client asked about; the Download page
 // leaves it off, because that list must not fill up with every record ever acquired.
-api.MapGet("/purchases", async (PurchaseService purchases, string? ids, bool? includeCompleted) =>
+api.MapGet("/purchases", async (
+        PurchaseService purchases, string? ids, bool? includeCompleted, bool? recentUpgrades) =>
     {
         var completed = includeCompleted == true;
         if (ids is null)
         {
-            return Results.Ok(await purchases.GetActive(includeCompleted: completed));
+            // recentUpgrades: the Download page's Upgrades section, which shows how finished upgrades
+            // went (what moved where, whether ratings survived) for a while after they land.
+            return Results.Ok(await purchases.GetActive(
+                includeCompleted: completed, recentUpgrades: recentUpgrades == true));
         }
 
         var wanted = ids
@@ -1402,6 +1406,21 @@ api.MapDelete("/purchases/manual", async (string id, PurchaseService purchases) 
         await purchases.RemoveManual(id) ? Results.NoContent() : Results.NotFound())
     .RequireAuthorization()
     .WithName("RemoveManualPurchase");
+
+// Check a finished upgrade's Plex match again, rematching it to the old copy's release if it has
+// drifted. For after a Fix Match by hand, or to give a rematch that didn't take another go. Answers
+// with the row as it now stands, so the page can show the result without waiting for its next poll.
+api.MapPost("/purchases/upgrade/recheck", async (
+        string id, UpgradeMatchKeeper matches, IPurchaseRepo repo) =>
+    {
+        if (!await matches.Recheck(id))
+        {
+            return Results.NotFound();
+        }
+        return Results.Ok((await repo.GetAll()).First(p => p.Id == id));
+    })
+    .RequireAuthorization()
+    .WithName("RecheckUpgradeMatch");
 
 // Undo — move a downloaded/queued item back to "pending".
 api.MapPost("/purchases/unsend", async (string id, PurchaseService purchases) =>
