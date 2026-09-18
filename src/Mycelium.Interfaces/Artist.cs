@@ -103,7 +103,8 @@ public record ArtistMetadata(
     ArtistKey ArtistKey,
     string? ArtistImageUrl,
     IReadOnlyList<string>? Genres = null,
-    IReadOnlyList<int>? PlexRatingKeys = null);
+    IReadOnlyList<int>? PlexRatingKeys = null,
+    string? PlexThumb = null);
 
 /// <summary>
 /// The Deezer artist a library name resolves to: its id, Deezer's own spelling, popularity, page
@@ -127,7 +128,8 @@ public record CatalogArtist(
     bool DeezerOverride = false,
     IReadOnlyList<string>? Genres = null,
     MusicBrainzIdentity? MusicBrainz = null,
-    bool MusicBrainzOverride = false);
+    bool MusicBrainzOverride = false,
+    string? PlexThumb = null);
 
 public record ArtistPackage(ArtistMetadata Metadata, Album[] Albums);
 

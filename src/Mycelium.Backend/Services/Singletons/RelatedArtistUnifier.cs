@@ -48,7 +48,7 @@ public static class RelatedArtistUnifier
     /// Unicode decomposition, dropping the combining marks). Purely a dedupe key — the original
     /// spelling is what's shown to the user.
     /// </summary>
-    private static string NormalizeKey(string name)
+    internal static string NormalizeKey(string name)
     {
         var decomposed = name.Trim().ToLowerInvariant().Normalize(NormalizationForm.FormD);
         var sb = new StringBuilder(decomposed.Length);

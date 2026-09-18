@@ -33,7 +33,9 @@ public class PlexRepo : ILibraryQuery, ILibraryMatcher
         // entries) and union each artist's genre tags across every title they appear in.
         return (await _plexApi.GetMusicArtists(plexLibrary.Key))
             .SelectMany(a => ArtistNames.Split(a.Title)
-                .Select(name => (Name: name, a.RatingKey, Genres: ExtractGenres(a))))
+                .Select(name => (Name: name, a.RatingKey, Genres: ExtractGenres(a),
+                    // A collaborator title's photo is of the pairing, not of either half of it.
+                    Thumb: name.Equals(a.Title, StringComparison.OrdinalIgnoreCase) ? a.Thumb : null)))
             .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .Select(g => new ArtistMetadata(
                 ArtistKey: new ArtistKey(g.Key),
@@ -42,7 +44,8 @@ public class PlexRepo : ILibraryQuery, ILibraryMatcher
                 // Keep the rating key of every Plex item this name appears in, so the tagger can target
                 // them directly instead of rescanning the whole library (a ';'-joined collaborator title
                 // makes one Plex item back several names; a name can also recur across items).
-                PlexRatingKeys: g.Select(x => x.RatingKey).Distinct().ToArray()))
+                PlexRatingKeys: g.Select(x => x.RatingKey).Distinct().ToArray(),
+                PlexThumb: g.Select(x => x.Thumb).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t))))
             .ToArray();
     }
 

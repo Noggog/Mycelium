@@ -43,7 +43,7 @@ public class LibraryProvider : ILibraryProvider
     public async Task<ArtistMetadata[]> GetAllArtistMetadata()
     {
         return (await _catalog.GetAllPresent())
-            .Select(x => new ArtistMetadata(x.ArtistKey, x.ArtistImageUrl))
+            .Select(x => new ArtistMetadata(x.ArtistKey, ImageOf(x)))
             .ToArray();
     }
 
@@ -52,7 +52,7 @@ public class LibraryProvider : ILibraryProvider
         return (await _catalog.GetAllPresent())
             .Select(x => new ArtistListItem(
                 x.ArtistKey,
-                x.ArtistImageUrl,
+                ImageOf(x),
                 x.Genres ?? Array.Empty<string>(),
                 x.Deezer?.Id,
                 x.Deezer?.Name,
@@ -61,4 +61,8 @@ public class LibraryProvider : ILibraryProvider
                 x.DeezerOverride))
             .ToArray();
     }
+
+    /// <summary>The Deezer photo when there is one, else the one Plex holds.</summary>
+    private static string? ImageOf(CatalogArtist artist) =>
+        artist.ArtistImageUrl ?? PlexArtistImage.Url(artist.ArtistKey.ArtistName, artist.PlexThumb);
 }

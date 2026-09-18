@@ -16,6 +16,12 @@ public interface IPlexApi
 
     Task<PlexMusicAlbum[]> GetMusicAlbums(int library);
 
+    /// <summary>
+    /// A library image (e.g. an artist's <see cref="PlexMusicArtist.Thumb"/>) scaled to fit
+    /// <paramref name="size"/> pixels square, or <c>null</c> when the path no longer resolves.
+    /// </summary>
+    Task<PlexImage?> GetImage(string path, int size);
+
     /// <summary>One album by rating key, carrying its mood tags, or <c>null</c> when the key no longer
     /// resolves. The read half of album mood tagging (see <see cref="SetAlbumMoods"/>).</summary>
     Task<PlexMusicAlbum?> GetMusicAlbum(int ratingKey);

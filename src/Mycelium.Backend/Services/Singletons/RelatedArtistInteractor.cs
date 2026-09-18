@@ -28,15 +28,18 @@ public class RelatedArtistInteractor : IRelatedArtistReader
 {
     private readonly IEnumerable<ISimilaritySource> _sources;
     private readonly IRelatedArtistRepo _repo;
+    private readonly ManualRecommendations _manual;
     private readonly ILogger<RelatedArtistInteractor> _logger;
 
     public RelatedArtistInteractor(
         IEnumerable<ISimilaritySource> sources,
         IRelatedArtistRepo repo,
+        ManualRecommendations manual,
         ILogger<RelatedArtistInteractor> logger)
     {
         _sources = sources;
         _repo = repo;
+        _manual = manual;
         _logger = logger;
     }
 
@@ -64,7 +67,14 @@ public class RelatedArtistInteractor : IRelatedArtistReader
             }
         }
 
-        var perSource = await _repo.GetAllSources(artist);
+        var perSource = (await _repo.GetAllSources(artist)).ToList();
+        // Hand-entered pairs are merged in here rather than stored beside the sources' edges: nothing
+        // fetches them, so they have nothing to go stale, and a source detach can't wipe them.
+        if (await _manual.RelatedTo(artist) is { } manual)
+        {
+            perSource.Add(manual);
+        }
+
         return new UnifiedRelations(artist, RelatedArtistUnifier.Unify(perSource));
     }
 }

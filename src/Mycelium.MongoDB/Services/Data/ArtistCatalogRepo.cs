@@ -22,6 +22,7 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     private const string FieldAlbumKeyQuality = "quality";
     private const string FieldGenres = "genres";
     private const string FieldPlexRatingKeys = "plexRatingKeys";
+    private const string FieldPlexThumb = "plexThumb";
     private const string FieldDeezerId = "deezerId";
     private const string FieldDeezerName = "deezerName";
     private const string FieldDeezerFans = "deezerFans";
@@ -82,7 +83,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
                 // Same story for the Plex rating key(s): recaptured every sync so a library rebuild
                 // that shifts keys self-heals, and an empty array clears stale keys. Lets the tagger
                 // target the exact Plex item(s) instead of scanning the whole library.
-                .Set(FieldPlexRatingKeys, new BsonArray(artist.PlexRatingKeys ?? Array.Empty<int>()));
+                .Set(FieldPlexRatingKeys, new BsonArray(artist.PlexRatingKeys ?? Array.Empty<int>()))
+                // And the photo Plex holds, if any — the image of last resort for an artist Deezer
+                // has no picture of. A null clears it: the path embeds a timestamp, so a stale one 404s.
+                .Set(FieldPlexThumb, (BsonValue?)artist.PlexThumb ?? BsonNull.Value);
 
             // Only set the image when we actually have one, so a Plex sync (which
             // currently supplies no image) never clobbers one backfilled elsewhere
@@ -500,6 +504,13 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         return v.AsBsonArray.Where(e => e.IsNumeric).Select(e => e.ToInt32()).ToArray();
     }
 
+    public async Task<string?> GetPlexThumb(ArtistKey artist)
+    {
+        var doc = await (await Collection.FindAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName))).FirstOrDefaultAsync();
+        return doc != null && doc.TryGetValue(FieldPlexThumb, out var v) && v.IsString ? v.AsString : null;
+    }
+
     public async Task<(DeezerIdentity Identity, bool IsOverride)?> GetDeezer(ArtistKey artist)
     {
         var doc = await (await Collection.FindAsync(
@@ -740,8 +751,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             ? g.AsBsonArray.Where(x => !x.IsBsonNull).Select(x => x.AsString).ToArray()
             : Array.Empty<string>();
 
+        var plexThumb = doc.TryGetValue(FieldPlexThumb, out var pt) && pt.IsString ? pt.AsString : null;
+
         return new CatalogArtist(
             new ArtistKey(name), imageUrl, lastSeenAt, deezer, deezerOverride, genres,
-            musicBrainz, musicBrainzOverride);
+            musicBrainz, musicBrainzOverride, plexThumb);
     }
 }

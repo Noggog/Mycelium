@@ -107,6 +107,27 @@ public class PlexApi : IPlexApi
         return item.ToObject<PlexMusicArtist>();
     }
 
+    public async Task<PlexImage?> GetImage(string path, int size)
+    {
+        // Through the photo transcoder rather than the raw path: an artist photo is often a multi-MB
+        // original, and every consumer here draws it at thumbnail size.
+        var url = $"{_endpointInfo.BaseUri}/photo/:/transcode?width={size}&height={size}&minSize=1&upscale=1"
+                  + $"&url={Uri.EscapeDataString(path)}";
+        _logger.LogDebug("Plex GetImage: {Url}", url);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Accept.ParseAdd("image/*");
+        using var response = await httpClient.SendAsync(request);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return new PlexImage(
+            await response.Content.ReadAsByteArrayAsync(),
+            response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+    }
+
     public async Task<PlexMusicAlbum[]> GetMusicAlbums(int library)
     {
         // type=9 is the album metadata type; parentTitle carries the owning artist's name.
@@ -569,6 +590,10 @@ public record PlexMusicArtist
     // Read only by the cleanup that strips the like/dislike collections an earlier tagger wrote.
     public PlexTag[]? Collection { get; set; }
 
+    // The artist photo's path on the server ("/library/metadata/123/thumb/1699999999"), absent when Plex
+    // has none. Only reachable with a token, so it is fetched through the backend, never linked.
+    public string? Thumb { get; set; }
+
     /// <summary>The artist's current mood tags; empty when it has none.</summary>
     public string[] Moods() =>
         Mood?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
@@ -585,6 +610,9 @@ public record PlexMusicArtist
     public string[] Collections() =>
         Collection?.Select(t => t.Tag).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray() ?? Array.Empty<string>();
 }
+
+/// <summary>An image Plex served, ready to hand back to a browser.</summary>
+public record PlexImage(byte[] Bytes, string ContentType);
 
 /// <summary>A Plex tag entry — genres, moods, styles all serialize as <c>{ "tag": "..." }</c>.</summary>
 public record PlexTag

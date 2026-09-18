@@ -251,3 +251,62 @@ export async function clearPlexServerToken(): Promise<PlexServerTokenStatus> {
   }
   return (await res.json()) as PlexServerTokenStatus
 }
+
+// ---- Hand-entered recommendations ----
+// Pairs no similarity source will ever produce (a radio show beside the artists it plays). Always two
+// way: liking either one recommends the other. Mirrors ManualRecommendation on the backend.
+
+export interface ManualRecommendation {
+  id: string
+  artistA: string
+  artistB: string
+  addedBy: string | null
+  addedAt: string
+}
+
+// Both writes rebuild every user's recommendation queue before answering, so the pair shows up (or
+// stops showing up) on the very next Discover load; `rebuilt` is how many queues that was.
+export interface ManualRecommendationWrite {
+  rebuilt: number
+}
+
+async function errorText(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: string }
+    if (body.error) return body.error
+  } catch {
+    // Not JSON — fall through to the status line.
+  }
+  return `${fallback}: ${res.status} ${res.statusText}`
+}
+
+export async function getManualRecommendations(): Promise<ManualRecommendation[]> {
+  const res = await fetch('/api/dev/similarity/manual')
+  if (!res.ok) {
+    throw new Error(`Failed to load manual recommendations: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as ManualRecommendation[]
+}
+
+export async function addManualRecommendation(
+  artistA: string,
+  artistB: string,
+): Promise<ManualRecommendationWrite> {
+  const res = await fetch('/api/dev/similarity/manual', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artistA, artistB }),
+  })
+  if (!res.ok) {
+    throw new Error(await errorText(res, 'Failed to add the recommendation'))
+  }
+  return (await res.json()) as ManualRecommendationWrite
+}
+
+export async function removeManualRecommendation(id: string): Promise<ManualRecommendationWrite> {
+  const res = await fetch(`/api/dev/similarity/manual?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    throw new Error(`Failed to remove the recommendation: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as ManualRecommendationWrite
+}

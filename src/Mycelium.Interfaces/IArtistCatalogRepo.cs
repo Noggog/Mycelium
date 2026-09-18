@@ -115,6 +115,13 @@ public interface IArtistCatalogRepo
     Task<IReadOnlyList<int>> GetPlexRatingKeys(ArtistKey artist);
 
     /// <summary>
+    /// The path of the artist's photo on the Plex server, as of the last catalog sync, or null when
+    /// Plex has none (or the artist isn't cataloged). Served through the backend — see
+    /// <c>PlexArtistImage</c>.
+    /// </summary>
+    Task<string?> GetPlexThumb(ArtistKey artist);
+
+    /// <summary>
     /// The stored Deezer identity for an artist plus whether it's a sticky user override, or null
     /// if the artist isn't cataloged or has never been resolved.
     /// </summary>

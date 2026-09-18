@@ -260,6 +260,32 @@ api.MapGet("/artists", (ILibraryProvider libraryProvider) =>
     })
     .WithName("GetArtists");
 
+// The artist photo Plex holds — the fallback image for an owned artist Deezer has no picture of (see
+// PlexArtistImage). Proxied because Plex serves images only to a token, and the server's must never
+// reach a browser. `v` is only a cache-buster (the photo's Plex timestamp), so it goes unread here;
+// the path is looked up from the catalog rather than taken from the query, so this can't be pointed
+// at anything on the Plex server other than an artist photo.
+api.MapGet("/artists/plex-image", async (HttpContext http, string artist,
+        IArtistCatalogRepo catalog, IPlexApi plex) =>
+    {
+        var thumb = await catalog.GetPlexThumb(new ArtistKey(artist));
+        if (thumb is null)
+        {
+            return Results.NotFound();
+        }
+
+        var image = await plex.GetImage(thumb, PlexArtistImage.Size);
+        if (image is null)
+        {
+            return Results.NotFound();
+        }
+
+        http.Response.Headers.CacheControl = "private, max-age=2592000, immutable";
+        return Results.File(image.Bytes, image.ContentType);
+    })
+    .RequireAuthorization()
+    .WithName("GetArtistPlexImage");
+
 // Pin a library artist to a specific Deezer artist id — the fix for a misassociation (e.g. a
 // common name like "Alex" resolving to the wrong, more popular act). Stores a sticky override and
 // force-refreshes that artist's similarity edges so the graph re-derives from the correct id, then
@@ -1260,6 +1286,46 @@ devSim.MapGet("/musicbrainz-relink", (MusicBrainzRelinker relinker) =>
         Results.Ok(relinker.GetStatus()))
     .WithName("DevMusicBrainzRelinkStatus");
 
+// Hand-entered recommendations — pairings no similarity source will ever make (see
+// ManualRecommendations). Each write rebuilds every user's queue, because the queue is precomputed:
+// without the rebuild a new pair wouldn't surface until the replenisher next ran, and a removed one
+// would keep its already-queued cards.
+devSim.MapGet("/manual", async (ManualRecommendations manual) =>
+        Results.Ok(await manual.GetAll()))
+    .WithName("DevListManualRecommendations");
+
+devSim.MapPost("/manual", async (HttpContext http, ManualRecommendationRequest body,
+        ManualRecommendations manual, DiscoveryEngine engine) =>
+    {
+        ManualRecommendation added;
+        try
+        {
+            added = await manual.Add(
+                body.ArtistA ?? "", body.ArtistB ?? "",
+                http.User.FindFirst("preferred_username")?.Value ?? http.User.GetSubject());
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+
+        var rebuilt = await engine.RebuildAll();
+        return Results.Ok(new { recommendation = added, rebuilt });
+    })
+    .WithName("DevAddManualRecommendation");
+
+devSim.MapDelete("/manual", async (string id, ManualRecommendations manual, DiscoveryEngine engine) =>
+    {
+        if (!await manual.Remove(id))
+        {
+            return Results.NotFound();
+        }
+
+        var rebuilt = await engine.RebuildAll();
+        return Results.Ok(new { rebuilt });
+    })
+    .WithName("DevRemoveManualRecommendation");
+
 // The shared "to buy" list: every user's liked non-owned artists + liked albums not yet acquired,
 // persisted with a status (pending → sent → in-library). Reconciles on read so it's always current.
 // Auth-gated, but not scoped to the caller — this is the library maintainer's unified queue.
@@ -1751,3 +1817,6 @@ internal record UserQualityRequest(string? Quality);
 /// click — the two differ by however long the enqueue pass took.
 /// </summary>
 internal record FastModeResponse(DateTimeOffset? FastUntil);
+
+/// <summary>Body for registering a hand-entered recommendation pair. Order doesn't matter.</summary>
+internal record ManualRecommendationRequest(string? ArtistA, string? ArtistB);

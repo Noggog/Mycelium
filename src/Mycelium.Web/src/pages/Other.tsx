@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
 import { getRelated } from '../api/related'
-import { refreshCatalog } from '../api/artists'
+import { getArtists, refreshCatalog } from '../api/artists'
 import { refreshQueue } from '../api/discovery'
 import {
   getCombinedArtists,
@@ -11,15 +11,18 @@ import {
   type CombinedNameEntry,
 } from '../api/maintenance'
 import {
+  addManualRecommendation,
   clearPlexServerToken,
   clearPlexTags,
   completePlexServerTokenLink,
+  getManualRecommendations,
   getPlexServerToken,
   getMusicBrainzRelinkStatus,
   getSimilarityWarmStatus,
   getUserQualities,
   reapplyPlexTags,
   rebuildPlexTags,
+  removeManualRecommendation,
   seedMoodTags,
   syncRecommendedTags,
   runQualitySweep,
@@ -76,6 +79,7 @@ export default function Other() {
           <PlexTagTools />
           <SimilarityWarm />
           <MusicBrainzRelink />
+          <ManualRecommendations />
           <QueueRebuild />
           <SimilarityDebug />
         </>
@@ -310,6 +314,140 @@ function PlexServerToken() {
       )}
 
       {problem && <p className="error">{problem}</p>}
+    </div>
+  )
+}
+
+// ---- Hand-entered recommendations ----
+
+// For pairings no feed will ever make — Hearts of Space is a radio show, so no similarity source
+// knows it belongs next to Steve Roach. Each pair runs both ways. The names are free text (an artist
+// needn't be owned to be recommended), with the library offered as suggestions because a pair only
+// does anything if one side matches someone's liked artist exactly, give or take case and accents.
+function ManualRecommendations() {
+  const queryClient = useQueryClient()
+  const [artistA, setArtistA] = useState('')
+  const [artistB, setArtistB] = useState('')
+
+  const { data, isPending, isError, error } = useQuery({
+    queryKey: ['dev', 'manual-recommendations'],
+    queryFn: getManualRecommendations,
+  })
+  // Same key as Browse, so this is usually already cached.
+  const { data: artists } = useQuery({ queryKey: ['artists'], queryFn: getArtists })
+  const owned = new Set((artists ?? []).map(a => a.artistKey.artistName.toLowerCase()))
+
+  const onWritten = () => {
+    queryClient.invalidateQueries({ queryKey: ['dev', 'manual-recommendations'] })
+    // Both writes rebuild every queue server-side, which is what Discover and the to-buy list read.
+    queryClient.invalidateQueries({ queryKey: ['feed'] })
+    queryClient.invalidateQueries({ queryKey: ['purchases'] })
+  }
+
+  const add = useMutation({
+    mutationFn: () => addManualRecommendation(artistA, artistB),
+    onSuccess: () => {
+      setArtistA('')
+      setArtistB('')
+      onWritten()
+    },
+  })
+  const remove = useMutation({ mutationFn: removeManualRecommendation, onSuccess: onWritten })
+
+  const busy = add.isPending || remove.isPending
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    if (artistA.trim() && artistB.trim()) add.mutate()
+  }
+
+  const name = (artist: string) => (
+    <>
+      {artist}
+      {artists && !owned.has(artist.toLowerCase()) && <span className="dev-muted"> (not in library)</span>}
+    </>
+  )
+
+  const rows = data ?? []
+
+  return (
+    <div className="dev-tool">
+      <h2>Manual recommendations</h2>
+      <p>
+        Pair up artists that no recommendation feed will ever connect — a radio show and the artists
+        it plays, say. It works <strong>both ways</strong>: anyone who likes one gets the other
+        recommended, credited to the one they liked. Every change rebuilds all users&apos; queues, so
+        it can take a moment.
+      </p>
+
+      <form className="controls" onSubmit={onSubmit}>
+        <input
+          list="manual-rec-artists"
+          placeholder="Artist"
+          value={artistA}
+          onChange={e => setArtistA(e.target.value)}
+          disabled={busy}
+        />
+        <span aria-hidden="true">⇄</span>
+        <input
+          list="manual-rec-artists"
+          placeholder="Recommended artist"
+          value={artistB}
+          onChange={e => setArtistB(e.target.value)}
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !artistA.trim() || !artistB.trim()}>
+          {add.isPending ? 'Adding…' : 'Add pair'}
+        </button>
+        <datalist id="manual-rec-artists">
+          {(artists ?? []).map(a => (
+            <option key={a.artistKey.artistName} value={a.artistKey.artistName} />
+          ))}
+        </datalist>
+      </form>
+
+      {add.isError && <p className="error">{(add.error as Error).message}</p>}
+      {remove.isError && <p className="error">{(remove.error as Error).message}</p>}
+      {(add.isSuccess || remove.isSuccess) && !busy && (
+        <p className="dev-status">
+          ✓ Rebuilt {(add.data ?? remove.data)?.rebuilt ?? 0} recommendation queues.
+        </p>
+      )}
+
+      {isPending && <p><em>Loading…</em></p>}
+      {isError && <p className="error">Failed to load: {(error as Error).message}</p>}
+      {!isPending && !isError && rows.length === 0 && <p><em>No manual recommendations yet.</em></p>}
+
+      {rows.length > 0 && (
+        <table className="dev-table">
+          <thead>
+            <tr>
+              <th>Artist</th>
+              <th />
+              <th>Artist</th>
+              <th>Added</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.id}>
+                <td>{name(r.artistA)}</td>
+                <td className="dev-muted">⇄</td>
+                <td>{name(r.artistB)}</td>
+                <td className="dev-muted">
+                  {new Date(r.addedAt).toLocaleDateString()}
+                  {r.addedBy && ` by ${r.addedBy}`}
+                </td>
+                <td>
+                  <button type="button" onClick={() => remove.mutate(r.id)} disabled={busy}>
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
