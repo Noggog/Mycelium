@@ -166,6 +166,7 @@ public class PurchaseRepo : IPurchaseRepo
         { "oldMatch", Nullable(r.OldMatch) },
         { "newMatch", Nullable(r.NewMatch) },
         { "matchCheckSince", r.MatchCheckSince is { } since ? since.UtcDateTime : BsonNull.Value },
+        { "dismissed", r.Dismissed },
     };
 
     private static UpgradeReport? UpgradeFrom(BsonDocument doc)
@@ -191,7 +192,8 @@ public class PurchaseRepo : IPurchaseRepo
             Match: Enum.TryParse<UpgradeMatchCheck>(Str("match"), out var m) ? m : UpgradeMatchCheck.None,
             OldMatch: Str("oldMatch"),
             NewMatch: Str("newMatch"),
-            MatchCheckSince: Date("matchCheckSince"));
+            MatchCheckSince: Date("matchCheckSince"),
+            Dismissed: u.TryGetValue("dismissed", out var d) && d.IsBoolean && d.AsBoolean);
     }
 
     public async Task<bool> SetStatus(

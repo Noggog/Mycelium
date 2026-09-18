@@ -1422,6 +1422,12 @@ api.MapPost("/purchases/upgrade/recheck", async (
     .RequireAuthorization()
     .WithName("RecheckUpgradeMatch");
 
+// Clear a finished upgrade off the Download page. Display only — the row and its report are kept.
+api.MapPost("/purchases/upgrade/dismiss", async (string id, PurchaseService purchases) =>
+        await purchases.DismissUpgrade(id) ? Results.NoContent() : Results.NotFound())
+    .RequireAuthorization()
+    .WithName("DismissUpgrade");
+
 // Undo — move a downloaded/queued item back to "pending".
 api.MapPost("/purchases/unsend", async (string id, PurchaseService purchases) =>
         await purchases.Unsend(id) ? Results.NoContent() : Results.NotFound())

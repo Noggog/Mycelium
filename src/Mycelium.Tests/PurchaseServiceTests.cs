@@ -1349,4 +1349,93 @@ public class PurchaseServiceTests
 
         active.Should().BeEmpty();
     }
+
+    // ---- Finished upgrades: the row keeps its kind, and leaves the page when it's settled ----
+
+    private static readonly string HmhasKey = PurchaseKey.ForAlbum("Billie Eilish", "HIT ME HARD AND SOFT");
+
+    private void SeedUpgrade(PurchaseStatus status, UpgradeReport? report) =>
+        _purchases.Seed(new PurchaseItem(
+            HmhasKey, FeedKind.UpgradeAlbum,
+            new ArtistKey("Billie Eilish"), "HIT ME HARD AND SOFT", null, 0, Array.Empty<string>(),
+            status, DateTimeOffset.UtcNow, null, 1, "Billie Eilish",
+            TargetQuality: AudioQuality.Lossless, OwnedQuality: AudioQuality.Lossy,
+            AddedBy: "justin", Upgrade: report));
+
+    private static UpgradeReport Swapped(UpgradeMatchCheck match, bool dismissed = false) =>
+        new(DateTimeOffset.UtcNow, ReplacedQuality: AudioQuality.Lossy, NewQuality: AudioQuality.Lossless,
+            FilesMoved: 10, Match: match, OldMatch: "plex://album/1", Dismissed: dismissed);
+
+    [Fact]
+    public async Task A_swapped_upgrade_stays_an_upgrade_while_plex_briefly_lists_no_copy_at_all()
+    {
+        // The swap has moved the old copy out and Plex hasn't indexed the new one yet: for a moment the
+        // library holds no copy of the album, which is exactly what a missing album looks like. Taking
+        // the row for one would drop it out of the Upgrades section and credit it as newly added.
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(("justin", "Billie Eilish", "HIT ME HARD AND SOFT"));
+        SeedUpgrade(PurchaseStatus.Sent, Swapped(UpgradeMatchCheck.Waiting));
+
+        await _sut.GetActive(recentUpgrades: true);
+        _purchases.Items.Single().Kind.Should().Be(FeedKind.UpgradeAlbum);
+
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+        await _sut.GetActive(recentUpgrades: true);
+
+        var row = _purchases.Items.Single();
+        row.Kind.Should().Be(FeedKind.UpgradeAlbum);
+        row.Status.Should().Be(PurchaseStatus.InLibrary);
+        await _albumTagger.DidNotReceiveWithAnyArgs().SetTags(default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task A_waiting_upgrade_whose_album_left_the_library_becomes_a_missing_album()
+    {
+        // Nothing has been swapped yet, so the album really is gone: it's a gap now, not an upgrade.
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(("justin", "Billie Eilish", "HIT ME HARD AND SOFT"));
+        SeedUpgrade(PurchaseStatus.Pending, null);
+
+        await _sut.GetActive();
+
+        _purchases.Items.Single().Kind.Should().Be(FeedKind.MissingAlbum);
+    }
+
+    [Theory]
+    [InlineData(UpgradeMatchCheck.Kept, false)]
+    [InlineData(UpgradeMatchCheck.Rematched, false)]
+    [InlineData(UpgradeMatchCheck.NotMatched, true)]
+    [InlineData(UpgradeMatchCheck.Waiting, true)]
+    [InlineData(UpgradeMatchCheck.NeedsFixMatch, true)]
+    public async Task A_finished_upgrade_leaves_the_page_once_plex_has_kept_its_match(
+        UpgradeMatchCheck match, bool shown)
+    {
+        SeedUpgrade(PurchaseStatus.InLibrary, Swapped(match));
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        var active = await _sut.GetActive(recentUpgrades: true);
+
+        active.Should().HaveCount(shown ? 1 : 0);
+    }
+
+    [Fact]
+    public async Task A_dismissed_upgrade_leaves_the_page_even_while_it_needs_a_fix_match()
+    {
+        SeedUpgrade(PurchaseStatus.InLibrary, Swapped(UpgradeMatchCheck.NeedsFixMatch));
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        (await _sut.DismissUpgrade(HmhasKey)).Should().BeTrue();
+
+        (await _sut.GetActive(recentUpgrades: true)).Should().BeEmpty();
+        _purchases.Items.Single().Upgrade!.Match.Should().Be(UpgradeMatchCheck.NeedsFixMatch);
+    }
+
+    [Fact]
+    public async Task An_upgrade_still_in_flight_cannot_be_dismissed()
+    {
+        SeedUpgrade(PurchaseStatus.Sent, Swapped(UpgradeMatchCheck.Waiting));
+
+        (await _sut.DismissUpgrade(HmhasKey)).Should().BeFalse();
+        _purchases.Items.Single().Upgrade!.Dismissed.Should().BeFalse();
+    }
 }

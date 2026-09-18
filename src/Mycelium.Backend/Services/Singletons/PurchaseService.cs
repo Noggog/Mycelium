@@ -120,12 +120,31 @@ public class PurchaseService
     public static readonly TimeSpan RecentUpgradeWindow = TimeSpan.FromDays(30);
 
     /// <summary>
-    /// A finished upgrade the page should still show: swapped in recently, or still waiting on (or
-    /// needing) its Plex match to be sorted out — that one stays until it is, however old.
+    /// A finished upgrade the page should still show: still waiting on (or needing) its Plex match to
+    /// be sorted out — that one stays until it is, however old — or swapped in recently with nothing
+    /// confirming it went fine. One whose ratings Plex kept (or were rematched back) is done, and one
+    /// dismissed by hand is gone whatever its state.
     /// </summary>
     private static bool IsRecentUpgrade(PurchaseItem p, DateTimeOffset since) =>
-        p.Kind == FeedKind.UpgradeAlbum && p.Upgrade is { } u
+        p.Kind == FeedKind.UpgradeAlbum && p.Upgrade is { Dismissed: false } u
+        && u.Match is not (UpgradeMatchCheck.Kept or UpgradeMatchCheck.Rematched)
         && (u.At >= since || u.Match is UpgradeMatchCheck.Waiting or UpgradeMatchCheck.NeedsFixMatch);
+
+    /// <summary>
+    /// Clears a finished upgrade off the Download page. Only a row that has landed: one still in
+    /// flight isn't finished, and it has its own ways off the page. Returns false otherwise.
+    /// </summary>
+    public async Task<bool> DismissUpgrade(string id)
+    {
+        var row = (await _purchases.GetAll()).FirstOrDefault(p => p.Id == id);
+        if (row is not { Kind: FeedKind.UpgradeAlbum, Status: PurchaseStatus.InLibrary, Upgrade: { } u })
+        {
+            return false;
+        }
+
+        await _purchases.SetUpgrade(id, u with { Dismissed = true });
+        return true;
+    }
 
     /// <summary>Moves a downloaded/queued item back to <see cref="PurchaseStatus.Pending"/> (undo).</summary>
     public Task<bool> Unsend(string id) => _purchases.SetStatus(id, PurchaseStatus.Pending);
@@ -326,6 +345,17 @@ public class PurchaseService
             ?? (albumArtists.TryGetValue(AlbumRatingKey.For(listingArtist, album), out var aa) ? aa : null)
             ?? listingArtist;
 
+        // Upgrades past the point where the kind can change. Swapping one in moves the old copy out
+        // before Plex has indexed the new one, and a reconcile landing in that gap sees a liked album
+        // the library doesn't hold at all — a MissingAlbum. Rewriting the row's kind then would drop it
+        // out of the Upgrades section for good and have it credited as newly added when it lands.
+        // Only a row still waiting (or failed) may change kind: its album really could have vanished.
+        var committedUpgrades = (await _purchases.GetAll())
+            .Where(r => r.Kind == FeedKind.UpgradeAlbum
+                        && r.Status is not (PurchaseStatus.Pending or PurchaseStatus.Failed))
+            .Select(r => r.Id)
+            .ToHashSet();
+
         // Desired = the current liked-but-unowned items, keyed and deduped across users.
         var desired = new Dictionary<string, PurchaseItem>();
 
@@ -363,7 +393,8 @@ public class PurchaseService
             // Owned, but below what is wanted: an upgrade rather than a gap. The kind is carried onto
             // the row because the two are acquired differently — an upgrade has an existing copy that
             // must be moved aside rather than merged with.
-            var isUpgrade = AlbumIsOwned(ownedAlbums, overrideKeys, matchArtist, first.Album.AlbumName);
+            var isUpgrade = AlbumIsOwned(ownedAlbums, overrideKeys, matchArtist, first.Album.AlbumName)
+                            || committedUpgrades.Contains(g.Key);
             // Checked under both acts the album can be filed as, exactly as a block is recorded: a
             // collaboration reached through one member must stay skipped when reached through the other.
             // Only upgrades — a scope-Upgrade verdict says "keep what we have", which has nothing to say

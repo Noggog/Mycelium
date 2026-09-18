@@ -10,6 +10,7 @@ import {
   getPurchases,
   rate,
   recheckUpgrade,
+  dismissUpgrade,
   removeManualPurchase,
   setDeezerArl,
   setDownloadsAutomatic,
@@ -692,7 +693,9 @@ export default function Purchases() {
     },
   })
   const recheck = useMutation({ mutationFn: (id: string) => recheckUpgrade(id), onSuccess: invalidate })
+  const dismiss = useMutation({ mutationFn: (id: string) => dismissUpgrade(id), onSuccess: invalidate })
   const busy = download.isPending || unsend.isPending || remove.isPending || recheck.isPending
+    || dismiss.isPending
 
   // The remove (✕) action shared by pending/failed rows — cancels the want before it downloads. An
   // upgrade row isn't a want being dropped (the record is already on the shelf), so it says what it
@@ -724,7 +727,7 @@ export default function Purchases() {
   )
   // What an upgrade row offers depends on how far it got. Once the swap has happened there's no
   // taking it back from here (the old copy is in the trash folder, recoverable by hand), so a finished
-  // row only offers Recheck — and only when its ratings may need rescuing.
+  // row only offers Recheck — when its ratings may need rescuing — and Dismiss, once it has landed.
   const upgradeActions = (item: PurchaseItem): ReactNode => {
     switch (item.status) {
       case 'Pending':
@@ -772,16 +775,30 @@ export default function Purchases() {
           </>
         )
       default:
-        return item.upgrade?.match === 'NeedsFixMatch' ? (
-          <button
-            className="disc-btn up"
-            title="Check the Plex match again, and rematch it to the old copy's release if it has drifted"
-            disabled={busy}
-            onClick={() => recheck.mutate(item.id)}
-          >
-            Recheck
-          </button>
-        ) : null
+        return (
+          <>
+            {item.upgrade?.match === 'NeedsFixMatch' && (
+              <button
+                className="disc-btn up"
+                title="Check the Plex match again, and rematch it to the old copy's release if it has drifted"
+                disabled={busy}
+                onClick={() => recheck.mutate(item.id)}
+              >
+                Recheck
+              </button>
+            )}
+            {item.status === 'InLibrary' && item.upgrade && (
+              <button
+                className="disc-btn"
+                title="Dismiss — clear this finished upgrade off the list"
+                disabled={busy}
+                onClick={() => dismiss.mutate(item.id)}
+              >
+                <IconClear />
+              </button>
+            )}
+          </>
+        )
     }
   }
 
@@ -989,8 +1006,9 @@ export default function Purchases() {
               {upgradesAttention > 0
                 ? `${upgradesAttention} need${upgradesAttention === 1 ? 's' : ''} attention. `
                 : ''}
-              Better copies of albums you already own. The old copy is moved aside, not deleted, and
-              finished upgrades stay here for 30 days.
+              Better copies of albums you already own. The old copy is moved aside, not deleted.
+              Finished upgrades clear once Plex has kept their match; the rest stay for 30 days or
+              until dismissed.
             </em>
           </p>
           <div className="disc-list">
@@ -1003,6 +1021,7 @@ export default function Purchases() {
             ))}
           </div>
           {recheck.isError && <p className="error">{(recheck.error as Error).message}</p>}
+          {dismiss.isError && <p className="error">{(dismiss.error as Error).message}</p>}
         </div>
       )}
 

@@ -46,6 +46,7 @@ public enum UpgradeMatchCheck
 /// <param name="OldMatch">What Plex had the old copy matched to (e.g. <c>plex://album/…</c>).</param>
 /// <param name="NewMatch">What Plex matched the new copy to, when that differed.</param>
 /// <param name="MatchCheckSince">When the current round of checking began; bounds how long it keeps trying.</param>
+/// <param name="Dismissed">Cleared off the Download page by hand. Display only: the match is still kept.</param>
 public record UpgradeReport(
     DateTimeOffset At,
     string? RefusalDetail = null,
@@ -57,4 +58,5 @@ public record UpgradeReport(
     UpgradeMatchCheck Match = UpgradeMatchCheck.None,
     string? OldMatch = null,
     string? NewMatch = null,
-    DateTimeOffset? MatchCheckSince = null);
+    DateTimeOffset? MatchCheckSince = null,
+    bool Dismissed = false);

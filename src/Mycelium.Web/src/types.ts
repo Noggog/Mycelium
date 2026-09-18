@@ -381,6 +381,8 @@ export interface UpgradeReport {
   // What Plex matched the new copy to, when it differed from the old copy's match.
   newMatch: string | null
   matchCheckSince: string | null
+  // Cleared off the Download page by hand; the server stops returning it.
+  dismissed: boolean
 }
 
 // Mirror ManualAddResult / ManualAddOutcome (IPurchaseRepo.cs) — the answer to pasting a Deezer

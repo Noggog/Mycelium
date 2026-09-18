@@ -310,6 +310,14 @@ export async function recheckUpgrade(id: string): Promise<PurchaseItem> {
   return (await res.json()) as PurchaseItem
 }
 
+// Clear a finished upgrade off the Download page. Display only — nothing about the album changes.
+export async function dismissUpgrade(id: string): Promise<void> {
+  const res = await fetch(`/api/purchases/upgrade/dismiss?id=${encodeURIComponent(id)}`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(`Failed to dismiss the upgrade: ${res.status} ${res.statusText}`)
+  }
+}
+
 export async function unsendPurchase(id: string): Promise<void> {
   const res = await fetch(`/api/purchases/unsend?id=${encodeURIComponent(id)}`, { method: 'POST' })
   if (!res.ok) {
