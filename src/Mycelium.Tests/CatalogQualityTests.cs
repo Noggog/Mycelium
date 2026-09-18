@@ -17,6 +17,7 @@ public class CatalogQualityTests
 {
     private readonly ILibraryQuery _library = Substitute.For<ILibraryQuery>();
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
+    private readonly IPurchaseRepo _purchases = Substitute.For<IPurchaseRepo>();
 
     private const string Artist = "Alvvays";
 
@@ -24,7 +25,7 @@ public class CatalogQualityTests
 
     public CatalogQualityTests()
     {
-        _sut = new CatalogRefresher(_library, _catalog, NullLogger<CatalogRefresher>.Instance);
+        _sut = new CatalogRefresher(_library, _catalog, _purchases, NullLogger<CatalogRefresher>.Instance);
         _library.QueryAllArtistMetadata().Returns(Array.Empty<ArtistMetadata>());
         _catalog.SyncFromLibrary(Arg.Any<IReadOnlyList<ArtistMetadata>>(), Arg.Any<DateTimeOffset>())
             .Returns(new CatalogSyncResult(0, 0, 0, Array.Empty<string>()));
@@ -33,6 +34,7 @@ public class CatalogQualityTests
         _library.QueryAlbumQuality(Arg.Any<IReadOnlyCollection<int>>())
             .Returns(new Dictionary<int, AudioQuality?>());
         _library.QueryAllAlbumQuality().Returns(new Dictionary<int, AudioQuality?>());
+        _purchases.GetAll().Returns(Array.Empty<PurchaseItem>());
     }
 
     /// <summary>Plex holds one album for our artist, under the given rating key.</summary>
@@ -99,6 +101,28 @@ public class CatalogQualityTests
 
         (await Written()).Single().Quality.Should().Be(AudioQuality.Lossy);
         await _catalog.Received().SyncAlbums(Arg.Any<IReadOnlyList<ArtistAlbums>>(), true);
+    }
+
+    [Theory]
+    [InlineData(PurchaseStatus.Sent, true)]
+    [InlineData(PurchaseStatus.InLibrary, false)]
+    public async Task A_swapped_in_upgrade_is_read_again_until_it_closes_out(PurchaseStatus status, bool reread)
+    {
+        // The stored answer is the replaced copy's. Carried forward, the upgrade never reads as
+        // satisfied and its row sits in Sent for ever; once closed out it is back to steady state.
+        PlexHasAlbum("Blue Rev", 42);
+        AlreadyStored("Blue Rev", AudioQuality.Lossy);
+        _purchases.GetAll().Returns(new[]
+        {
+            new PurchaseItem("id", FeedKind.UpgradeAlbum, new ArtistKey(Artist), "Blue Rev", null, 0,
+                Array.Empty<string>(), status, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1),
+        });
+        _library.QueryAlbumQuality(Arg.Is<IReadOnlyCollection<int>>(k => k.Contains(42)))
+            .Returns(new Dictionary<int, AudioQuality?> { [42] = AudioQuality.Lossless });
+
+        await _sut.Refresh(CatalogRefresher.QualityRead.GapFill);
+
+        (await Written()).Single().Quality.Should().Be(reread ? AudioQuality.Lossless : AudioQuality.Lossy);
     }
 
     [Fact]

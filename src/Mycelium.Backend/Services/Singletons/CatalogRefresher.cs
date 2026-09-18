@@ -16,15 +16,18 @@ public class CatalogRefresher
 
     private readonly ILibraryQuery _libraryQuery;
     private readonly IArtistCatalogRepo _catalog;
+    private readonly IPurchaseRepo _purchases;
     private readonly ILogger<CatalogRefresher> _logger;
 
     public CatalogRefresher(
         ILibraryQuery libraryQuery,
         IArtistCatalogRepo catalog,
+        IPurchaseRepo purchases,
         ILogger<CatalogRefresher> logger)
     {
         _libraryQuery = libraryQuery;
         _catalog = catalog;
+        _purchases = purchases;
         _logger = logger;
     }
 
@@ -119,8 +122,14 @@ public class CatalogRefresher
         }
         else
         {
+            // An upgrade awaiting close-out is re-read even though an answer is stored: that answer is
+            // the replaced copy's quality, and carrying it forward would hold the row in Sent for ever
+            // (the reconcile only closes an upgrade once the stored quality reaches its target).
+            var upgrading = await UpgradesAwaitingQuality();
             var unknown = albums
-                .SelectMany(a => a.Albums.Where(al => Known(a.Artist.ArtistName, al.Title) is null))
+                .SelectMany(a => a.Albums.Where(al =>
+                    Known(a.Artist.ArtistName, al.Title) is null
+                    || upgrading.Contains(UpgradeKey(a.Artist.ArtistName, al.Title))))
                 .Select(al => al.PlexRatingKey)
                 .Where(key => key != 0)
                 .Distinct()
@@ -152,4 +161,19 @@ public class CatalogRefresher
                     .ToArray()))
             .ToArray();
     }
+
+    /// <summary>
+    /// The (act, record) keys of upgrades downloaded but not yet closed out, under both the act the
+    /// library files each under and the listing artist — the two differ for a collaboration.
+    /// </summary>
+    private async Task<HashSet<string>> UpgradesAwaitingQuality() =>
+        (await _purchases.GetAll())
+        .Where(p => p.Kind == FeedKind.UpgradeAlbum && p.Status == PurchaseStatus.Sent && p.Album is not null)
+        .SelectMany(p => new[] { p.AlbumArtist ?? p.Artist.ArtistName, p.Artist.ArtistName }
+            .Select(act => UpgradeKey(act, p.Album!)))
+        .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>Matched the way ownership is: folded artist, record-level title.</summary>
+    private static string UpgradeKey(string artist, string album) =>
+        $"{TypographyFold.ForArtist(artist)}\u0000{AlbumTitleMatcher.NormalizeRecord(album)}";
 }

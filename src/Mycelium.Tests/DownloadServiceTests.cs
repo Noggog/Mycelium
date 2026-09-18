@@ -75,7 +75,7 @@ public class DownloadServiceTests
             _downloader, Substitute.For<IDeezerApi>(), _albumTagger, config, settings,
             new UserQualityService(_users, AudioQuality.Lossless), _jitter, _schedule,
             NullLogger<PurchaseService>.Instance);
-        var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, NullLogger<CatalogRefresher>.Instance);
+        var catalog = new CatalogRefresher(_libraryQuery, _catalogRepo, _repo, NullLogger<CatalogRefresher>.Instance);
         var tagBackfill = new ArtistTagBackfill(
             _tagger, _queue, _users, NullLogger<ArtistTagBackfill>.Instance);
         var albumTagBackfill = new AlbumTagBackfill(
