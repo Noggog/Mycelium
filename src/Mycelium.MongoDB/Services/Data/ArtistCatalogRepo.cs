@@ -142,7 +142,11 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             if (artist.ArtistImageUrl == null) continue;
 
             writes.Add(new UpdateOneModel<BsonDocument>(
-                Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistKey.ArtistName),
+                Builders<BsonDocument>.Filter.And(
+                    Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistKey.ArtistName),
+                    // A photo arriving here came from a Deezer edge matched by name — for an artist
+                    // detached from Deezer, that is exactly the wrong act the detach was about.
+                    Builders<BsonDocument>.Filter.Ne(FieldDeezerUnlinked, true)),
                 Builders<BsonDocument>.Update.Set(FieldImageUrl, artist.ArtistImageUrl))
             {
                 // Never create entries for artists outside the library — only fill images on
@@ -584,7 +588,9 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             .Unset(FieldDeezerFans)
             .Unset(FieldDeezerLink)
             .Unset(FieldDeezerOverride)
-            .Unset(FieldDeezerUnlinked);
+            .Unset(FieldDeezerUnlinked)
+            // The photo belonged to the identity being cleared; re-resolution brings its own.
+            .Unset(FieldImageUrl);
 
         await Collection.UpdateOneAsync(
             Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName), update);
@@ -600,8 +606,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     public async Task SetDeezerUnlinked(ArtistKey artist)
     {
         // Clear any resolved id and pin the sticky "unlinked" flag — the artist has no Deezer match,
-        // so resolution must return null instead of re-guessing by name. Leave the artist photo intact.
+        // so resolution must return null instead of re-guessing by name. The photo goes too: it is the
+        // wrong act's, and without it the artist falls back to the photo Plex holds.
         var update = Builders<BsonDocument>.Update
+            .Unset(FieldImageUrl)
             .Unset(FieldDeezerId)
             .Unset(FieldDeezerName)
             .Unset(FieldDeezerFans)
@@ -733,7 +741,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             ? n.AsString
             : doc["_id"].AsString;
 
-        var imageUrl = doc.TryGetValue(FieldImageUrl, out var img) && !img.IsBsonNull
+        // An artist detached from Deezer has no Deezer photo, whatever is stored: rows detached before
+        // the detach started clearing it still carry the wrong act's.
+        var deezerUnlinked = doc.TryGetValue(FieldDeezerUnlinked, out var du) && du.IsBoolean && du.AsBoolean;
+        var imageUrl = !deezerUnlinked && doc.TryGetValue(FieldImageUrl, out var img) && !img.IsBsonNull
             ? img.AsString
             : null;
 
