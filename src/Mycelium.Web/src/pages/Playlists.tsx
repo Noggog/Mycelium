@@ -255,8 +255,8 @@ const RUNGS = ['0.5', '1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5
 // scale they want. Keyed by rung so the whole-star ladder lines up with the same rows; the rungs it
 // has no entry for are the ones that user can't set.
 const HALF_STAR_KEY: Record<string, string> = {
-  '0.5': 'Hate. Never play again',
-  '1.0': 'Deciding whether to give another chance before blocking',
+  '0.5': 'Blocked. Interludes and other filler, not really songs',
+  '1.0': 'Hate. Never play again',
   '1.5': 'Boring. Maybe stop playing just out of drabness',
   '2.0': 'Slightly interesting but questionable',
   '2.5': 'Stuff to have on. Not too opinionated',
@@ -277,10 +277,10 @@ const WHOLE_STAR_KEY: Record<string, string> = {
 
 // How this user rates in Plex. There is no way to ask Plex: half-star support is a per-client
 // capability — Plexamp offers it, Plex Web can only set whole stars — and no server or account
-// setting exposes which one someone actually uses. It matters because the lowest score a user can
-// give is the one that means "never play again", and Frontier has to leave that music alone — and
-// because the extra rungs move where Frontier's own lines fall: 2.5★ ("stuff to have on") is music
-// worth resurfacing after a year, where the whole-star scale's nearest rung is 2★, "meh".
+// setting exposes which one someone actually uses. 1★ means "never play again" on either scale; what
+// halves add is 0.5★ below it, "blocked" filler that Frontier and the rating readouts treat as not
+// there at all — and the extra rungs move where Frontier's own lines fall: 2.5★ ("stuff to have on")
+// is music worth resurfacing after a year, where the whole-star scale's nearest rung is 2★, "meh".
 function RatingScale({ halfStars, busy }: { halfStars: boolean; busy: boolean }) {
   const patchSurvey = usePatchSurvey()
 

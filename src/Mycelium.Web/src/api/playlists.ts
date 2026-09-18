@@ -119,8 +119,8 @@ export interface PlaylistSurvey {
 // The "not played in the last N months" windows the Fresh variants offer.
 export const FRESH_WINDOWS = [1, 3, 6, 12] as const
 
-// Records how the user rates in Plex, which decides where the generated rules put the "never play
-// again" floor. Plex itself can't be asked: half stars are a per-client capability (Plexamp has them,
+// Records how the user rates in Plex, which decides which star tiers are offered and how Frontier's
+// lines are drawn. Plex itself can't be asked: half stars are a per-client capability (Plexamp has them,
 // Plex Web doesn't) exposed by no server or account setting.
 export async function setRatingScale(halfStars: boolean): Promise<void> {
   const res = await fetch('/api/playlists/rating-scale', {

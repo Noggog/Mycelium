@@ -86,8 +86,15 @@ public record StockPlaylistOptions(
 /// <para><b>Half stars.</b> Which values a user actually sets depends on the client they rate from —
 /// Plexamp does halves, Plex Web only whole stars — and Plex exposes no way to ask, so the user tells
 /// us (<see cref="StockPlaylistOptions.HalfStars"/>). Thresholds don't care: "3★ and up" is
-/// <c>&gt;&gt; 5</c> either way. Only two things do — where the reject <see cref="Floor"/> sits, and
-/// which tiers <see cref="Tiers"/> offers.</para>
+/// <c>&gt;&gt; 5</c> either way. What they do change is which tiers <see cref="Tiers"/> offers, where
+/// Frontier's one-year lane starts (<see cref="StaleAfterOneYear"/>), and how the reject floor is
+/// worded (<see cref="FloorDetail"/>).</para>
+///
+/// <para><b>The bottom of the ladder.</b> 1★ is "hate, never play again" on either scale. Below it, a
+/// half-star user's 0.5★ is not a stronger hate but a different verdict altogether: <see cref="Blocked"/>,
+/// for interludes and other filler that isn't music anyone has an opinion about. Blocked songs are
+/// never resurfaced and never offered as a tier — as far as the playlists are concerned they don't
+/// exist.</para>
 /// </summary>
 public static class SmartPlaylistCatalog
 {
@@ -145,22 +152,26 @@ public static class SmartPlaylistCatalog
     internal static string Above(int ratingUnits) => (ratingUnits - 1).ToString();
 
     /// <summary>
-    /// The user's "never play again" rating — the lowest one they can express. 0.5★ (1 unit) for
-    /// someone rating in half stars, 1★ (2 units) for someone whose client only offers whole ones.
-    /// Frontier's bottom two bands are built from it: at or below the floor is rejected, above it is
-    /// undecided. (The other number the scale moves is the one-year staleness lane — see
-    /// <see cref="StaleAfterOneYear"/> — and it moves for a different reason.)
+    /// The "never play again" rating, in rating units: 1★, on either scale. Frontier's bottom bands are
+    /// built from it — at or below the floor is rejected, above it is undecided.
     /// </summary>
-    internal static int Floor(bool halfStars) => halfStars ? 1 : 2;
+    internal const int Floor = 2;
 
     /// <summary>
-    /// The tiers the star-rating picker offers, in rating units, ascending — every half step for a
-    /// half-star user, every whole star otherwise. Rated 0★ is not a tier: "0 stars and up" is the
-    /// whole library, which is not a playlist anyone wants.
+    /// The "blocked" rating, in rating units: 0.5★. Not a verdict on the music — it marks interludes
+    /// and other filler, so it never comes back around and never counts towards anything. Only a
+    /// half-star client can set it.
+    /// </summary>
+    internal const int Blocked = 1;
+
+    /// <summary>
+    /// The tiers the star-rating picker offers, in rating units, ascending — every half step from 1★
+    /// for a half-star user, every whole star otherwise. 0.5★ is not a tier: "0.5★ and up" would be
+    /// the rated library plus the <see cref="Blocked"/> filler, which is not a playlist anyone wants.
     /// </summary>
     public static int[] Tiers(bool halfStars) =>
         halfStars
-            ? new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 }
+            ? new[] { 2, 3, 4, 5, 6, 7, 8, 9, 10 }
             : new[] { 2, 4, 6, 8, 10 };
 
     /// <summary>
@@ -214,12 +225,14 @@ public static class SmartPlaylistCatalog
     private const string RejectDetail = "Excludes Mycelium rejected artists and their albums";
 
     /// <summary>
-    /// The "never play again" clause, naming <em>this</em> user's worst score — 1★ on a whole-star
-    /// scale, 0.5★ on a half-star one (see <see cref="Floor"/>). A fixed "1★" here would describe a
-    /// rule half the users don't have.
+    /// The "never play again" clause. The rule is the same on both scales (see <see cref="Floor"/>),
+    /// but a half-star user also has <see cref="Blocked"/> below it, and a bullet that only named 1★
+    /// would leave them wondering whether their 0.5★ filler was coming back.
     /// </summary>
     private static string FloorDetail(bool halfStars) =>
-        $"Excludes {TierStars(Floor(halfStars), halfStars)}★ rated songs";
+        halfStars
+            ? $"Excludes {TierStars(Blocked, halfStars)}★ and {TierStars(Floor, halfStars)}★ rated songs"
+            : $"Excludes {TierStars(Floor, halfStars)}★ rated songs";
 
     /// <summary>Every definition on offer, in display order.</summary>
     public static IReadOnlyList<StockPlaylistDefinition> Build(StockPlaylistOptions options)
@@ -332,16 +345,43 @@ public static class SmartPlaylistCatalog
     /// a track with no date in a field at all is read by Plex as older than any window, which is what
     /// keeps never-heard music in a playlist about resurfacing it.</para>
     ///
-    /// <para><b>What the rating scale moves.</b> The bottom two bands are written against
-    /// <see cref="Floor"/> rather than a fixed rating, because "the worst score I can give" is 0.5★ for
-    /// one user and 1★ for another — and a track at that score should not be dragged back out by a
-    /// playlist whose whole premise is that you might still want to hear it. At whole stars the
-    /// rejected band widens to take in 1★ and the undecided band above it narrows to match. The
-    /// one-year lane moves too, for its own reason: see <see cref="StaleAfterOneYear"/>.</para>
+    /// <para><b>The bottom of the scale.</b> Everything at or below <see cref="Floor"/> (1★) is
+    /// rejected. What the scale changes is whether a rejection can be taken back. A whole-star user's
+    /// 1★ is the only "no" they have, so it covers both "hated it" and "didn't bother listening" —
+    /// and a 1★ track that was never actually heard gets one chance. A half-star user has
+    /// <see cref="Blocked"/> (0.5★) for the second of those, so their 1★ is always a considered
+    /// "hate", and neither rung ever comes back.</para>
+    ///
+    /// <para>The one-year lane moves with the scale too, for its own reason: see
+    /// <see cref="StaleAfterOneYear"/>.</para>
     /// </summary>
     private static PlexFilter[] FrontierRules(bool halfStars)
     {
-        var floor = Floor(halfStars);
+        // ...and worth hearing: never rated, or rated in a band that says "undecided" rather than
+        // "rejected", or rated highly enough that age is the only reason it fell off.
+        var worthHearing = new List<PlexFilter>
+        {
+            new PlexCondition("track.userRating", PlexOp.Is, "-1"),
+            // Above the floor but still under 2★ (1.5★, boring): not rejected, just unconvincing — so
+            // it gets a few outings to make its case and then stops coming back.
+            PlexGroup.All(
+                new PlexCondition("track.userRating", PlexOp.GreaterThan, Floor.ToString()),
+                new PlexCondition("track.viewCount", PlexOp.LessThan, "5"),
+                new PlexCondition("track.skipCount", PlexOp.LessThan, "5"),
+                new PlexCondition("track.userRating", PlexOp.LessThan, "4")),
+            new PlexCondition("track.userRating", PlexOp.GreaterThan, "3"),
+        };
+        if (!halfStars)
+        {
+            // At the floor — rejected — but never actually heard, so the verdict was passed on
+            // something nobody has put on. One chance, then it's gone for good.
+            worthHearing.Add(PlexGroup.All(
+                new PlexCondition("track.userRating", PlexOp.GreaterThan, "-1"),
+                new PlexCondition("track.viewCount", PlexOp.LessThan, "1"),
+                new PlexCondition("track.skipCount", PlexOp.LessThan, "1"),
+                new PlexCondition("track.userRating", PlexOp.LessThan, (Floor + 1).ToString())));
+        }
+
         return new PlexFilter[]
         {
             // Stale enough to be worth resurfacing. Anything the user said yes to comes back after a
@@ -355,25 +395,7 @@ public static class SmartPlaylistCatalog
                 PlexGroup.All(
                     new PlexCondition("track.lastViewedAt", PlexOp.LessThan, "-2y"),
                     new PlexCondition("track.lastSkippedAt", PlexOp.LessThan, "-2y"))),
-            // ...and worth hearing: never rated, or rated in a band that says "undecided" rather than
-            // "rejected", or rated highly enough that age is the only reason it fell off.
-            PlexGroup.Any(
-                new PlexCondition("track.userRating", PlexOp.Is, "-1"),
-                // Above the floor but still under 2★: not rejected, just unconvincing — so it gets a
-                // few outings to make its case and then stops coming back.
-                PlexGroup.All(
-                    new PlexCondition("track.userRating", PlexOp.GreaterThan, floor.ToString()),
-                    new PlexCondition("track.viewCount", PlexOp.LessThan, "5"),
-                    new PlexCondition("track.skipCount", PlexOp.LessThan, "5"),
-                    new PlexCondition("track.userRating", PlexOp.LessThan, "4")),
-                new PlexCondition("track.userRating", PlexOp.GreaterThan, "3"),
-                // At or below the floor — rejected — but never actually heard, so the verdict was
-                // passed on something nobody has put on. One chance, then it's gone for good.
-                PlexGroup.All(
-                    new PlexCondition("track.userRating", PlexOp.GreaterThan, "-1"),
-                    new PlexCondition("track.viewCount", PlexOp.LessThan, "1"),
-                    new PlexCondition("track.skipCount", PlexOp.LessThan, "1"),
-                    new PlexCondition("track.userRating", PlexOp.LessThan, (floor + 1).ToString()))),
+            PlexGroup.Any(worthHearing.ToArray()),
         };
     }
 

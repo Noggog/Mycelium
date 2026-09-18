@@ -13,6 +13,11 @@ namespace Mycelium.Backend.Services.Singletons;
 /// rating keys (split collaborators / recurring names), so tracks are unioned across all of them.
 /// Auto-registers via the assembly scan, like <see cref="LibrarySourcesService"/>.
 ///
+/// <para><b>0.5★ doesn't count.</b> That rating means "blocked" — interludes and other filler — not a
+/// verdict on the music, so a blocked song is left out entirely: not in the lowest, not dragging down
+/// the average, not in either count. An artist whose album is half skits shouldn't read as disliked,
+/// and the reconsider sweep, which reads these same numbers, shouldn't think so either.</para>
+///
 /// <para><b>Whose ratings.</b> Star ratings are per-Plex-account, so every read here goes through the
 /// asking user's own linked token (<see cref="IPlexLinkRepo"/>). Reading with the app's server token
 /// instead — which is what this did originally — reports the server owner's stars to everyone, so a
@@ -38,6 +43,9 @@ public class ArtistRatingStatsService
         _links = links;
         _logger = logger;
     }
+
+    /// <summary>0.5★ on Plex's 0–10 scale: "blocked", which this summary treats as not there at all.</summary>
+    private const double BlockedRating = 1;
 
     /// <summary>Nothing to show: not in Plex, or nobody's account to read it as.</summary>
     private static ArtistRatingStats Absent(ArtistKey artist) =>
@@ -80,6 +88,9 @@ public class ArtistRatingStatsService
                 _logger.LogWarning(ex, "Couldn't fetch Plex tracks for {Artist} (key {Key})", artist.ArtistName, key);
             }
         }
+
+        // Blocked songs (0.5★) are filler, not music with a rating — drop them before counting anything.
+        tracks = tracks.Where(t => t.UserRating != BlockedRating).ToList();
 
         // Plex leaves an unrated song's userRating null (some server versions report 0); count only real
         // ratings, and convert the 0–10 scale to the 0–5 stars shown in the Plex UI.

@@ -1623,7 +1623,7 @@ playlists.MapPost("/stock/{id}", async (
 
 // How this user rates in Plex. Plex itself can't be asked — half-star support is a per-client
 // capability (Plexamp has it, Plex Web doesn't), exposed by no server or account setting — so the
-// user tells us, and the generated rules put their "never play again" floor in the right place.
+// user tells us, and the generated rules offer the tiers and draw Frontier's lines to match.
 // A null clears the answer, returning them to the catalog default.
 playlists.MapPut("/rating-scale", async (
         RatingScaleRequest body, HttpContext http, IUserRepo users) =>

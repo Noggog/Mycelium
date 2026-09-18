@@ -81,6 +81,35 @@ public class ArtistRatingStatsServiceTests
     }
 
     [Fact]
+    public async Task BlockedSongs_AreLeftOutEntirely()
+    {
+        StoredKeys(10);
+        // 0.5★ (Plex 1) is "blocked" filler — interludes, skits — not a verdict on the music, so it
+        // mustn't become the lowest, drag down the average, or count as a song at all.
+        _plex.GetArtistTracks(10, Token).Returns(new[] { Track(8), Track(4), Track(1), Track(1), Track(null) });
+
+        var stats = await _sut.ForUser(User, new ArtistKey(Artist));
+
+        stats.RatedCount.Should().Be(2);
+        stats.TrackCount.Should().Be(3);
+        stats.Lowest.Should().Be(2.0);
+        stats.Average.Should().Be(3.0);
+    }
+
+    [Fact]
+    public async Task OnlyBlockedSongs_ReportsNothingRated()
+    {
+        StoredKeys(10);
+        _plex.GetArtistTracks(10, Token).Returns(new[] { Track(1), Track(null) });
+
+        var stats = await _sut.ForUser(User, new ArtistKey(Artist));
+
+        stats.Present.Should().BeTrue();
+        stats.RatedCount.Should().Be(0);
+        stats.Lowest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task UnionsTracksAcrossEveryRatingKey()
     {
         // A name can map to several Plex items (split collaborators / recurring names); pool them all.

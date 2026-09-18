@@ -192,7 +192,7 @@ public class SmartPlaylistServiceTests
 
     /// <summary>
     /// The rating scale is part of what a playlist <em>means</em>. A Frontier built for a half-star
-    /// user puts the "never play again" floor at 0.5★; the same playlist read back after that user
+    /// user brings 2.5★ back after a year; the same playlist read back after that user
     /// says they rate in whole stars selects a different set of tracks, and the page must say so
     /// rather than reporting a match it no longer has.
     /// </summary>
@@ -653,9 +653,9 @@ public class SmartPlaylistServiceTests
 
         await _sut.Create(Subject, Username, SmartPlaylistCatalog.DeepFrontierId, 3);
 
-        // The half-star floor, which only a half-star user has: a whole-star user's summary says 1★
-        // here, because their client can't set anything lower.
-        _playlists.Summaries.Should().ContainSingle().Which.Summary.Should().Contain("0.5★");
+        // The blocked rung, which only a half-star user has: a whole-star user's summary names just
+        // 1★ here, because their client can't set anything lower.
+        _playlists.Summaries.Should().ContainSingle().Which.Summary.Should().Contain("0.5★ and 1.0★");
     }
 
     /// <summary>

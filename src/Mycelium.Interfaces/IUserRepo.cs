@@ -36,8 +36,8 @@ public interface IUserRepo
     Task SetMaxQuality(string subject, AudioQuality? quality);
 
     /// <summary>
-    /// Records whether this user rates in half stars, which decides where the generated smart
-    /// playlists put the "never play again" floor. Null clears it back to unset (the catalog default).
+    /// Records whether this user rates in half stars, which decides which tiers the generated smart
+    /// playlists offer and where Frontier's lines fall. Null clears it back to unset (the catalog default).
     /// Only touches users that already exist, for the same reason <see cref="SetMaxQuality"/> does.
     /// </summary>
     Task SetHalfStarRatings(string subject, bool? halfStars);

@@ -50,7 +50,7 @@ public class SmartPlaylistCatalogTests
     /// its rule is "greater than 6". Half-step ids take an underscore so they stay clean URL segments.
     /// </summary>
     [Theory]
-    [InlineData(1, "stars-0_5", "0.5★+", "0")]
+    [InlineData(3, "stars-1_5", "1.5★+", "2")]
     [InlineData(7, "stars-3_5", "3.5★+", "6")]
     [InlineData(9, "stars-4_5", "4.5★+", "8")]
     public void Half_tiers_sit_between_the_whole_ones(
@@ -75,7 +75,7 @@ public class SmartPlaylistCatalogTests
 
         var labels = tiers.Select(t => SmartPlaylistCatalog.TierLabel(t, halfStars: true)).ToArray();
 
-        labels.Should().StartWith(new[] { "0.5★+", "1.0★+", "1.5★+", "2.0★+" });
+        labels.Should().StartWith(new[] { "1.0★+", "1.5★+", "2.0★+" });
         labels.Should().BeInAscendingOrder(StringComparer.Ordinal);
     }
 
@@ -107,7 +107,7 @@ public class SmartPlaylistCatalogTests
             .ToArray();
 
         TierIds(halfStars: false).Should().Equal("stars-1", "stars-2", "stars-3", "stars-4", "stars-5");
-        TierIds(halfStars: true).Should().HaveCount(10).And.Contain("stars-3_5");
+        TierIds(halfStars: true).Should().HaveCount(9).And.Contain("stars-3_5").And.NotContain("stars-0_5");
 
         PlexFilterSerializer.Serialize(Filter("stars-4", halfStars: false))
             .Should().Be(PlexFilterSerializer.Serialize(Filter("stars-4", halfStars: true)));
@@ -196,7 +196,8 @@ public class SmartPlaylistCatalogTests
     /// <summary>
     /// The staleness/worth-hearing rules both Frontier variants are built from, on a half-star scale.
     /// The one-year lane is "2.5★ and up", which on Plex's strictly-greater operator is
-    /// <c>&gt;&gt; 4</c> — one half-step below the tier, so 2.5★ itself is in.
+    /// <c>&gt;&gt; 4</c> — one half-step below the tier, so 2.5★ itself is in. Below that, 1.5★ is the
+    /// few-more-outings band, and 1★ (hated) and 0.5★ (blocked) never come back.
     ///
     /// <para>Every play clause is paired with the skip field beside it, because Frontier counts a skip
     /// as a play: <c>lastSkippedAt</c> next to each <c>lastViewedAt</c>, <c>skipCount</c> next to each
@@ -212,11 +213,9 @@ public class SmartPlaylistCatalogTests
         + "&and=1"
         + "&push=1"
         + "&track.userRating=-1"
-        + "&or=1&push=1&track.userRating%3E%3E=1&and=1&track.viewCount%3C%3C=5"
+        + "&or=1&push=1&track.userRating%3E%3E=2&and=1&track.viewCount%3C%3C=5"
         + "&and=1&track.skipCount%3C%3C=5&and=1&track.userRating%3C%3C=4&pop=1"
         + "&or=1&track.userRating%3E%3E=3"
-        + "&or=1&push=1&track.userRating%3E%3E=-1&and=1&track.viewCount%3C%3C=1"
-        + "&and=1&track.skipCount%3C%3C=1&and=1&track.userRating%3C%3C=2&pop=1"
         + "&pop=1";
 
     /// <summary>
@@ -328,13 +327,13 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// The bullets are generated from the same options the rules are, so the reject floor they name is
-    /// the user's own worst score — 1★ for a whole-star user, 0.5★ for a half-star one. A fixed number
-    /// here would describe a rule half the users don't have.
+    /// The bullets are generated from the same options the rules are. The floor is 1★ on either scale,
+    /// but a half-star user also has 0.5★ "blocked" below it, and the bullet has to say that stays out
+    /// too — a whole-star user can't set it, so naming it to them would be noise.
     /// </summary>
     [Theory]
     [InlineData(false, "Excludes 1★ rated songs")]
-    [InlineData(true, "Excludes 0.5★ rated songs")]
+    [InlineData(true, "Excludes 0.5★ and 1.0★ rated songs")]
     public void The_frontier_bullets_name_this_users_reject_floor(bool halfStars, string expected)
     {
         var definitions = SmartPlaylistCatalog.Build(new StockPlaylistOptions(
@@ -473,12 +472,12 @@ public class SmartPlaylistCatalogTests
     }
 
     /// <summary>
-    /// The rating scale moves two numbers, for two different reasons.
+    /// The rating scale moves two things in the Frontier rules, for two different reasons.
     ///
-    /// <para>The floor, under which a rating means "never play again": a whole-star user's worst score
-    /// is 1★, so the rejected-but-never-heard band widens to take it in (<c>&lt;&lt; 3</c> rather than
-    /// <c>&lt;&lt; 2</c>) and the undecided band above it starts a step higher (<c>&gt;&gt; 2</c>
-    /// rather than <c>&gt;&gt; 1</c>).</para>
+    /// <para>The floor: 1★ is a whole-star user's only "no", so it covers music they never actually
+    /// listened to as well as music they hate, and a 1★ track that was never heard gets one chance.
+    /// A half-star user has 0.5★ for filler, so their 1★ is a considered verdict and gets no such
+    /// clause.</para>
     ///
     /// <para>And the one-year staleness lane, which is "music I said yes to": that is 3★ here
     /// (<c>&gt;&gt; 5</c>) because 2★ is the shrug below it, where a half-star user's 2.5★ is a real
@@ -486,7 +485,7 @@ public class SmartPlaylistCatalogTests
     /// 2★+ clause and the skip pairing are the same rules in both scales.</para>
     /// </summary>
     [Fact]
-    public void Whole_star_users_get_a_one_star_reject_floor_and_a_three_star_one_year_lane()
+    public void Whole_star_users_get_a_one_chance_floor_and_a_three_star_one_year_lane()
     {
         PlexFilterSerializer.Serialize(Filter(SmartPlaylistCatalog.DeepFrontierId, halfStars: false))
             .Should().Be(
