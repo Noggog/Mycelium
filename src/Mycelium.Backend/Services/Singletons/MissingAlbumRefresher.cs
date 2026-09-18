@@ -53,6 +53,7 @@ public class MissingAlbumRefresher
     private readonly IDeezerAlbumArtistRepo _albumArtists;
     private readonly UserQualityService _qualities;
     private readonly UpgradeAvailability _upgrades;
+    private readonly StandaloneSingleAuditor _singles;
     private readonly ILogger<MissingAlbumRefresher> _logger;
 
     // How many /album/{id} lookups to have in flight at once. DeezerApi paces every call through a
@@ -70,6 +71,7 @@ public class MissingAlbumRefresher
         IDeezerAlbumArtistRepo albumArtists,
         UserQualityService qualities,
         UpgradeAvailability upgrades,
+        StandaloneSingleAuditor singles,
         ILogger<MissingAlbumRefresher> logger)
     {
         _catalog = catalog;
@@ -80,6 +82,7 @@ public class MissingAlbumRefresher
         _albumArtists = albumArtists;
         _qualities = qualities;
         _upgrades = upgrades;
+        _singles = singles;
         _logger = logger;
     }
 
@@ -391,6 +394,17 @@ public class MissingAlbumRefresher
         // discovered per user, which means walking Deezer per user.
         var ceiling = await _qualities.Ceiling();
 
+        // Which of this artist's singles are records in their own right rather than trailers for an
+        // album. Asked of the whole catalog — owned rows and alternate pressings included — because an
+        // album can only be shown not to hold a song if it is actually looked at. Same line
+        // ArtistResolution draws: the sweep pays for the track listings and fills the memo, a
+        // drill-down reads what the sweep has learned and withholds the rest.
+        var standaloneSingles = await _singles.Audit(
+            rows.Select(r => new SingleAuditRelease(
+                    r.Album.id, r.Album.title ?? string.Empty, r.Album.record_type, r.Album.ReleaseDate))
+                .ToList(),
+            learn: resolution == ArtistResolution.Full);
+
         var all = new List<DiscographyAlbum>(rows.Count);
         var missing = new List<MissingAlbum>();
         foreach (var (album, record, ownedByScanned, alternatePressing) in rows)
@@ -442,7 +456,8 @@ public class MissingAlbumRefresher
                     album.Year, album.record_type,
                     // Only set for an upgrade; a gap has no copy to describe.
                     upgradeable ? ownedQuality : null,
-                    alternatePressing));
+                    alternatePressing, album.ReleaseDate,
+                    standaloneSingles.Contains(album.id)));
             }
         }
 

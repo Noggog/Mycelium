@@ -441,4 +441,55 @@ public class AlbumTitleMatcherTests
         AlbumTitleMatcher.NormalizeRecord("Mi Gente (Steve Aoki Remix)")
             .Should().Be("mi gente (steve aoki remix)");
     }
+
+    [Theory]
+    [InlineData("Small Things - Radio Edit")]
+    [InlineData("Small Things (Radio Edit)")]
+    [InlineData("Small Things [Radio Edit]")]
+    [InlineData("Small Things - Single Version")]
+    [InlineData("Small Things (Album Version)")]
+    [InlineData("Small Things - Main Mix")]
+    [InlineData("Small Things (Original Mix)")]
+    [InlineData("Small Things (Radio Edit) [Remastered]")]
+    public void A_cut_tail_folds_away_on_the_track_axis(string title)
+    {
+        // Which cut of a song a release carries is not which song it is — the question the single audit
+        // asks. A label trims or extends a track for single release and Deezer lists both verbatim.
+        AlbumTitleMatcher.NormalizeTrack(title).Should().Be("small things");
+    }
+
+    [Theory]
+    [InlineData("Small Things (Live)")]
+    [InlineData("Small Things - Acoustic")]
+    [InlineData("Small Things (Steve Aoki Remix)")]
+    public void A_different_performance_stays_a_different_song_on_the_track_axis(string title)
+    {
+        // The line NormalizeRecord already draws, kept: a live rendition on an album does not mean the
+        // studio single is redundant. Conservative in the direction that leaves a real recording
+        // offerable rather than silently swallowed.
+        AlbumTitleMatcher.NormalizeTrack(title).Should().NotBe("small things");
+    }
+
+    [Fact]
+    public void A_cut_word_inside_a_real_title_is_not_decoration()
+    {
+        // The all-words test: one cut word in a bracket isn't enough, or "Radio Silence" would become
+        // "radio" and match nothing it should.
+        AlbumTitleMatcher.NormalizeTrack("Wayfaring Stranger (Radio Silence)")
+            .Should().Be("wayfaring stranger (radio silence)");
+    }
+
+    [Fact]
+    public void A_song_actually_called_a_cut_word_keeps_its_name()
+    {
+        AlbumTitleMatcher.NormalizeTrack("Radio Edit").Should().Be("radio edit");
+    }
+
+    [Fact]
+    public void The_track_fold_still_does_everything_the_record_fold_does()
+    {
+        // It is NormalizeRecord plus the cut tails, not a separate rule set — featured credits,
+        // typography and pressing decoration all still go.
+        AlbumTitleMatcher.NormalizeTrack("Titanium (feat. Sia) [Deluxe Edition]").Should().Be("titanium");
+    }
 }

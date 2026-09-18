@@ -64,6 +64,8 @@ public class DiscoveryRatingServiceTests
         var refresher = new MissingAlbumRefresher(
             _catalog, resolver, _deezer, _missing, _overrides, _albumArtists, quality,
             InertUpgradeAvailability.Instance(),
+            new StandaloneSingleAuditor(
+                _deezer, new FakeDeezerAlbumTrackRepo(), NullLogger<StandaloneSingleAuditor>.Instance),
             NullLogger<MissingAlbumRefresher>.Instance);
         var engine = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,

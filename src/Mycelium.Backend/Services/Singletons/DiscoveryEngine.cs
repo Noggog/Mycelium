@@ -421,8 +421,11 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
             .Where(m => !upgrades || m.OwnedQuality < entitlement)
             .Where(m => liked.Contains(m.Artist.ArtistName))
             // Singles and compilations are synced (so they're queueable from an artist's discography and
-            // carry a Deezer id) but never pushed here — the feed would fill with radio edits.
-            .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
+            // carry a Deezer id) but never pushed here — the feed would fill with radio edits. The one
+            // exception is a single the sweep has audited into a record of its own (see
+            // StandaloneSingleAuditor): nothing the artist has put out holds its songs, and an album has
+            // come out since without picking them up, so it is the only way to own them.
+            .Where(m => m.IsFeedEligible)
             // Same deal for the second pressing of a record already listed: browsable in the discography,
             // never a card of its own, so the deluxe edition and the remaster aren't two asks.
             .Where(m => !m.AlternatePressing)
@@ -495,9 +498,10 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
         var decided = await _albumRatings.GetDecidedKeys(userId);
         var blocked = await BlockedKeys();
         return rows
-            // Same feed rules as the main missing-album section: LPs and EPs only, so a newly-liked
-            // artist offers their records rather than a wall of singles, and one pressing per record.
-            .Where(m => AlbumRecordType.IsFeedEligible(m.RecordType))
+            // Same feed rules as the main missing-album section: LPs, EPs and audited standalone
+            // singles, so a newly-liked artist offers their records rather than a wall of singles, and
+            // one pressing per record.
+            .Where(m => m.IsFeedEligible)
             .Where(m => !m.AlternatePressing)
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
             .Where(m => !IsBlocked(blocked, m))

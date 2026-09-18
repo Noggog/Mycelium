@@ -49,6 +49,19 @@ public class DeezerAlbum
         release_date is { Length: >= 4 } d && int.TryParse(d.AsSpan(0, 4), out var year) && year > 0
             ? year
             : null;
+
+    /// <summary>
+    /// The full release date, for the questions a year can't answer — chiefly whether an album
+    /// followed a single, where a January single and a November album are the same <see cref="Year"/>.
+    /// Null whenever Deezer gave less than a whole date: a bare year, an empty string, the "0000-00-00"
+    /// it uses for an undated release. Those still yield a <see cref="Year"/>, so the two are kept
+    /// separately rather than one derived from the other.
+    /// </summary>
+    public DateOnly? ReleaseDate =>
+        DateOnly.TryParseExact(
+            release_date, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var date)
+            ? date
+            : null;
 }
 
 /// <summary>Envelope Deezer wraps album-list responses in: <c>{ "data": [ ... ] }</c>.</summary>

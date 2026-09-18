@@ -44,7 +44,8 @@ public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality 
 /// discography drill-down has to have one or it would sit on the to-buy list forever un-downloadable.
 /// The feed filters on this rather than the sync, so "browsable" and "pushed at you" stay separable.
 /// Null for rows written before record-type tracking — those are pre-existing LPs and EPs, so the feed
-/// treats an absent type as eligible.
+/// treats an absent type as eligible. A single can still reach the feed, but only through
+/// <see cref="StandaloneSingle"/>, never on its type.
 ///
 /// <see cref="AlternatePressing"/> marks a second pressing of a record already listed for this artist —
 /// the deluxe edition alongside the remaster, say. Deezer lists each as its own release, and so does the
@@ -54,6 +55,18 @@ public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality 
 /// twice. Ownership, by contrast, is settled once per record (AlbumTitleMatcher.NormalizeRecord): every
 /// pressing of an album the library holds is owned together, because the library holds one copy under
 /// whatever title Plex chose for it.
+///
+/// <see cref="ReleaseDate"/> is the full Deezer release date, kept alongside <see cref="Year"/> rather
+/// than instead of it because only one of them is always available: Deezer dates a sparse or old
+/// release with a bare year, which yields a <see cref="Year"/> and no <see cref="ReleaseDate"/>. The
+/// day-level date exists for the single audit, which asks whether an album followed a single — a
+/// question a year can't answer, since a January single and a November album share one.
+///
+/// <see cref="StandaloneSingle"/> is the audit's verdict on a single: a release that is a record in its
+/// own right rather than a trailer for one. See <c>StandaloneSingleAuditor</c> for what earns it, and
+/// <see cref="IsFeedEligible"/> for what it buys — which is nothing at all on a row that isn't a
+/// single, since a compilation carrying the flag (a stale row, a hand-written document) would otherwise
+/// be a way into the feed for the one type this audit was never about.
 /// </summary>
 public record MissingAlbum(
     ArtistKey Artist,
@@ -64,7 +77,9 @@ public record MissingAlbum(
     int? Year = null,
     string? RecordType = null,
     AudioQuality? OwnedQuality = null,
-    bool AlternatePressing = false)
+    bool AlternatePressing = false,
+    DateOnly? ReleaseDate = null,
+    bool StandaloneSingle = false)
 {
     /// <summary>
     /// Whether this row is an <em>upgrade</em> — the library has the album, just not well enough —
@@ -77,6 +92,21 @@ public record MissingAlbum(
     /// <summary>The artist the library files this album under — <see cref="AlbumArtist"/> when known,
     /// else <see cref="Artist"/> (non-collaboration albums are filed under the listing artist).</summary>
     public ArtistKey MatchArtist => AlbumArtist ?? Artist;
+
+    /// <summary>
+    /// Whether the Discover feed may push this row unprompted. Ordinarily that is a question about the
+    /// record type alone (<see cref="AlbumRecordType.IsFeedEligible"/>) — LPs and EPs yes, singles and
+    /// compilations no. <see cref="StandaloneSingle"/> is the one way a single earns its way past that,
+    /// having been audited into a record in its own right rather than a trailer for one.
+    ///
+    /// <para>Kept here rather than repeated at each feed so the two gates can't drift: the main
+    /// missing-album feed and the inline "albums by the artist you just liked" list ask the identical
+    /// question, and a single admitted to one but not the other would appear and vanish depending on
+    /// which surface reached it.</para>
+    /// </summary>
+    public bool IsFeedEligible =>
+        AlbumRecordType.IsFeedEligible(RecordType)
+        || (StandaloneSingle && AlbumRecordType.IsSingle(RecordType));
 }
 
 /// <summary>
@@ -84,8 +114,13 @@ public record MissingAlbum(
 /// sync persists every type it lists so each one carries a Deezer id the downloader can use; this is
 /// the gate that decides which of those are actually offered unprompted, applied where a feed is built
 /// rather than where the rows are written. Singles and compilations are browsable in an artist's
-/// discography (badged with their type) but never pushed — the feed would otherwise fill with radio
-/// edits and greatest-hits repackages.
+/// discography (badged with their type) but never pushed on their type alone — the feed would otherwise
+/// fill with radio edits and greatest-hits repackages.
+///
+/// <para>A single has one way past this, and it is not a record type: the standalone audit
+/// (<see cref="MissingAlbum.StandaloneSingle"/>) can establish that no album or EP the artist has holds
+/// its songs and that one has come out since without picking them up. A compilation has no such route,
+/// because a greatest-hits repackage is redundant by construction.</para>
 /// </summary>
 public static class AlbumRecordType
 {
@@ -99,6 +134,14 @@ public static class AlbumRecordType
     /// </summary>
     public static bool IsFeedEligible(string? recordType) =>
         recordType is null || FeedEligible.Contains(recordType);
+
+    /// <summary>
+    /// Whether this is a single — the one type the standalone audit has anything to say about. Named
+    /// here rather than spelled out at each use so the string Deezer sends lives in one place, beside
+    /// the set that decides the rest.
+    /// </summary>
+    public static bool IsSingle(string? recordType) =>
+        string.Equals(recordType, "single", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

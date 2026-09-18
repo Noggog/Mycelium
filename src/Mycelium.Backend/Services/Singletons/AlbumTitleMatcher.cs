@@ -66,6 +66,142 @@ public static partial class AlbumTitleMatcher
         StripLeadingArticle(StripReleaseQualifiers(Normalize(title)));
 
     /// <summary>
+    /// Canonical form for a <em>song</em> title: everything <see cref="Normalize"/> folds, plus the
+    /// tails that say which cut of a song a release carries rather than which song it is — "(Radio
+    /// Edit)", "- Single Version", "(Album Version)", "- Main Mix" — and the pressing decoration a
+    /// track title can pick up alongside them. So the single's "Small Things - Radio Edit" and the
+    /// album's "Small Things" land on one key.
+    ///
+    /// <para>This exists for one question: does an album already hold the song a single is selling
+    /// (<see cref="StandaloneSingleAuditor"/>)? A label routinely trims or extends a track for single
+    /// release and Deezer lists both cuts verbatim, so comparing raw titles would call a pre-release
+    /// teaser a standalone record on the strength of two words in a bracket.</para>
+    ///
+    /// <para><b>Why this builds on <see cref="Normalize"/> and not
+    /// <see cref="NormalizeRecord"/>.</b> Record granularity drops <em>any</em> trailing bracket that
+    /// isn't a different performance, because whatever a source parenthesised it is still shelving the
+    /// same record. That is right for a shelf and wrong for a song: "Hold On (Interlude)" and "Hold On"
+    /// are two tracks, and folding them would let an album's interlude suppress a real single. So the
+    /// bracket has to earn its removal here — every word in it a cut word, a pressing qualifier or
+    /// filler, with at least one of the first two, the same all-words test
+    /// <see cref="IsQualifier"/> applies to a dashed tail.</para>
+    ///
+    /// <para>The line <see cref="NormalizeRecord"/> draws is kept: a tail naming a different
+    /// <em>performance</em> — "(Live)", "(Acoustic)", "(Remix)", see <see cref="IsDistinctRecording"/> —
+    /// is not a cut of the same recording and survives. An album's live rendition therefore does not
+    /// count as holding the studio single, which is the conservative direction: it leaves a genuinely
+    /// unreleased studio recording offerable.</para>
+    ///
+    /// <para>No leading article is stripped, unlike <see cref="NormalizeRecord"/>. That fold exists to
+    /// reconcile two <em>sources</em> that disagree about "The"; both sides of this comparison are
+    /// Deezer track listings, so there is no disagreement to paper over and folding could only merge
+    /// two songs that really are named differently.</para>
+    /// </summary>
+    public static string NormalizeTrack(string? title)
+    {
+        var current = Normalize(title);
+        while (true)
+        {
+            // Re-normalize after each peel: one tail can hide another ("Song (Radio Edit) [Remastered]"
+            // gives up the pressing bracket first and the cut second).
+            var stripped = StripCutQualifier(current);
+            if (stripped is null)
+            {
+                return current;
+            }
+            current = Normalize(stripped);
+        }
+    }
+
+    /// <summary>
+    /// One "which cut is this" tail peeled off a song title, or null when it ends in something that
+    /// names the song. Only a trailing bracket or a free-standing " - " tail is considered — a bare
+    /// unbracketed tail is left alone, because on the song axis there is no equivalent of "Glitterbug
+    /// Deluxe Edition" and the guess would eat real titles.
+    /// </summary>
+    private static string? StripCutQualifier(string title)
+    {
+        if (title.Length == 0)
+        {
+            return null;
+        }
+
+        var close = title[^1];
+        if (close is ')' or ']')
+        {
+            var open = title.LastIndexOf(close == ')' ? '(' : '[');
+            if (open <= 0)
+            {
+                return null;
+            }
+
+            var bracketed = title.AsSpan(open + 1, title.Length - open - 2);
+            return IsCutOrPressing(bracketed) ? KeepCut(title.AsSpan(0, open)) : null;
+        }
+
+        var dash = title.LastIndexOf(" - ", StringComparison.Ordinal);
+        if (dash > 0 && IsCutOrPressing(title.AsSpan(dash + 3)))
+        {
+            return KeepCut(title.AsSpan(0, dash));
+        }
+
+        return null;
+
+        // A strip that would leave nothing behind means the "qualifier" was the title all along.
+        static string? KeepCut(ReadOnlySpan<char> remainder)
+        {
+            var kept = remainder.TrimEnd();
+            return kept.IsEmpty ? null : kept.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Whether a tail describes the cut or the pressing rather than the song — and is not a different
+    /// performance, which is checked first and always wins.
+    /// </summary>
+    private static bool IsCutOrPressing(ReadOnlySpan<char> tail) =>
+        !IsDistinctRecording(tail) && (IsCut(tail) || IsQualifier(tail));
+
+    /// <summary>
+    /// Whether a tail says which cut of a song a release carries: every word is a cut word, a pressing
+    /// qualifier or filler, and at least one is a cut word. The all-words test is what keeps a real
+    /// title fragment — "(Radio Silence)" — from reading as decoration on the strength of one word.
+    /// </summary>
+    private static bool IsCut(ReadOnlySpan<char> tail)
+    {
+        var trimmed = tail.Trim();
+        var sawCut = false;
+        foreach (var range in trimmed.Split(' '))
+        {
+            var word = trimmed[range].Trim(",.-'\"");
+            if (word.IsEmpty)
+            {
+                continue;
+            }
+
+            var text = word.ToString();
+            if (Cuts.Contains(text))
+            {
+                sawCut = true;
+                continue;
+            }
+
+            // Numbers and ordinals carry no identity of their own, same as in a pressing tail.
+            if (char.IsAsciiDigit(word[0]))
+            {
+                continue;
+            }
+
+            if (!Qualifiers.Contains(text) && !Filler.Contains(text))
+            {
+                return false;
+            }
+        }
+
+        return sawCut;
+    }
+
+    /// <summary>
     /// The shared typography fold — see <see cref="TypographyFold"/>. Kept as a private alias so the
     /// title rules below read unchanged, while artist names go through the very same fold via
     /// <see cref="NormalizeArtist"/> and <see cref="ArtistNameComparer"/>.
@@ -354,6 +490,18 @@ public static partial class AlbumTitleMatcher
     {
         "live", "acoustic", "unplugged", "demo", "demos", "remix", "remixes", "remixed",
         "instrumental", "instrumentals", "karaoke", "cover", "covers", "session", "sessions",
+    };
+
+    /// <summary>
+    /// Words that mark which cut of a song a release carries rather than which song it is. Used only by
+    /// <see cref="NormalizeTrack"/> — an album called "Radio" is a record, while a track tail of "Radio
+    /// Edit" is the same song as the album version. Deliberately disjoint from
+    /// <see cref="DistinctRecordings"/>, which is checked first: an "Extended Mix" is a cut, a "Remix"
+    /// is a different recording.
+    /// </summary>
+    private static readonly HashSet<string> Cuts = new(StringComparer.Ordinal)
+    {
+        "radio", "edit", "edits", "mix", "main", "album", "single", "original", "version", "cut",
     };
 
     /// <summary>Words with no identity of their own — allowed in a qualifier tail, never enough to make one.</summary>

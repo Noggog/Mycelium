@@ -43,6 +43,8 @@ public class DiscoveryEngineTests
             // with no recorded quality is never upgradeable whatever the ceiling is.
             new UserQualityService(_users, AudioQuality.Lossless),
             InertUpgradeAvailability.Instance(),
+            new StandaloneSingleAuditor(
+                _deezer, new FakeDeezerAlbumTrackRepo(), NullLogger<StandaloneSingleAuditor>.Instance),
             NullLogger<MissingAlbumRefresher>.Instance);
         _sut = new DiscoveryEngine(
             _queue, _related, _library, _catalog, _missing, _albumRatings, _blocks, refresher,
@@ -476,6 +478,52 @@ public class DiscoveryEngineTests
         var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
 
         page.Items.Select(i => i.Album).Should().BeEquivalentTo("Noonday Dream", "Variations Volume 1");
+    }
+
+    [Fact]
+    public async Task Missing_album_feed_offers_a_single_the_audit_cleared()
+    {
+        // The one way past the gate above: the sweep established that nothing the artist has put out
+        // holds this single's songs and that an album has come out since without picking them up (see
+        // StandaloneSingleAuditor), so it is the only way to own them. The compilation beside it is
+        // untouched by any of that — the audit only ever clears singles.
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Ben Howard" });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Noonday Dream"), "art1", 101,
+                RecordType: "album"),
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Wayfaring Stranger"), "art2", 102,
+                RecordType: "single", StandaloneSingle: true),
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Heave Ho"), "art3", 103,
+                RecordType: "single"),
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Best Of"), "art4", 104,
+                RecordType: "compilation", StandaloneSingle: true),
+        });
+
+        var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+        page.Items.Select(i => i.Album).Should().BeEquivalentTo("Noonday Dream", "Wayfaring Stranger");
+        // It rides the ordinary missing-album kind rather than one of its own: the proposition is
+        // identical (a gap in the library the user can fill), so the card, the verdict and the
+        // downloader path are all the ones that already exist.
+        page.Items.Should().OnlyContain(i => i.Kind == FeedKind.MissingAlbum);
+    }
+
+    [Fact]
+    public async Task An_audited_single_that_is_an_alternate_pressing_is_still_withheld()
+    {
+        // The two gates are independent. Clearing the audit says this release is a record of its own,
+        // not that the feed should ask about the same record twice.
+        _queue.GetLikedArtistNames(User).Returns(new[] { "Ben Howard" });
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey("Ben Howard"), new AlbumKey("Wayfaring Stranger"), "art1", 101,
+                RecordType: "single", AlternatePressing: true, StandaloneSingle: true),
+        });
+
+        var page = await _sut.GetFeed(User, FeedKind.MissingAlbum, 0, 20);
+
+        page.Items.Should().BeEmpty();
     }
 
     [Fact]

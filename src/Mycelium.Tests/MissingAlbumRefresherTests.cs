@@ -23,6 +23,7 @@ public class MissingAlbumRefresherTests
     private readonly IUserRepo _users = Substitute.For<IUserRepo>();
     private readonly IAlbumMatchOverrideRepo _overrides = Substitute.For<IAlbumMatchOverrideRepo>();
     private readonly FakeDeezerAlbumArtistRepo _albumArtists = new();
+    private readonly FakeDeezerAlbumTrackRepo _albumTracks = new();
     private readonly MissingAlbumRefresher _sut;
 
     public MissingAlbumRefresherTests()
@@ -38,6 +39,8 @@ public class MissingAlbumRefresherTests
             // created tomorrow would out-rank everyone, so the diff has to have covered them.)
             new UserQualityService(_users, AudioQuality.Lossy),
             InertUpgradeAvailability.Instance(),
+            new StandaloneSingleAuditor(
+                _deezer, _albumTracks, NullLogger<StandaloneSingleAuditor>.Instance),
             NullLogger<MissingAlbumRefresher>.Instance);
 
         _catalog.GetAllPresent().Returns(new[] { new CatalogArtist(new ArtistKey(Artist), null, default) });
@@ -681,5 +684,126 @@ public class MissingAlbumRefresherTests
         var row = CapturedMissing().Should().ContainSingle().Subject;
         row.IsUpgrade.Should().BeFalse();
         row.OwnedQuality.Should().BeNull();
+    }
+
+    // ---- Single audit, from the sweep's side ----
+
+    private static string Ago(int days) => DateTime.UtcNow.AddDays(-days).ToString("yyyy-MM-dd");
+
+    private static DeezerAlbum Dated(string title, string recordType, long id, string releaseDate) =>
+        new() { id = id, title = title, record_type = recordType, release_date = releaseDate };
+
+    [Fact]
+    public async Task A_sweep_marks_a_standalone_single_and_carries_its_release_date()
+    {
+        // The whole chain from the sweep's point of view: a single nothing holds, an album since that
+        // didn't pick it up, and the verdict written onto the persisted row so the feed reads a field
+        // rather than re-deriving any of it.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Dated("Noonday Dream", "album", 1, Ago(400)),
+            Dated("Wayfaring Stranger", "single", 2, Ago(900)),
+        });
+        _deezer.GetAlbumTracks(1).Returns(new[] { new DeezerTrack { title = "Small Things" } });
+        _deezer.GetAlbumTracks(2).Returns(new[] { new DeezerTrack { title = "Wayfaring Stranger" } });
+
+        var rows = await _sut.RefreshOne(new ArtistKey(Artist), Owned());
+
+        var single = rows.Should().ContainSingle(r => r.Album.AlbumName == "Wayfaring Stranger").Subject;
+        single.StandaloneSingle.Should().BeTrue();
+        single.IsFeedEligible.Should().BeTrue();
+        // The day-level date, not just the year — it is what test 2 compares on.
+        single.ReleaseDate.Should().Be(DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-900)));
+        // And the album is unaffected: it was always eligible, on its record type alone.
+        rows.Single(r => r.Album.AlbumName == "Noonday Dream").StandaloneSingle.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_sweep_leaves_a_teaser_single_withheld()
+    {
+        // Same shape, except the album that followed carries the song. The row is still persisted —
+        // that is what makes it queueable from the drill-down — it just isn't pushed at anyone.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Dated("Noonday Dream", "album", 1, Ago(400)),
+            Dated("Small Things", "single", 2, Ago(900)),
+        });
+        _deezer.GetAlbumTracks(1).Returns(new[] { new DeezerTrack { title = "Small Things" } });
+        _deezer.GetAlbumTracks(2).Returns(new[] { new DeezerTrack { title = "Small Things - Radio Edit" } });
+
+        var rows = await _sut.RefreshOne(new ArtistKey(Artist), Owned());
+
+        var single = rows.Should().ContainSingle(r => r.Album.AlbumName == "Small Things").Subject;
+        single.StandaloneSingle.Should().BeFalse();
+        single.IsFeedEligible.Should().BeFalse();
+        single.DeezerAlbumId.Should().Be(2, "the row still has to carry the id a queued download needs");
+    }
+
+    [Fact]
+    public async Task An_album_the_library_already_owns_still_covers_a_single()
+    {
+        // Ownership is beside the point for coverage: the record we already have is the likeliest place
+        // for a stray single to turn out to be redundant, so it is read like any other.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Dated("Every Kingdom", "album", 1, Ago(2000)),
+            Dated("Noonday Dream", "album", 3, Ago(400)),
+            Dated("Small Things", "single", 2, Ago(900)),
+        });
+        _deezer.GetAlbumTracks(1).Returns(new[] { new DeezerTrack { title = "Small Things" } });
+        _deezer.GetAlbumTracks(3).Returns(new[] { new DeezerTrack { title = "Towing the Line" } });
+        _deezer.GetAlbumTracks(2).Returns(new[] { new DeezerTrack { title = "Small Things" } });
+
+        var rows = await _sut.RefreshOne(
+            new ArtistKey(Artist), Owned((Artist, new[] { "Every Kingdom" })));
+
+        // "Every Kingdom" isn't even in the result — it's owned — but its track listing is what kept
+        // the single out.
+        rows.Should().NotContain(r => r.Album.AlbumName == "Every Kingdom");
+        rows.Single(r => r.Album.AlbumName == "Small Things").StandaloneSingle.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_drill_down_reads_the_memo_and_never_spends_a_track_listing_call()
+    {
+        // The line ArtistResolution already draws, applied to the audit: this runs in front of a click,
+        // so it uses what the sweep learned and fetches nothing. The memo here is cold, so the single
+        // is simply unproven — and an unproven single is withheld, which is the pre-existing behaviour.
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Dated("Noonday Dream", "album", 1, Ago(400)),
+            Dated("Wayfaring Stranger", "single", 2, Ago(900)),
+        });
+        _deezer.GetAlbumTracks(Arg.Any<long>())
+            .Returns(new[] { new DeezerTrack { title = "Wayfaring Stranger" } });
+
+        await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        await _deezer.DidNotReceive().GetAlbumTracks(Arg.Any<long>());
+        _albumTracks.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_drill_down_honours_what_the_sweep_already_learned()
+    {
+        // The other half: with the memo warm, the drill-down reaches the same verdict the sweep did, so
+        // browsing an artist can't quietly demote a single the sweep had cleared (both paths persist
+        // their rows, so a disagreement would flip the feed on every click).
+        _albumTracks.Seed(1, "Small Things");
+        _albumTracks.Seed(2, "Wayfaring Stranger");
+        _deezer.GetAlbums(DeezerId).Returns(new[]
+        {
+            Dated("Noonday Dream", "album", 1, Ago(400)),
+            Dated("Wayfaring Stranger", "single", 2, Ago(900)),
+        });
+
+        await _sut.Discography(new ArtistKey(Artist), Owned());
+
+        var persisted = (IReadOnlyList<MissingAlbum>)_missing.ReceivedCalls()
+            .Single(c => c.GetMethodInfo().Name == nameof(IMissingAlbumRepo.ReplaceForArtist))
+            .GetArguments()[1]!;
+        persisted.Single(r => r.Album.AlbumName == "Wayfaring Stranger")
+            .StandaloneSingle.Should().BeTrue();
+        await _deezer.DidNotReceive().GetAlbumTracks(Arg.Any<long>());
     }
 }
