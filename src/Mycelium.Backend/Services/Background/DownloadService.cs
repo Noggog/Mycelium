@@ -44,6 +44,7 @@ public class DownloadService : BackgroundService
     private readonly JitterPolicy _jitter;
     private readonly DownloadSchedule _schedule;
     private readonly ILibraryScanner _scanner;
+    private readonly UpgradeMatchKeeper _matches;
     private readonly ILogger<DownloadService> _logger;
 
     // Unbounded but effectively tiny; ProcessOne dedups by re-checking status, so duplicate ids are cheap.
@@ -67,8 +68,10 @@ public class DownloadService : BackgroundService
         DownloadSchedule schedule,
         ILibraryScanner scanner,
         IAlbumBlockRepo blocks,
+        UpgradeMatchKeeper matches,
         ILogger<DownloadService> logger)
     {
+        _matches = matches;
         _repo = repo;
         _blocks = blocks;
         _downloader = downloader;
@@ -568,8 +571,12 @@ public class DownloadService : BackgroundService
         try
         {
             var cutoff = DateTimeOffset.UtcNow - _config.SettleWindow;
+            // An upgrade whose Plex match is still unchecked keeps the pass alive even after its row
+            // closes out — the match is only worth checking once the new copy is visible. The check
+            // clears it (or gives up) within the window, so this can't poll forever.
             var waiting = (await _repo.GetAll())
-                .Count(p => p.Status == PurchaseStatus.Sent && (p.SentAt ?? p.RequestedAt) >= cutoff);
+                .Count(p => (p.Status == PurchaseStatus.Sent && (p.SentAt ?? p.RequestedAt) >= cutoff)
+                            || UpgradeMatchKeeper.IsPending(p));
             if (waiting == 0)
             {
                 return;
@@ -589,6 +596,9 @@ public class DownloadService : BackgroundService
             // album has no arrival signal of its own, so this re-checks the rated set against the
             // catalog rather than reading NewlyPresent.
             await _albumTagBackfill.Backfill();
+            // An upgrade that just landed may have been matched to a different release than the copy
+            // it replaced, which takes its ratings with it; this puts the old match back.
+            await _matches.CheckPending();
         }
         catch (PlexUnauthorizedException ex)
         {

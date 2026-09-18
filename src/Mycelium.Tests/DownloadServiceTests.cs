@@ -19,6 +19,7 @@ public class DownloadServiceTests
     // The catalog side of the settle pass: a real CatalogRefresher over a substituted Plex read, so a
     // settle test can say "Plex now reports this album" and watch the row close out for real.
     private readonly ILibraryQuery _libraryQuery = Substitute.For<ILibraryQuery>();
+    private readonly ILibraryMatcher _matcher = Substitute.For<ILibraryMatcher>();
     private readonly IArtistCatalogRepo _catalogRepo = Substitute.For<IArtistCatalogRepo>();
     private readonly ILibraryProvider _library = Substitute.For<ILibraryProvider>();
     private readonly IUserQueueRepo _queue = Substitute.For<IUserQueueRepo>();
@@ -82,6 +83,8 @@ public class DownloadServiceTests
             NullLogger<AlbumTagBackfill>.Instance);
         return new DownloadService(_repo, _downloader, config, settings, purchases, catalog, tagBackfill,
             albumTagBackfill, _jitter, _schedule, _scanner, _blocks,
+            new UpgradeMatchKeeper(_libraryQuery, _matcher, _catalogRepo, _repo, config,
+                NullLogger<UpgradeMatchKeeper>.Instance),
             NullLogger<DownloadService>.Instance);
     }
 

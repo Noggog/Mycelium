@@ -50,6 +50,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 // AcquiredQuality: the Mongo update simply doesn't name the field, so the stored
                 // arrival time survives a reconcile that re-upserts the row's display fields.
                 InLibraryAt = existing.InLibraryAt,
+                // Set and cleared only by SetReplacedPlexMatch; the Mongo upsert doesn't name it.
+                ReplacedPlexMatch = existing.ReplacedPlexMatch,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;
@@ -63,6 +65,15 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
         }
         _items[id] = item with { AddedBy = username };
         return Task.FromResult(true);
+    }
+
+    public Task SetReplacedPlexMatch(string id, string? match)
+    {
+        if (_items.TryGetValue(id, out var item))
+        {
+            _items[id] = item with { ReplacedPlexMatch = match };
+        }
+        return Task.CompletedTask;
     }
 
     public Task<bool> SetStatus(

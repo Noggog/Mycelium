@@ -78,6 +78,20 @@ public interface IPlexApi
     /// </summary>
     Task<bool> AcceptsToken(string token);
 
+    /// <summary>
+    /// What an item is matched to: its agent <c>guid</c> (e.g. <c>plex://album/5d07…</c>), or a
+    /// <c>local://</c> id when it isn't matched to anything. Null when the key no longer resolves.
+    /// Star ratings are stored against this, not against the file or the rating key, so a copy
+    /// matched to a different release comes up unrated.
+    /// </summary>
+    Task<string?> GetItemGuid(int ratingKey);
+
+    /// <summary>
+    /// Matches an item to <paramref name="guid"/>, as "Fix Match" does in Plex's UI. Matching an
+    /// album back to the release it had restores the ratings stored against that release's tracks.
+    /// </summary>
+    Task MatchItem(int ratingKey, string guid, string name);
+
     Task<PlexRecentlyAddedItem[]> GetRecentlyAdded(int libraryKey, int maxResults = 5);
     Task RefreshLibrary(int libraryKey);
     /// <summary>Adds/removes Mood tags on an artist in one edit — the app's like/dislike tagging.</summary>

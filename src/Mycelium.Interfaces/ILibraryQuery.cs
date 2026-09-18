@@ -31,4 +31,18 @@ public interface ILibraryQuery
     /// has to translate first. Empty when the album has no tracks or the key no longer resolves.
     /// </summary>
     Task<string[]> QueryAlbumFiles(int albumRatingKey);
+
+    /// <summary>
+    /// What the library has this album matched to — Plex's agent guid, e.g. <c>plex://album/…</c>. Null
+    /// when the key no longer resolves. Ratings follow the match, not the files: a replacement copy
+    /// matched to a different release comes up unrated.
+    /// </summary>
+    Task<string?> QueryAlbumMatch(int albumRatingKey);
+}
+
+/// <summary>Changes what the library has an album matched to — the write half of <see cref="ILibraryQuery.QueryAlbumMatch"/>.</summary>
+public interface ILibraryMatcher
+{
+    /// <summary>Matches the album to <paramref name="match"/>, as the library's own "fix match" does.</summary>
+    Task RematchAlbum(int albumRatingKey, string match, string albumTitle);
 }

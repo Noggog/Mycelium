@@ -37,6 +37,9 @@ public class LibraryPathMap
     /// <summary>The configured prefixes, for diagnostics and for explaining a refusal.</summary>
     public IReadOnlyList<string> PlexPrefixes => _mappings.Select(m => m.Plex).ToArray();
 
+    /// <summary>The local side of each mapping — the library roots as this process sees them.</summary>
+    public IReadOnlyList<string> LocalPrefixes => _mappings.Select(m => m.Local).ToArray();
+
     /// <summary>
     /// The local path for a Plex-reported one, or null when it falls outside every mapped prefix —
     /// which means "we can't safely touch this", not "it isn't there".

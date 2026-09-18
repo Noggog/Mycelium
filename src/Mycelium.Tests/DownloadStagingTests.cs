@@ -184,6 +184,39 @@ public class DownloadStagingTests : IDisposable
         File.Exists(Path.Combine(library, "Artist", "Album", "cover.jpg")).Should().BeTrue();
     }
 
+    // ---- PromoteInto: an upgrade goes back where the copy it replaced was ----
+
+    [Fact]
+    public void PromoteInto_UsesTheReplacedFolderEvenWhenStreamripsNamingDiffers()
+    {
+        // The case that shipped: Deezer says "Children Of Bodom", the library says "Children of
+        // Bodom", and on Linux those are two folders — the upgrade must not open a second one.
+        var library = Dir("music");
+        var original = Dir("music", "Children of Bodom", "Hate Crew Deathroll");
+        var staged = Dir("preferred", "Children Of Bodom", "Hate Crew Deathroll");
+        File_(staged, "01. Children Of Bodom - Needled 24_7.flac");
+        File_(staged, "cover.jpg");
+
+        DownloadStaging.PromoteInto(Dir("preferred"), original);
+
+        Names(original).Should().Equal("01. Children Of Bodom - Needled 24_7.flac");
+        File.Exists(Path.Combine(original, "cover.jpg")).Should().BeTrue();
+        Directory.Exists(Path.Combine(library, "Children Of Bodom")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void PromoteInto_KeepsDiscSubfolders()
+    {
+        var original = Dir("music", "Artist", "Album");
+        File_(Dir("preferred", "Artist", "Album", "Disc 1"), "01. One.flac");
+        File_(Dir("preferred", "Artist", "Album", "Disc 2"), "01. Two.flac");
+
+        DownloadStaging.PromoteInto(Dir("preferred"), original);
+
+        File.Exists(Path.Combine(original, "Disc 1", "01. One.flac")).Should().BeTrue();
+        File.Exists(Path.Combine(original, "Disc 2", "01. Two.flac")).Should().BeTrue();
+    }
+
     // ---- Promote: a dot-prefixed name is hidden on Linux, so Plex would never see the album ----
 
     [Fact]

@@ -32,9 +32,14 @@ public enum SwapRefusal
 }
 
 /// <summary>The outcome of trying to swap a downloaded upgrade in for the copy already held.</summary>
-public readonly record struct SwapOutcome(bool Swapped, SwapRefusal Refusal, string? Detail = null)
+/// <param name="AlbumDir">
+/// The folder the replaced copy was moved out of, which the upgrade should be promoted into. Null
+/// when there isn't a single album folder to go back to, and the normal promote applies.
+/// </param>
+public readonly record struct SwapOutcome(
+    bool Swapped, SwapRefusal Refusal, string? Detail = null, string? AlbumDir = null)
 {
-    public static SwapOutcome Ok() => new(true, SwapRefusal.None);
+    public static SwapOutcome Ok(string? albumDir) => new(true, SwapRefusal.None, AlbumDir: albumDir);
 
     public static SwapOutcome Refused(SwapRefusal refusal, string? detail = null) =>
         new(false, refusal, detail);
@@ -63,6 +68,7 @@ public class UpgradeSwap
     private readonly IArtistCatalogRepo _catalog;
     private readonly LibraryPathMap _paths;
     private readonly LibraryTrash _trash;
+    private readonly UpgradeMatchKeeper _matches;
     private readonly ILogger<UpgradeSwap> _logger;
 
     public UpgradeSwap(
@@ -70,12 +76,14 @@ public class UpgradeSwap
         IArtistCatalogRepo catalog,
         LibraryPathMap paths,
         LibraryTrash trash,
+        UpgradeMatchKeeper matches,
         ILogger<UpgradeSwap> logger)
     {
         _library = library;
         _catalog = catalog;
         _paths = paths;
         _trash = trash;
+        _matches = matches;
         _logger = logger;
     }
 
@@ -117,7 +125,8 @@ public class UpgradeSwap
                 "PLEX_PATH_MAP is not set, so the existing files can't be located");
         }
 
-        var existing = await LocateExistingFiles(item);
+        var located = await LocateExisting(item);
+        var existing = located?.Files ?? Array.Empty<string>();
         if (existing.Count == 0)
         {
             return SwapOutcome.Refused(
@@ -145,6 +154,13 @@ public class UpgradeSwap
                 "the mapped paths don't exist from here — check PLEX_PATH_MAP against the mounts");
         }
 
+        // Read before the move: afterwards the files aren't there to locate it by.
+        var albumDir = AlbumFolder(present);
+
+        // Saved before anything moves, so a copy that Plex matches to a different release — which
+        // makes its ratings look lost — can be put back once it lands (see UpgradeMatchKeeper).
+        await _matches.Remember(item, located!.Value.Key);
+
         var result = _trash.MoveAside(
             present,
             $"{item.Artist.ArtistName} - {item.Album}",
@@ -155,35 +171,36 @@ public class UpgradeSwap
             "Upgrade for {Artist} — {Album}: moved {Moved} existing file(s) aside to {Where}; "
             + "promoting the {Acquired} copy in their place",
             item.Artist.ArtistName, item.Album, result.Moved, result.Destination, acquired);
-        return SwapOutcome.Ok();
+        return SwapOutcome.Ok(albumDir);
     }
 
     /// <summary>
-    /// Where the library says this album's files are. Resolved through the album's Plex rating key,
-    /// looked up under the act the library actually files it under (which for a collaboration differs
-    /// from the artist whose discography surfaced it).
+    /// The folder the held copy lives in, to promote the upgrade back into — or null if its files
+    /// share nothing narrower than a library root. Promoting "into" a root would scatter the new
+    /// tracks loose at the top of the library, so that case falls back to the normal promote.
     /// </summary>
-    private async Task<IReadOnlyList<string>> LocateExistingFiles(PurchaseItem item)
+    private string? AlbumFolder(IReadOnlyList<string> files)
     {
-        var act = item.AlbumArtist ?? item.Artist.ArtistName;
-        var keys = await _catalog.GetAlbumPlexRatingKeys(new[] { act, item.Artist.ArtistName });
-
-        foreach (var artist in new[] { act, item.Artist.ArtistName })
+        var common = DownloadStaging.CommonDirectory(files);
+        if (common is null)
         {
-            if (!keys.TryGetValue(artist, out var byTitle))
-            {
-                continue;
-            }
-            // The stored titles are Plex's; the row's is Deezer's. Match the way ownership does — at
-            // record granularity, since the copy we're replacing is filed under whatever name Plex gave
-            // it, decoration and all dropped.
-            var wanted = AlbumTitleMatcher.NormalizeRecord(item.Album);
-            var match = byTitle.FirstOrDefault(kv => AlbumTitleMatcher.NormalizeRecord(kv.Key) == wanted);
-            if (match.Value != 0)
-            {
-                return await _library.QueryAlbumFiles(match.Value);
-            }
+            return null;
         }
-        return Array.Empty<string>();
+
+        var normalized = common.Replace('\\', '/').TrimEnd('/');
+        var isRootOrAbove = _paths.LocalPrefixes.Any(root =>
+            root.Equals(normalized, StringComparison.Ordinal)
+            || root.StartsWith(normalized + "/", StringComparison.Ordinal));
+        return isRootOrAbove ? null : common;
+    }
+
+    /// <summary>
+    /// The album's Plex rating key and the files the library says back it, or nothing when the
+    /// library doesn't list the album.
+    /// </summary>
+    private async Task<(int Key, IReadOnlyList<string> Files)?> LocateExisting(PurchaseItem item)
+    {
+        var key = await UpgradeMatchKeeper.AlbumRatingKey(_catalog, item);
+        return key is { } k ? (k, await _library.QueryAlbumFiles(k)) : null;
     }
 }

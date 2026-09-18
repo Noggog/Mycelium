@@ -97,7 +97,13 @@ public record PurchaseItem(
     // to say about when the album landed. Null on every row that hasn't arrived, and on every row
     // written before this existed — an old InLibrary row is finished without being able to say when,
     // and backdating it to the request or send time would be inventing a fact.
-    DateTimeOffset? InLibraryAt = null);
+    DateTimeOffset? InLibraryAt = null,
+    // For an upgrade in flight: what Plex had the replaced copy matched to (e.g. plex://album/…),
+    // saved before its files are moved. Plex stores star ratings against the match, not the file, so
+    // if the new copy gets matched to a different release its ratings seem to vanish. Once the new
+    // copy lands it is checked against this and rematched if it differs, then this is cleared. Null
+    // when no check is outstanding.
+    string? ReplacedPlexMatch = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -228,6 +234,12 @@ public interface IPurchaseRepo
     /// Download, leaves the original in place. Returns true when this call is what set it.
     /// </summary>
     Task<bool> SetAddedBy(string id, string username);
+
+    /// <summary>
+    /// Saves (or, with null, clears) <see cref="PurchaseItem.ReplacedPlexMatch"/>. Its own write
+    /// because the upgrade sets it just before moving files, and the post-arrival check clears it.
+    /// </summary>
+    Task SetReplacedPlexMatch(string id, string? match);
 
     /// <summary>Removes a row entirely (no longer wanted).</summary>
     Task Remove(string id);

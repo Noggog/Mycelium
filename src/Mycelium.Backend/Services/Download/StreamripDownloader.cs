@@ -285,9 +285,11 @@ public class StreamripDownloader : IDownloader
         // moved aside — the deployed folder naming puts both at the same path, so promoting first
         // would interleave two encodings in one folder. The swap also refuses outright if what came
         // down is short or is no better than what is held; a refusal leaves the library untouched.
+        string? upgradeInto = null;
         if (item.Kind == FeedKind.UpgradeAlbum)
         {
             var swap = await _swap.PrepareForPromotion(item, preferredDir, landed, expected);
+            upgradeInto = swap.AlbumDir;
             if (!swap.Swapped)
             {
                 _logger.LogWarning(
@@ -312,10 +314,20 @@ public class StreamripDownloader : IDownloader
                 + "Last streamrip pass said:\n{Output}",
                 item.Artist.ArtistName, item.Album, landed, expected, last.Output);
         }
-        DownloadStaging.Promote(preferredDir, _config.DownloadDir);
+        // An upgrade goes back into the folder its predecessor was moved out of, not wherever
+        // streamrip's naming lands — the two can differ by as little as a capital letter, which on
+        // Linux is a second artist folder and an emptied original.
+        if (upgradeInto is not null)
+        {
+            DownloadStaging.PromoteInto(preferredDir, upgradeInto);
+        }
+        else
+        {
+            DownloadStaging.Promote(preferredDir, _config.DownloadDir);
+        }
         _logger.LogInformation(
             "Downloaded {Artist} — {Album}: {Landed} track(s) promoted to {Dir} as {Acquired}",
-            item.Artist.ArtistName, item.Album, landed, _config.DownloadDir,
+            item.Artist.ArtistName, item.Album, landed, upgradeInto ?? _config.DownloadDir,
             acquired?.ToString() ?? "unknown quality");
 
         if (item.TargetQuality is { } wanted && acquired is { } got2 && got2 < wanted)

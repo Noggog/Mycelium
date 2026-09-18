@@ -73,7 +73,7 @@ public class LibraryTrash
         var folder = $"{Slug(label)}-{stamp}";
         var destination = _root is not null
             ? Path.Combine(_root, folder)
-            : Path.Combine(CommonDirectory(files), TrashFolder, folder);
+            : Path.Combine(DownloadStaging.CommonDirectory(files) ?? Path.GetTempPath(), TrashFolder, folder);
         Directory.CreateDirectory(destination);
 
         var moved = new List<(string From, string To)>();
@@ -125,32 +125,6 @@ public class LibraryTrash
             // impossible, so this must not fail the swap.
             _logger.LogWarning(ex, "Could not write the removal manifest in {Destination}", destination);
         }
-    }
-
-    /// <summary>The deepest directory containing every file — the album's folder, in the normal case.</summary>
-    private static string CommonDirectory(IReadOnlyList<string> files)
-    {
-        var directories = files.Select(f => Path.GetDirectoryName(f) ?? "").Where(d => d.Length > 0).ToList();
-        if (directories.Count == 0)
-        {
-            return Path.GetTempPath();
-        }
-
-        var common = directories[0];
-        foreach (var directory in directories.Skip(1))
-        {
-            while (!directory.Equals(common, StringComparison.Ordinal)
-                   && !directory.StartsWith(common + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            {
-                var parent = Path.GetDirectoryName(common);
-                if (string.IsNullOrEmpty(parent) || parent == common)
-                {
-                    return common;
-                }
-                common = parent;
-            }
-        }
-        return common;
     }
 
     private static string Unique(string path)

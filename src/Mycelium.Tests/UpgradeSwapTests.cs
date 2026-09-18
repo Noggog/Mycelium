@@ -22,6 +22,7 @@ public class UpgradeSwapTests : IDisposable
     private readonly string _staged;
     private readonly ILibraryQuery _query = Substitute.For<ILibraryQuery>();
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
+    private readonly FakePurchaseRepo _purchases = new();
 
     private const int AlbumKey = 4242;
 
@@ -44,6 +45,8 @@ public class UpgradeSwapTests : IDisposable
     private UpgradeSwap Sut(string? pathMap = $"{PlexRoot}:__LIBRARY__", string? trashRoot = null) =>
         new(_query, _catalog, new LibraryPathMap(pathMap?.Replace("__LIBRARY__", _library)),
             new LibraryTrash(NullLogger<LibraryTrash>.Instance, new LibraryTrashConfig(trashRoot)),
+            new UpgradeMatchKeeper(_query, Substitute.For<ILibraryMatcher>(), _catalog, _purchases,
+                DownloaderConfigForTests.Default, NullLogger<UpgradeMatchKeeper>.Instance),
             NullLogger<UpgradeSwap>.Instance);
 
     /// <summary>Puts an owned album on disk and tells the fake library where Plex thinks it is.</summary>
@@ -114,6 +117,52 @@ public class UpgradeSwapTests : IDisposable
         trash.Should().Contain(f => f.EndsWith("01.mp3", StringComparison.Ordinal));
         // And a record of where it came from, so a bad swap is reversible by hand.
         trash.Should().Contain(f => f.EndsWith("manifest.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_swap_names_the_folder_it_emptied_so_the_upgrade_goes_back_there()
+    {
+        ExistingAlbum("01.mp3", "02.mp3");
+        Downloaded("01.flac", "02.flac");
+
+        var outcome = await Sut().PrepareForPromotion(Upgrade(), _staged, landed: 2, expected: 2);
+
+        outcome.AlbumDir.Should().Be(Path.Combine(_library, "Alvvays", "Blue Rev"));
+    }
+
+    [Fact]
+    public async Task Files_loose_at_the_library_root_give_no_folder_to_promote_into()
+    {
+        // Promoting "into" the root would scatter tracks across the top of the library.
+        File.WriteAllText(Path.Combine(_library, "01.mp3"), "audio");
+        _catalog.GetAlbumPlexRatingKeys(Arg.Any<IReadOnlyCollection<string>>()).Returns(
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Alvvays"] = new(StringComparer.OrdinalIgnoreCase) { ["Blue Rev"] = AlbumKey },
+            });
+        _query.QueryAlbumFiles(AlbumKey).Returns(new[] { $"{PlexRoot}/01.mp3" });
+        Downloaded("01.flac");
+
+        var outcome = await Sut().PrepareForPromotion(Upgrade(), _staged, landed: 1, expected: 1);
+
+        outcome.Swapped.Should().BeTrue();
+        outcome.AlbumDir.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task The_old_copys_plex_match_is_saved_before_its_files_move()
+    {
+        // Ratings follow the match. If the new copy lands matched to a different release, this is
+        // what lets it be put back.
+        ExistingAlbum("01.mp3");
+        Downloaded("01.flac");
+        var item = Upgrade();
+        _purchases.Seed(item);
+        _query.QueryAlbumMatch(AlbumKey).Returns("plex://album/blue-rev");
+
+        await Sut().PrepareForPromotion(item, _staged, landed: 1, expected: 1);
+
+        _purchases.Items.Single().ReplacedPlexMatch.Should().Be("plex://album/blue-rev");
     }
 
     [Fact]

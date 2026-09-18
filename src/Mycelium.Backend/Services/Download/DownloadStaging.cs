@@ -209,6 +209,55 @@ public static class DownloadStaging
         MoveInto(stagedDir, libraryRoot, unhide: true);
 
     /// <summary>
+    /// Moves a verified upgrade into the folder of the copy it replaced, instead of wherever
+    /// streamrip's naming would put it.
+    ///
+    /// <para>Those two are not reliably the same path. streamrip names folders from Deezer's
+    /// metadata and the library's were named by whatever filed them, so "Children Of Bodom" arrives
+    /// beside an existing "Children of Bodom" — two folders on a case-sensitive filesystem, and an
+    /// upgrade that leaves the original folder empty and the new copy filed under a near-duplicate
+    /// artist. Going back into the folder that was emptied keeps the library's own layout.</para>
+    ///
+    /// <para>The staged album is the deepest folder holding every downloaded track, so a multi-disc
+    /// download keeps its disc subfolders. Anything staged above that (nothing, normally) is left
+    /// for staging cleanup.</para>
+    /// </summary>
+    public static void PromoteInto(string stagedDir, string albumDir)
+    {
+        var stagedAlbum = CommonDirectory(AudioFiles(stagedDir)) ?? stagedDir;
+        MoveInto(stagedAlbum, albumDir, unhide: true);
+    }
+
+    /// <summary>
+    /// The deepest directory containing every one of <paramref name="files"/> — an album's folder, in
+    /// the normal case. Null when there are no files.
+    /// </summary>
+    public static string? CommonDirectory(IEnumerable<string> files)
+    {
+        var directories = files.Select(f => Path.GetDirectoryName(f) ?? "").Where(d => d.Length > 0).ToList();
+        if (directories.Count == 0)
+        {
+            return null;
+        }
+
+        var common = directories[0];
+        foreach (var directory in directories.Skip(1))
+        {
+            while (!directory.Equals(common, StringComparison.Ordinal)
+                   && !directory.StartsWith(common + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                var parent = Path.GetDirectoryName(common);
+                if (string.IsNullOrEmpty(parent) || parent == common)
+                {
+                    return common;
+                }
+                common = parent;
+            }
+        }
+        return common;
+    }
+
+    /// <summary>
     /// The name to file something in the library under: the same name, with any leading dots removed.
     ///
     /// <para>An album whose title genuinely begins with one — "...And Justice for All", "...Like

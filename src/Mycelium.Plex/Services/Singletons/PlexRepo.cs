@@ -4,7 +4,7 @@ using Mycelium.Plex.Services;
 
 namespace Mycelium.Plex.Services.Singletons;
 
-public class PlexRepo : ILibraryQuery
+public class PlexRepo : ILibraryQuery, ILibraryMatcher
 {
     private readonly PlexApi _plexApi;
     private readonly ILogger<PlexRepo> _logger;
@@ -79,6 +79,11 @@ public class PlexRepo : ILibraryQuery
         .Select(f => f!)
         .Distinct(StringComparer.Ordinal)
         .ToArray();
+
+    public Task<string?> QueryAlbumMatch(int albumRatingKey) => _plexApi.GetItemGuid(albumRatingKey);
+
+    public Task RematchAlbum(int albumRatingKey, string match, string albumTitle) =>
+        _plexApi.MatchItem(albumRatingKey, match, albumTitle);
 
     public async Task<Dictionary<int, AudioQuality?>> QueryAllAlbumQuality()
     {

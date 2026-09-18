@@ -31,6 +31,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldAcquiredQuality = "acquiredQuality";
     private const string FieldOwnedQuality = "ownedQuality";
     private const string FieldAddedBy = "addedBy";
+    private const string FieldReplacedPlexMatch = "replacedPlexMatch";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -143,6 +144,13 @@ public class PurchaseRepo : IPurchaseRepo
         return result.ModifiedCount > 0;
     }
 
+    public Task SetReplacedPlexMatch(string id, string? match) =>
+        Collection.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", id),
+            match is null
+                ? Builders<BsonDocument>.Update.Unset(FieldReplacedPlexMatch)
+                : Builders<BsonDocument>.Update.Set(FieldReplacedPlexMatch, match));
+
     public async Task<bool> SetStatus(
         string id,
         PurchaseStatus status,
@@ -230,6 +238,7 @@ public class PurchaseRepo : IPurchaseRepo
             // Absent until the row closes out, and on every InLibrary row that closed out before this
             // field existed — which reads as "finished, arrival time unknown" rather than "unfinished",
             // since Status is still what says the row is done.
-            inLibraryAt);
+            inLibraryAt,
+            StrN(FieldReplacedPlexMatch));
     }
 }

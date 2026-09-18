@@ -115,6 +115,7 @@ public class MainModule : Autofac.Module
         // .mycelium-removed folder inside its own album directory.
         builder.RegisterInstance(new LibraryTrashConfig(Environment.GetEnvironmentVariable("LIBRARY_TRASH_DIR")));
         builder.RegisterType<LibraryTrash>().AsSelf().SingleInstance();
+        builder.RegisterType<UpgradeMatchKeeper>().AsSelf().SingleInstance();
         builder.RegisterType<UpgradeSwap>().AsSelf().SingleInstance();
 
         // Post-download Plex rescan (PlexLibraryScanner auto-registers as ILibraryScanner via the

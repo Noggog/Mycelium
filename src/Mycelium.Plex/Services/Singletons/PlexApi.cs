@@ -358,6 +358,35 @@ public class PlexApi : IPlexApi
         return request;
     }
 
+    /// <summary>
+    /// The lower-case <c>guid</c> is the item's own match; the capitalised <c>Guid</c> array beside it
+    /// is external ids (MusicBrainz and the like), which is not what ratings are stored against.
+    /// </summary>
+    public async Task<string?> GetItemGuid(int ratingKey)
+    {
+        var url = $"{_endpointInfo.BaseUri}/library/metadata/{ratingKey}";
+        _logger.LogDebug("Plex GetItemGuid {RatingKey}: {Url}", ratingKey, url);
+        var response = await httpClient.GetAsync(url);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        var data = JObject.Parse(await response.Content.ReadAsStringAsync());
+        var guid = data["MediaContainer"]?["Metadata"]?.FirstOrDefault()?["guid"]?.ToString();
+        return string.IsNullOrWhiteSpace(guid) ? null : guid;
+    }
+
+    public async Task MatchItem(int ratingKey, string guid, string name)
+    {
+        var url = $"{_endpointInfo.BaseUri}/library/metadata/{ratingKey}/match"
+                  + $"?guid={Uri.EscapeDataString(guid)}&name={Uri.EscapeDataString(name)}";
+        _logger.LogInformation("Plex MatchItem {RatingKey} -> {Guid}", ratingKey, guid);
+        var response = await httpClient.PutAsync(url, content: null);
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task<PlexRecentlyAddedItem[]> GetRecentlyAdded(int libraryKey, int maxResults = 5)
     {
         string url = $"{_endpointInfo.BaseUri}/library/sections/{libraryKey}/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size={maxResults}";
