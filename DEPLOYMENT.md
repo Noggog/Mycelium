@@ -283,9 +283,21 @@ outside every mapped prefix is **refused, not guessed at** — the download is d
 library left untouched, with `Couldn't replace the existing copy` on the row. Without any mapping,
 upgrades download and are then refused; gap-filling is unaffected.
 
-**Nothing is deleted.** The superseded copy is moved to a `.mycelium-removed/` folder beside it,
-with a `manifest.json` recording where each file came from, so a bad swap can be undone by hand.
-Clearing that folder out is a separate, manual decision.
+**Nothing is deleted.** The superseded copy is moved into a folder named for the album, with a
+`manifest.json` recording where each file came from, so a bad swap can be undone by hand. Where that
+folder goes is `LIBRARY_TRASH_DIR` (a path inside the container):
+
+```
+LIBRARY_TRASH_DIR=/music/.mycelium-removed
+```
+
+Every removed album then lands in that one directory, and clearing them all out is a single delete.
+Unset, each album gets its own `.mycelium-removed/` inside its own folder instead, which is scattered
+across the library and tedious to clean. Keeping it under `/music` (dot-prefixed, so Plex ignores it)
+keeps it on the library's filesystem, so each move is an instant rename. A separate volume, e.g.
+`- /srv/media/music-to-delete:/music-to-delete` with `LIBRARY_TRASH_DIR=/music-to-delete`, works as
+well, but each file is copied and then deleted. Even when both host paths are on one disk, two bind
+mounts count as separate filesystems. Clearing the folder out is a separate, manual decision.
 
 **Two gates stand in front of every swap**, and both leave the library untouched when they refuse:
 

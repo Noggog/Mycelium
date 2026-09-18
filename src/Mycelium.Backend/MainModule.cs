@@ -111,6 +111,9 @@ public class MainModule : Autofac.Module
         // safe: the library server reports paths in its own namespace, so without a declared
         // translation nothing here can be allowed to touch a file (see LibraryPathMap).
         builder.RegisterInstance(new LibraryPathMap(Environment.GetEnvironmentVariable("PLEX_PATH_MAP")));
+        // LIBRARY_TRASH_DIR collects every superseded album in one place; unset, each goes to a
+        // .mycelium-removed folder inside its own album directory.
+        builder.RegisterInstance(new LibraryTrashConfig(Environment.GetEnvironmentVariable("LIBRARY_TRASH_DIR")));
         builder.RegisterType<LibraryTrash>().AsSelf().SingleInstance();
         builder.RegisterType<UpgradeSwap>().AsSelf().SingleInstance();
 

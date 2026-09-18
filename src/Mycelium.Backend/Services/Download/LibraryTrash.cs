@@ -7,6 +7,14 @@ namespace Mycelium.Backend.Services.Download;
 /// <param name="Destination">Where they went, or null when nothing moved.</param>
 public readonly record struct TrashResult(int Moved, string? Destination);
 
+/// <summary>Where superseded albums go.</summary>
+/// <param name="Root">
+/// One directory every removal is filed under (<c>LIBRARY_TRASH_DIR</c>), so clearing them out is a
+/// single delete. Null means the old behaviour: a <see cref="LibraryTrash.TrashFolder"/> inside each
+/// album's own folder.
+/// </param>
+public record LibraryTrashConfig(string? Root);
+
 /// <summary>
 /// Moves a superseded album out of the library instead of deleting it.
 ///
@@ -16,10 +24,11 @@ public readonly record struct TrashResult(int Moved, string? Destination);
 /// directories — leaving both encodings interleaved in one folder, which Plex reads as a doubled
 /// album. Moving first is what makes the promote land on clean ground.</para>
 ///
-/// <para>Nothing is ever deleted here. Files go to a <c>.mycelium-removed</c> directory beside the
-/// library root they came from, under a folder named for the album, with a <c>manifest.json</c>
-/// recording where each file was. Deletion is a separate, later, human decision — and until then a
-/// bad swap is reversible by reading the manifest.</para>
+/// <para>Nothing is ever deleted here. Files go under a folder named for the album — inside the
+/// configured <see cref="LibraryTrashConfig.Root"/>, or failing that a <c>.mycelium-removed</c>
+/// directory in the album's own folder — with a <c>manifest.json</c> recording where each file was.
+/// Deletion is a separate, later, human decision — and until then a bad swap is reversible by
+/// reading the manifest.</para>
 /// </summary>
 public class LibraryTrash
 {
@@ -31,10 +40,12 @@ public class LibraryTrash
     public const string TrashFolder = ".mycelium-removed";
 
     private readonly ILogger<LibraryTrash> _logger;
+    private readonly string? _root;
 
-    public LibraryTrash(ILogger<LibraryTrash> logger)
+    public LibraryTrash(ILogger<LibraryTrash> logger, LibraryTrashConfig config)
     {
         _logger = logger;
+        _root = string.IsNullOrWhiteSpace(config.Root) ? null : config.Root.Trim();
     }
 
     /// <summary>
@@ -44,10 +55,11 @@ public class LibraryTrash
     /// paired with <paramref name="stamp"/> so two removals of the same album — or of two albums
     /// sharing a title — can't collide.</para>
     ///
-    /// <para>Files are grouped by the root they live under so each stays on its own filesystem: a
-    /// cross-device move degrades to copy-then-delete, which for a 300MB album is slow and, worse,
-    /// non-atomic. A file that fails to move is logged and skipped rather than aborting the batch —
-    /// the caller compares the count against what it asked for and decides.</para>
+    /// <para>Without a configured root, files stay beside the album and so on its own filesystem. A
+    /// configured root on another filesystem (or another bind mount — the kernel counts those as
+    /// separate even on one disk) still works, but each move degrades to copy-then-delete: slower,
+    /// and non-atomic per file. A file that fails to move is logged and skipped rather than aborting
+    /// the batch — the caller compares the count against what it asked for and decides.</para>
     /// </summary>
     public TrashResult MoveAside(IReadOnlyList<string> files, string label, string stamp)
     {
@@ -56,10 +68,12 @@ public class LibraryTrash
             return new TrashResult(0, null);
         }
 
-        // The album's own directory is the natural root to preserve structure against; using the
-        // library root would recreate the whole artist/album path under the trash for no gain.
-        var sourceRoot = CommonDirectory(files);
-        var destination = Path.Combine(sourceRoot, TrashFolder, $"{Slug(label)}-{stamp}");
+        // Without a configured root, the album's own directory is the natural place: using the library
+        // root would recreate the whole artist/album path under the trash for no gain.
+        var folder = $"{Slug(label)}-{stamp}";
+        var destination = _root is not null
+            ? Path.Combine(_root, folder)
+            : Path.Combine(CommonDirectory(files), TrashFolder, folder);
         Directory.CreateDirectory(destination);
 
         var moved = new List<(string From, string To)>();

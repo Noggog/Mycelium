@@ -136,7 +136,7 @@ public class StreamripDownloaderTests : IDisposable
             // own tests against a real path map and trash directory.
             new UpgradeSwap(
                 Substitute.For<ILibraryQuery>(), Substitute.For<IArtistCatalogRepo>(),
-                new LibraryPathMap(null), new LibraryTrash(NullLogger<LibraryTrash>.Instance),
+                new LibraryPathMap(null), new LibraryTrash(NullLogger<LibraryTrash>.Instance, new LibraryTrashConfig(null)),
                 NullLogger<UpgradeSwap>.Instance),
             NullLogger<StreamripDownloader>.Instance);
 

@@ -41,9 +41,10 @@ public class UpgradeSwapTests : IDisposable
     /// <summary>Plex's namespace is deliberately different from ours, as it is in reality.</summary>
     private const string PlexRoot = "/plex-media/music";
 
-    private UpgradeSwap Sut(string? pathMap = $"{PlexRoot}:__LIBRARY__") =>
+    private UpgradeSwap Sut(string? pathMap = $"{PlexRoot}:__LIBRARY__", string? trashRoot = null) =>
         new(_query, _catalog, new LibraryPathMap(pathMap?.Replace("__LIBRARY__", _library)),
-            new LibraryTrash(NullLogger<LibraryTrash>.Instance), NullLogger<UpgradeSwap>.Instance);
+            new LibraryTrash(NullLogger<LibraryTrash>.Instance, new LibraryTrashConfig(trashRoot)),
+            NullLogger<UpgradeSwap>.Instance);
 
     /// <summary>Puts an owned album on disk and tells the fake library where Plex thinks it is.</summary>
     private string[] ExistingAlbum(params string[] fileNames)
@@ -112,6 +113,25 @@ public class UpgradeSwapTests : IDisposable
             .ToArray();
         trash.Should().Contain(f => f.EndsWith("01.mp3", StringComparison.Ordinal));
         // And a record of where it came from, so a bad swap is reversible by hand.
+        trash.Should().Contain(f => f.EndsWith("manifest.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_configured_trash_root_collects_the_old_copy_outside_the_library()
+    {
+        // LIBRARY_TRASH_DIR: every removal in one place, so clearing them out is a single delete
+        // rather than a hunt through every album folder.
+        var trashRoot = Path.Combine(_root, "music-to-delete");
+        ExistingAlbum("01.mp3");
+        Downloaded("01.flac");
+
+        await Sut(trashRoot: trashRoot).PrepareForPromotion(Upgrade(), _staged, landed: 1, expected: 1);
+
+        LibraryFiles().Should().BeEmpty();
+        Directory.EnumerateDirectories(_library, LibraryTrash.TrashFolder, SearchOption.AllDirectories)
+            .Should().BeEmpty();
+        var trash = Directory.EnumerateFiles(trashRoot, "*", SearchOption.AllDirectories).ToArray();
+        trash.Should().Contain(f => f.EndsWith("01.mp3", StringComparison.Ordinal));
         trash.Should().Contain(f => f.EndsWith("manifest.json", StringComparison.Ordinal));
     }
 

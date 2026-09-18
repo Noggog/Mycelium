@@ -41,6 +41,10 @@ services:
       # Required for album upgrades: maps Plex's own file paths onto the mounts this container sees.
       # Unset means upgrades are refused (safely) and everything else works as before.
       PLEX_PATH_MAP: ${PLEX_PATH_MAP:-}
+      # Where an upgrade moves the copy it replaces (a path inside this container). Unset = a
+      # .mycelium-removed folder inside each album's own directory. Point it at one folder — e.g.
+      # /music/.mycelium-removed, or a separate mount below — to clear them all out in one go.
+      LIBRARY_TRASH_DIR: ${LIBRARY_TRASH_DIR:-}
       # The daily catalog/album syncs run at DAILY_SYNC_HOUR in *this container's* local time, so set
       # TZ if you want "6am" to mean 6am where the server is (the image is UTC otherwise).
       TZ: ${TZ:-UTC}
