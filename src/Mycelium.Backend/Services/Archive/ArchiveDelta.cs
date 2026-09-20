@@ -61,12 +61,7 @@ public static class ArchiveDelta
         // One file per person, so the count is of people whose playlists moved, not of playlists.
         Note("playlist file", c => c.Path.StartsWith("playlists/", StringComparison.Ordinal));
 
-        // These two are single files, so a count would only ever be "1" and says nothing.
-        if (changes.Any(c => c.Path == "decisions.yaml"))
-        {
-            parts.Add("decisions");
-        }
-
+        // A single file, so a count would only ever be "1" and says nothing.
         if (changes.Any(c => c.Path == "users.yaml"))
         {
             parts.Add("users");

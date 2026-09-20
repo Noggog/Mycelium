@@ -29,7 +29,13 @@ public class MetadataArchiver
     /// </summary>
     private static readonly string[] ManagedDirectories = ["Library", "playlists"];
 
-    /// <summary>Top-level files the archive owns. Anything else in the repository is left alone.</summary>
+    /// <summary>
+    /// Top-level files the archive owns. Anything else in the repository is left alone.
+    ///
+    /// <para><c>decisions.yaml</c> is retired — blocks and match corrections moved into the artist
+    /// file they are about — but stays listed so the copy sitting in an existing archive is pruned
+    /// rather than left behind as a stale register nothing updates.</para>
+    /// </summary>
     private static readonly string[] ManagedFiles = ["users.yaml", "decisions.yaml"];
 
     private readonly IArchiveDump _dump;

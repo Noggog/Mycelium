@@ -60,7 +60,6 @@ public class ArchiveBuilder
         var files = new List<ArchiveFile>
         {
             new("users.yaml", CanonicalYaml.Document(Users(input, identities))),
-            new("decisions.yaml", CanonicalYaml.Document(Decisions(input, identities))),
         };
 
         files.AddRange(Library(input, identities));
@@ -115,21 +114,35 @@ public class ArchiveBuilder
     {
         var files = new List<ArchiveFile>();
 
-        var artists = input.Artists.Where(a => Str(a, "_id") is not null).ToList();
-        var artistPaths = ArchivePaths.ForNames(artists.Select(a => Str(a, "_id")!));
+        var catalog = input.Artists.Where(a => Str(a, "_id") is not null).ToList();
+        var catalogByName = ByKey(catalog, "_id");
 
         var artistRatings = ArtistVerdicts(input.ArtistVerdicts, identities);
         var acquisitions = Acquisitions(input.Purchases);
         var songs = SongsByAlbum(input.LibraryTracks, input.TrackRatings, identities);
+        var (blocks, corrections, filed) = Decisions(input, identities, catalogByName.Keys);
 
-        foreach (var artist in artists)
+        // Every artist the snapshot has anything to say about: the catalog, plus the artists that only
+        // a decision names. The whole set is escaped in one call, because two names can only be known
+        // to collide in the context of their neighbours.
+        var names = catalogByName.Keys.Concat(filed).Distinct(StringComparer.Ordinal).ToList();
+        var artistPaths = ArchivePaths.ForNames(names);
+
+        foreach (var name in names.OrderBy(n => n, StringComparer.Ordinal))
         {
-            var name = Str(artist, "_id")!;
+            var artist = catalogByName.GetValueOrDefault(name);
             var directory = $"{LibraryRoot}/{artistPaths[name]}";
 
             files.Add(new ArchiveFile(
                 $"{directory}/{ArtistMetadata}",
-                CanonicalYaml.Document(ArtistFile(artist, name, artistRatings))));
+                CanonicalYaml.Document(ArtistFile(
+                    artist, name, artistRatings,
+                    blocks.GetValueOrDefault(name), corrections.GetValueOrDefault(name)))));
+
+            if (artist is null)
+            {
+                continue;
+            }
 
             var albums = Strings(artist, "albums");
             var quality = AlbumQuality(artist);
@@ -148,10 +161,16 @@ public class ArchiveBuilder
         return files;
     }
 
+    /// <summary>
+    /// One artist's file. <paramref name="artist"/> is null for an artist the library doesn't hold —
+    /// then this is a file of decisions and nothing else, which is the whole reason it exists.
+    /// </summary>
     private static JsonObject ArtistFile(
-        JsonObject artist,
+        JsonObject? artist,
         string name,
-        IReadOnlyDictionary<string, JsonObject> artistRatings)
+        IReadOnlyDictionary<string, JsonObject> artistRatings,
+        JsonArray? blocks,
+        JsonArray? corrections)
     {
         var row = new JsonObject { ["artist"] = name };
 
@@ -163,25 +182,38 @@ public class ArchiveBuilder
 
         // The identity pins are why this file is worth keeping: each is a human correcting a bad
         // automatic match, and the MusicBrainz id is the only identifier here stable forever.
-        var musicBrainz = Identity(
-            artist, "musicBrainzMbid", "mbid", "musicBrainzName",
-            "musicBrainzOverride", "musicBrainzUnlinked", "musicBrainzDisambiguation", null);
-        if (musicBrainz.Count > 0)
+        if (artist is not null)
         {
-            row["musicBrainz"] = musicBrainz;
-        }
+            var musicBrainz = Identity(
+                artist, "musicBrainzMbid", "mbid", "musicBrainzName",
+                "musicBrainzOverride", "musicBrainzUnlinked", "musicBrainzDisambiguation", null);
+            if (musicBrainz.Count > 0)
+            {
+                row["musicBrainz"] = musicBrainz;
+            }
 
-        var deezer = Identity(
-            artist, "deezerId", "id", "deezerName",
-            "deezerOverride", "deezerUnlinked", null, "deezerLink");
-        if (deezer.Count > 0)
-        {
-            row["deezer"] = deezer;
+            var deezer = Identity(
+                artist, "deezerId", "id", "deezerName",
+                "deezerOverride", "deezerUnlinked", null, "deezerLink");
+            if (deezer.Count > 0)
+            {
+                row["deezer"] = deezer;
+            }
         }
 
         if (artistRatings.TryGetValue(Fold(name), out var ratings))
         {
             row["ratings"] = ratings.DeepClone();
+        }
+
+        if (blocks is not null)
+        {
+            row["blocks"] = blocks;
+        }
+
+        if (corrections is not null)
+        {
+            row["matchCorrections"] = corrections;
         }
 
         return row;
@@ -444,17 +476,65 @@ public class ArchiveBuilder
     // ---- decisions ----
 
     /// <summary>
-    /// Blocks and manual match corrections. Outside <c>Library/</c> deliberately: a block is usually
-    /// about a record the library does <em>not</em> have, so there is no album file for it to live in.
+    /// Blocks and manual match corrections, grouped into the artist file each belongs in, plus the
+    /// artists those rows name (<c>Filed</c>) so the caller can give an artist the library doesn't
+    /// hold a directory of their own.
+    ///
+    /// <para>Both are per-artist facts, so they live with the artist rather than in a register of
+    /// their own — one place to look for everything decided about an act, and a change to one of them
+    /// diffs as that artist rather than as a line moving inside a file covering every artist at
+    /// once.</para>
     /// </summary>
-    private static JsonArray Decisions(ArchiveInput input, IReadOnlyDictionary<string, string> identities)
+    private static (
+        IReadOnlyDictionary<string, JsonArray> Blocks,
+        IReadOnlyDictionary<string, JsonArray> Corrections,
+        IReadOnlyList<string> Filed) Decisions(
+        ArchiveInput input,
+        IReadOnlyDictionary<string, string> identities,
+        IEnumerable<string> catalog)
     {
-        var rows = new List<(string Sort, JsonObject Row)>();
+        // A stamped block is the downloader saying "Deezer has nothing better to offer, ask again
+        // later" — a retry timer it sets itself, which lapses on its own and moves whenever it is
+        // reconsidered. Nobody decided it, so it is not archived; what is left is the standing kind a
+        // person placed.
+        var blocks = input.Blocks
+            .Where(b => Str(b, "artist") is not null && b["retryAfter"] is null)
+            .ToList();
 
-        foreach (var block in input.Blocks)
+        var corrections = input.MatchOverrides.Where(o => Str(o, "matchArtist") is not null).ToList();
+
+        var filing = Filing(
+            catalog,
+            blocks.Select(b => Str(b, "artist")!)
+                .Concat(corrections.Select(o => Str(o, "matchArtist")!))
+                .ToList());
+
+        var byArtist = new Dictionary<string, List<(string Sort, JsonObject Row)>>(StringComparer.Ordinal);
+        var correctionsByArtist =
+            new Dictionary<string, List<(string Sort, JsonObject Row)>>(StringComparer.Ordinal);
+
+        void Add(
+            Dictionary<string, List<(string Sort, JsonObject Row)>> target,
+            string artist, string sort, JsonObject row)
         {
-            var row = new JsonObject { ["kind"] = "block" };
-            Copy(block, row, "artist", "album", "scope", "createdAt", "retryAfter");
+            if (!target.TryGetValue(artist, out var rows))
+            {
+                target[artist] = rows = [];
+            }
+
+            rows.Add((sort, row));
+        }
+
+        foreach (var block in blocks)
+        {
+            // No `artist`: the file it lands in names them. No `retryAfter` either — every row that
+            // carried one was dropped above.
+            var row = new JsonObject();
+            Copy(block, row, "album", "createdAt");
+
+            // Absent on every row written before scopes existed, all of which meant "don't carry this
+            // release". Written out in full so a reader never has to know that.
+            row["scope"] = Str(block, "scope") ?? "Release";
 
             // Blocks store a username now; rows written before that was settled hold an OIDC subject,
             // and the startup migration rewrites the ones whose user still exists. What is left over
@@ -467,19 +547,65 @@ public class ArchiveBuilder
                 row["blockedBy"] = identities.TryGetValue(by, out var name) ? name : by;
             }
 
-            rows.Add((SortKey("block", Str(block, "artist"), Str(block, "album")), row));
+            Add(byArtist, filing[Str(block, "artist")!],
+                SortKey(Str(block, "album"), Str(block, "scope")), row);
         }
 
-        foreach (var over in input.MatchOverrides)
+        foreach (var over in corrections)
         {
-            var row = new JsonObject { ["kind"] = "match" };
-            Put(row, "artist", over["matchArtist"]);
-            Put(row, "album", over["deezerTitle"]);
-            Copy(over, row, "libraryTitle", "createdAt");
-            rows.Add((SortKey("match", Str(over, "matchArtist"), Str(over, "deezerTitle")), row));
+            var row = new JsonObject();
+            Copy(over, row, "deezerTitle", "libraryTitle", "createdAt");
+            Add(correctionsByArtist, filing[Str(over, "matchArtist")!],
+                SortKey(Str(over, "deezerTitle")), row);
         }
 
-        return Sorted(rows);
+        return (
+            Collapse(byArtist),
+            Collapse(correctionsByArtist),
+            filing.Values.Distinct(StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>
+    /// Which artist file each named artist's decisions belong in, keyed by the name the row carries.
+    ///
+    /// <para>A decision is stored under whatever spelling the act reached it by, which need not be the
+    /// catalog's — Deezer's casing, a collaborator the library doesn't hold. So an exact catalog name
+    /// wins, a case-insensitive one is next, and an artist the library has never heard of gets a file
+    /// under their own name. The fold is only ever a fallback: two catalog artists differing by case
+    /// are two acts, and folding into them would merge their decisions.</para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> Filing(
+        IEnumerable<string> catalog, IReadOnlyList<string> referenced)
+    {
+        var known = catalog.ToList();
+        var exact = known.ToHashSet(StringComparer.Ordinal);
+        var folded = known
+            .GroupBy(Fold, StringComparer.Ordinal)
+            // Ordinal-first so a fold that matches two catalog spellings resolves the same every run.
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(n => n, StringComparer.Ordinal).First(),
+                StringComparer.Ordinal);
+
+        // Same rule for the artists nobody owns: all the spellings of one act share a file, and which
+        // one names it doesn't depend on the order the rows arrived in.
+        var outsiders = referenced
+            .Where(n => !exact.Contains(n) && !folded.ContainsKey(Fold(n)))
+            .GroupBy(Fold, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(n => n, StringComparer.Ordinal).First(),
+                StringComparer.Ordinal);
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var name in referenced)
+        {
+            result[name] = exact.Contains(name) ? name
+                : folded.TryGetValue(Fold(name), out var owned) ? owned
+                : outsiders[Fold(name)];
+        }
+
+        return result;
     }
 
     // ---- playlists ----
@@ -685,6 +811,11 @@ public class ArchiveBuilder
 
         return result;
     }
+
+    /// <summary>Each artist's rows as a sorted array, ready to hang off their file.</summary>
+    private static IReadOnlyDictionary<string, JsonArray> Collapse(
+        Dictionary<string, List<(string Sort, JsonObject Row)>> source) =>
+        source.ToDictionary(pair => pair.Key, pair => Sorted(pair.Value), StringComparer.Ordinal);
 
     private static IReadOnlyDictionary<string, JsonObject> Collapse(
         Dictionary<string, SortedDictionary<string, JsonObject>> source)

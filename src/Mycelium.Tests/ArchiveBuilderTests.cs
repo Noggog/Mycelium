@@ -474,9 +474,9 @@ public class ArchiveBuilderTests
                 },
             ]));
 
-        var decisions = File(files, "decisions.yaml");
-        decisions.Should().Contain("blockedBy: \"kelseydoolittle056\"");
-        decisions.Should().NotContain("bf777d0ab621d890");
+        var metadata = File(files, "Library/Alabama Shakes/metadata.yaml");
+        metadata.Should().Contain("blockedBy: \"kelseydoolittle056\"");
+        metadata.Should().NotContain("bf777d0ab621d890");
     }
 
     [Fact]
@@ -486,7 +486,123 @@ public class ArchiveBuilderTests
             users: [User("sub-1", "kelsey")],
             blocks: [new JsonObject { ["artist"] = "A", ["album"] = "B", ["blockedBy"] = "justin" }]));
 
-        File(files, "decisions.yaml").Should().Contain("blockedBy: \"justin\"");
+        File(files, "Library/A/metadata.yaml").Should().Contain("blockedBy: \"justin\"");
+    }
+
+    [Fact]
+    public void A_block_is_filed_with_the_artist_it_is_about()
+    {
+        // The whole point of the move: everything decided about an act is in the act's own file, so a
+        // new block diffs as that artist rather than as a line inside a register of every artist.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Radiohead", "Kid A")],
+            blocks:
+            [
+                new JsonObject
+                {
+                    ["artist"] = "Radiohead", ["album"] = "Pablo Honey",
+                    ["scope"] = "Release", ["blockedBy"] = "noggog",
+                },
+            ]));
+
+        Paths(files).Should().NotContain("decisions.yaml");
+
+        var metadata = File(files, "Library/Radiohead/metadata.yaml");
+        metadata.Should().Contain("blocks:").And.Contain("album: \"Pablo Honey\"");
+
+        // The file already names the artist; repeating it on every row would be two spellings to keep
+        // in step, and the album file is untouched — a block is not a fact about a record we hold.
+        metadata.Split("Radiohead").Length.Should().Be(2, "the artist is named once, at the top");
+        File(files, "Library/Radiohead/Kid A.yaml").Should().NotContain("Pablo Honey");
+    }
+
+    [Fact]
+    public void An_artist_the_library_does_not_hold_gets_a_file_for_the_block_alone()
+    {
+        // A block is usually placed on a record the library *doesn't* have, and the act needn't be one
+        // it carries at all — so the decision needs a home of its own rather than being dropped.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Radiohead", "Kid A")],
+            blocks: [new JsonObject { ["artist"] = "Creed", ["album"] = "Human Clay" }]));
+
+        Paths(files).Should().Contain("Library/Creed/metadata.yaml");
+        Paths(files).Should().NotContain("Library/Creed/Human Clay.yaml");
+        File(files, "Library/Creed/metadata.yaml").Should().Contain("Human Clay");
+    }
+
+    [Fact]
+    public void A_block_spelt_differently_lands_in_the_artists_own_file()
+    {
+        // Blocks are recorded under whatever spelling the album was reached by — Deezer's casing, not
+        // the library's. A second directory for the same act would split their history in two.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Boards of Canada", "Geogaddi")],
+            blocks: [new JsonObject { ["artist"] = "BOARDS OF CANADA", ["album"] = "Twoism" }]));
+
+        Paths(files).Should().NotContain("Library/BOARDS OF CANADA/metadata.yaml");
+        File(files, "Library/Boards of Canada/metadata.yaml").Should().Contain("Twoism");
+    }
+
+    [Fact]
+    public void A_retry_timer_the_downloader_set_itself_is_not_archived()
+    {
+        // "Deezer has nothing better to offer, ask again later" is a stamp the downloader writes and
+        // rewrites on its own; it lapses by itself and nobody decided it. Archiving it would churn the
+        // tree nightly for a fact about a catalogue, not about the library.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Radiohead", "Kid A")],
+            blocks:
+            [
+                new JsonObject
+                {
+                    ["artist"] = "Radiohead", ["album"] = "Kid A", ["scope"] = "Upgrade",
+                    ["retryAfter"] = "2026-01-01T00:00:00Z",
+                },
+                new JsonObject
+                {
+                    ["artist"] = "Radiohead", ["album"] = "Amnesiac", ["scope"] = "Upgrade",
+                    ["blockedBy"] = "noggog",
+                },
+            ]));
+
+        var metadata = File(files, "Library/Radiohead/metadata.yaml");
+        metadata.Should().NotContain("retryAfter").And.NotContain("Kid A");
+
+        // The standing kind — a person saying the copy they have is fine — is the decision, and stays.
+        metadata.Should().Contain("Amnesiac");
+    }
+
+    [Fact]
+    public void A_block_written_before_scopes_existed_reads_as_a_release_block()
+    {
+        // Those rows carry no `scope` at all and all meant "don't carry this release". Writing the
+        // default out in full means a reader never has to know the history to read the file.
+        var files = new ArchiveBuilder().Build(Input(
+            blocks: [new JsonObject { ["artist"] = "Creed", ["album"] = "Human Clay" }]));
+
+        File(files, "Library/Creed/metadata.yaml").Should().Contain("scope: \"Release\"");
+    }
+
+    [Fact]
+    public void A_match_correction_is_filed_with_its_artist_too()
+    {
+        // Nobody's opinion — a correction to how a release is identified. It belongs to the artist for
+        // the same reason a block does, and needs no `artist` field of its own.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Radiohead", "Kid A")],
+            matchOverrides:
+            [
+                new JsonObject
+                {
+                    ["matchArtist"] = "Radiohead",
+                    ["deezerTitle"] = "Kid A.",
+                    ["libraryTitle"] = "Kid A",
+                },
+            ]));
+
+        var metadata = File(files, "Library/Radiohead/metadata.yaml");
+        metadata.Should().Contain("matchCorrections:");
+        metadata.Should().Contain("deezerTitle: \"Kid A.\"").And.Contain("libraryTitle: \"Kid A\"");
     }
 
     // ---- playlists ----

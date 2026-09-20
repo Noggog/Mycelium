@@ -82,11 +82,26 @@ public sealed class MetadataArchiverTests : IDisposable
         result.CommitSha.Should().NotBeNullOrWhiteSpace();
 
         File.Exists(Path.Combine(_repo, "users.yaml")).Should().BeTrue();
-        File.Exists(Path.Combine(_repo, "decisions.yaml")).Should().BeTrue();
         File.Exists(Path.Combine(_repo, "Library", "Radiohead", "metadata.yaml")).Should().BeTrue();
         File.Exists(Path.Combine(_repo, "Library", "Radiohead", "Kid A.yaml")).Should().BeTrue();
 
         Git("log", "--oneline").Should().Contain("1 album");
+    }
+
+    [Fact]
+    public async Task The_retired_decisions_file_is_cleared_out_of_an_existing_archive()
+    {
+        // Blocks and match corrections moved into the artist file they are about. An archive written
+        // before that still has the old register sitting at the top level, and leaving it there would
+        // be worse than either layout: a file that looks current and is frozen at the day it stopped
+        // being written.
+        await Archiver(Dump()).Snapshot();
+        var stale = Path.Combine(_repo, "decisions.yaml");
+        File.WriteAllText(stale, "- kind: \"block\"\n  artist: \"Creed\"\n");
+
+        await Archiver(Dump()).Snapshot();
+
+        File.Exists(stale).Should().BeFalse();
     }
 
     [Fact]

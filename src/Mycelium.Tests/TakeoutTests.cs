@@ -96,6 +96,9 @@ public class TakeoutTests
     private static string File(IReadOnlyList<ArchiveFile> files, string path) =>
         files.Single(f => f.RelativePath == path).Contents;
 
+    private static IEnumerable<string> Paths(IReadOnlyList<ArchiveFile> files) =>
+        files.Select(f => f.RelativePath);
+
     private static string Everything(IReadOnlyList<ArchiveFile> files) =>
         string.Join("\n", files.Select(f => f.Contents));
 
@@ -123,7 +126,7 @@ public class TakeoutTests
         File(files, "Library/Radiohead/Kid A.yaml").Should().Contain("acquiredBy: \"noggog\"");
         File(files, "Library/Radiohead/Kid A.yaml").Should().Contain("noggog: 5");
         File(files, "playlists/noggog.yaml").Should().Contain("Late night");
-        File(files, "decisions.yaml").Should().Contain("Nickelback");
+        File(files, "Library/Nickelback/metadata.yaml").Should().Contain("Silver Side Up");
         File(files, "users.yaml").Should().Contain("noggog");
     }
 
@@ -132,7 +135,7 @@ public class TakeoutTests
     {
         // Nobody's opinion — a correction to how a release is identified, which is a fact about the
         // library and is needed to read the rest of the export.
-        File(Files(Mine), "decisions.yaml").Should().Contain("Kid A.");
+        File(Files(Mine), "Library/Radiohead/metadata.yaml").Should().Contain("Kid A.");
     }
 
     // ---- what is left behind ----
@@ -210,7 +213,7 @@ public class TakeoutTests
         };
 
         var files = new ArchiveBuilder().Build(ArchiveScope.ForUser(input, Mine));
-        File(files, "decisions.yaml").Should().Contain("Nickelback");
+        Paths(files).Should().Contain("Library/Nickelback/metadata.yaml");
     }
 
     [Fact]
@@ -263,9 +266,9 @@ public class TakeoutTests
                 Blocks = [new JsonObject { ["artist"] = "Creed", ["blockedBy"] = stored }],
             };
 
-            var decisions = File(new ArchiveBuilder().Build(input), "decisions.yaml");
-            decisions.Should().Contain("blockedBy: \"noggog\"");
-            decisions.Should().NotContain(Mine);
+            var metadata = File(new ArchiveBuilder().Build(input), "Library/Creed/metadata.yaml");
+            metadata.Should().Contain("blockedBy: \"noggog\"");
+            metadata.Should().NotContain(Mine);
         }
     }
 

@@ -64,10 +64,10 @@ else.
 ```
 Library/
   Radiohead/
-    metadata.yaml          the artist: resolved identities, and who likes them
+    metadata.yaml          the artist: resolved identities, who likes them, and what has been
+                           decided about them — blocked records, manual match corrections
     Kid A.yaml             the album: quality, who acquired it, its songs and their ratings
 users.yaml                 the people, and their linked media-server accounts
-decisions.yaml             blocked albums and manual match corrections
 playlists/
   <person>.yaml            that person's playlists
 ```
@@ -76,6 +76,44 @@ A directory per artist and a file per album, so one changed record reads as
 `~ Library/Radiohead/Kid A.yaml` rather than as lines shifting inside one enormous file. Keys are
 sorted, and YAML block style has no commas — so adding a single rating is a single added line, with
 nothing around it touched.
+
+## An artist file
+
+```yaml
+artist: "Radiohead"
+musicBrainz:
+  mbid: "a74b1b7f-71a5-4011-9441-d0b5e4122711"
+  name: "Radiohead"
+ratings:
+  kelsey:
+    verdict: "Liked"
+    decidedAt: "2025-02-11T19:04:08Z"
+    confirmed: true
+blocks:
+  - album: "Pablo Honey"
+    scope: "Release"
+    blockedBy: "noggog"
+    createdAt: "2025-06-02T11:20:41Z"
+matchCorrections:
+  - deezerTitle: "Kid A."
+    libraryTitle: "Kid A"
+```
+
+`ratings` is the per-person verdict on the **artist** — `Liked`, `Disliked` or `Indifferent`, keyed
+by username, with `confirmed` where somebody stood by it a second time.
+
+`blocks` and `matchCorrections` are the standing decisions made about this act, and they are why a
+directory here may hold nothing but a `metadata.yaml`: a block is usually placed on a record the
+library does *not* have, and the act it belongs to needn't be one the library carries at all.
+
+- A **block** takes a record off the offer list for everyone. `scope: "Release"` means don't carry it
+  — a bad catalogue entry, a reissue duplicating something owned, a record decided against.
+  `scope: "Upgrade"` means keep the copy we have and stop offering to replace it with a better one;
+  the record stays owned and visible everywhere else. `blockedBy` names whoever placed it, and is
+  absent where nobody was recorded.
+- A **match correction** is a human saying "the catalogue's `deezerTitle` is the record we already
+  hold as `libraryTitle`", stopping an album the library owns from being offered again under a name
+  it doesn't use. It belongs to nobody — it is a fact about the library, not an opinion of it.
 
 ## An album file
 
@@ -182,7 +220,8 @@ meanings depending on the field, and does not record which. `is` means "is" on a
 - **Credentials.** No access tokens, ever.
 - **Email addresses**, and the identity provider's subject ids.
 - **Anything a job can rebuild** — similarity graphs, recommendation scores, popularity counts,
-  server-local ids, "last seen" timestamps. They churn constantly and would bury what matters.
+  server-local ids, "last seen" timestamps, and the downloader's own "nothing better to offer, ask
+  again later" timers. They churn constantly and would bury what matters.
 
 Because derived data is excluded, this is not a database backup and will not restore as one. It is
 the record of what was decided.

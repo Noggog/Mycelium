@@ -71,16 +71,16 @@ public class ArchiveDeltaTests
     }
 
     [Fact]
-    public void The_single_file_sections_are_named_rather_than_counted()
+    public void The_single_file_section_is_named_rather_than_counted()
     {
-        // There is exactly one decisions.yaml and one users.yaml, so "1 user file" spends three words
-        // to say what one says, and the count could never be anything else.
+        // There is exactly one users.yaml, so "1 user file" spends three words to say what one says,
+        // and the count could never be anything else.
         ArchiveDelta.CommitMessage(
             [
-                new ArchiveChange("decisions.yaml", FileChange.Modified),
+                new ArchiveChange("Library/Radiohead/Kid A.yaml", FileChange.Modified),
                 new ArchiveChange("users.yaml", FileChange.Modified),
             ])
-            .Should().Be("decisions, users");
+            .Should().Be("1 album, users");
     }
 
     [Fact]
