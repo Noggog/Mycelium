@@ -436,6 +436,32 @@ and **Misc** (79) before the artist level — one directory level deeper than
   end state, but it's a social question as much as a technical one — worth
   deciding deliberately rather than as a side effect of an upgrade.
 
+**Decision (2026-09-20): consolidate, deliberately.** `UpgradeSwap` treats the
+downloader's own root (`MUSIC_DOWNLOAD_DIR`, i.e. `/media/music`) as the main
+library and every other mapped root as a drop folder. An upgrade whose old copy
+sits in a drop folder is promoted under the main root at the staged album's own
+`{artist}/{album}` path — resolved case-insensitively against existing folders,
+so consolidation doesn't reopen the "Children Of Bodom" duplicate that
+`PromoteInto` exists to avoid. The old copy goes to the trash whole: the files
+Plex lists *plus* the cover art and strays it doesn't, since nothing is promoted
+back there to keep them company. The emptied album and artist folders are then
+removed, stopping below the contributor level and never touching the root. An
+album whose folder holds another album's audio (the 156 loose tracks at
+`{root}/{Artist}/track.ext`) isn't the swap's to clear out, so only the listed
+files move and the folder stays.
+
+The upside beyond tidiness: the promote becomes a same-filesystem move again,
+because staging lives under the main root. Only the move-aside crosses mounts,
+and only when `LIBRARY_TRASH_DIR` points outside the drop folder.
+
+**The move-aside is now checked.** `LibraryTrash.MoveAside` always skipped files
+it couldn't move, and its doc comment said the caller compares the count — but
+`UpgradeSwap` didn't, so a partial move promoted onto a half-emptied folder.
+Consolidating makes that worse (the old copy stays in the drop folder *and* a
+new one appears under the main root), so the count is now compared,
+`LibraryTrash.Restore` puts back what moved by reading the manifest, and the
+swap refuses with `SwapRefusal.MoveIncomplete`.
+
 ### Smaller trash mechanics
 
 ## Pre-flight findings (2026-08-24)

@@ -162,6 +162,7 @@ public class PurchaseRepo : IPurchaseRepo
         { "filesMoved", r.FilesMoved },
         { "movedTo", Nullable(r.MovedTo) },
         { "albumFolder", Nullable(r.AlbumFolder) },
+        { "previousFolder", Nullable(r.PreviousFolder) },
         { "match", r.Match.ToString() },
         { "oldMatch", Nullable(r.OldMatch) },
         { "newMatch", Nullable(r.NewMatch) },
@@ -193,7 +194,8 @@ public class PurchaseRepo : IPurchaseRepo
             OldMatch: Str("oldMatch"),
             NewMatch: Str("newMatch"),
             MatchCheckSince: Date("matchCheckSince"),
-            Dismissed: u.TryGetValue("dismissed", out var d) && d.IsBoolean && d.AsBoolean);
+            Dismissed: u.TryGetValue("dismissed", out var d) && d.IsBoolean && d.AsBoolean,
+            PreviousFolder: Str("previousFolder"));
     }
 
     public async Task<bool> SetStatus(

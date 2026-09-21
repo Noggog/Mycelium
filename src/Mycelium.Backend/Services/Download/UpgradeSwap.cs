@@ -29,12 +29,19 @@ public enum SwapRefusal
     /// incomplete one — the one outcome an upgrade must never produce.
     /// </summary>
     Incomplete,
+
+    /// <summary>
+    /// The old copy could not be moved out of the way in one piece, so the new one was not promoted
+    /// on top of a half-emptied folder. Whatever did move is put back.
+    /// </summary>
+    MoveIncomplete,
 }
 
 /// <summary>The outcome of trying to swap a downloaded upgrade in for the copy already held.</summary>
 /// <param name="AlbumDir">
-/// The folder the replaced copy was moved out of, which the upgrade should be promoted into. Null
-/// when there isn't a single album folder to go back to, and the normal promote applies.
+/// The folder to promote the upgrade into: the one the replaced copy was moved out of, or — when
+/// that copy lived outside the main library root — its consolidated home under that root. Null when
+/// there is no single folder to name, and the normal promote applies.
 /// </param>
 public readonly record struct SwapOutcome(
     bool Swapped, SwapRefusal Refusal, string? Detail = null, string? AlbumDir = null)
@@ -56,6 +63,15 @@ public readonly record struct SwapOutcome(
 /// promote land on clean ground — and because the old copy goes to a trash folder with a manifest
 /// rather than being deleted, a failure between the two steps is recoverable.</para>
 ///
+/// <para>Where the new copy lands depends on where the old one lived. An album already under the
+/// main library root is upgraded <b>in place</b>, back into the folder that was just emptied, because
+/// streamrip names folders from Deezer's metadata and the library's were named by whatever filed them
+/// — "Children Of Bodom" arriving beside an existing "Children of Bodom" is two artists on a
+/// case-sensitive filesystem. An album in a <b>drop folder</b> — a second library root people upload
+/// into — is instead <b>consolidated</b>: the new copy is filed under the main root the way any fresh
+/// download would be, and the old one leaves the drop folder for good. Putting the upgrade back in
+/// the drop folder would grow a second library there, one album at a time.</para>
+///
 /// <para>Two gates stand in front of all of that, and both refuse rather than proceed:</para>
 /// <list type="bullet">
 ///   <item>the result must be <b>complete</b> — a short album must never replace a whole one; and</item>
@@ -70,6 +86,7 @@ public class UpgradeSwap
     private readonly LibraryTrash _trash;
     private readonly UpgradeMatchKeeper _matches;
     private readonly IPurchaseRepo _purchases;
+    private readonly DownloaderConfig _config;
     private readonly ILogger<UpgradeSwap> _logger;
 
     public UpgradeSwap(
@@ -79,6 +96,7 @@ public class UpgradeSwap
         LibraryTrash trash,
         UpgradeMatchKeeper matches,
         IPurchaseRepo purchases,
+        DownloaderConfig config,
         ILogger<UpgradeSwap> logger)
     {
         _library = library;
@@ -87,6 +105,7 @@ public class UpgradeSwap
         _trash = trash;
         _matches = matches;
         _purchases = purchases;
+        _config = config;
         _logger = logger;
     }
 
@@ -173,30 +192,158 @@ public class UpgradeSwap
         // Read before the move: afterwards the files aren't there to locate it by.
         var albumDir = AlbumFolder(present);
 
+        // An album outside the main library root came from a drop folder, so it is consolidated
+        // rather than upgraded in place — see the class summary. Falling back to in-place when no
+        // destination can be named keeps a nameable case from becoming a scatter across the root.
+        var consolidating = albumDir is not null && _config.DownloadDir is { Length: > 0 }
+                            && !IsUnder(albumDir, _config.DownloadDir);
+        var promoteInto = consolidating
+            ? DownloadStaging.ConsolidationTarget(stagedDir, _config.DownloadDir) ?? albumDir
+            : albumDir;
+        consolidating = consolidating && promoteInto != albumDir;
+
         // Saved before anything moves, so a copy that Plex matches to a different release — which
         // makes its ratings look lost — can be put back once it lands (see UpgradeMatchKeeper).
         var report = await _matches.Remember(item, located!.Value.Key);
 
+        // Consolidating empties the old folder for good, so what Plex doesn't list — cover art, a
+        // .cue, a stray log — goes with it rather than being left behind as a husk. An in-place
+        // upgrade promotes back into that same folder, so its extras are left exactly where they are.
+        var moving = consolidating ? WholeFolder(albumDir!, present) : present;
+
         var result = _trash.MoveAside(
-            present,
+            moving,
             $"{item.Artist.ArtistName} - {item.Album}",
             // Stamped from the row rather than the clock so a retry of the same album is traceable.
             item.Id.GetHashCode().ToString("x8"));
 
+        // A part-moved album is the one state nothing downstream can recover from. In place it means
+        // promoting onto a half-emptied folder, which interleaves two encodings; consolidating it
+        // means the old copy stays in the drop folder *and* a new one appears under the main root.
+        // Either way it is the doubled album this whole sequence exists to prevent, so what moved
+        // goes back and the swap refuses.
+        if (result.Moved < moving.Count)
+        {
+            var restored = _trash.Restore(result.Destination);
+            _logger.LogError(
+                "Upgrade for {Artist} — {Album}: only {Moved} of {Total} existing file(s) could be "
+                + "moved aside, so nothing was promoted; {Restored} went back to the library",
+                item.Artist.ArtistName, item.Album, result.Moved, moving.Count, restored);
+            return SwapOutcome.Refused(
+                SwapRefusal.MoveIncomplete,
+                $"moved only {result.Moved} of {moving.Count} existing file(s) aside"
+                + (restored == result.Moved
+                    ? ""
+                    : $"; {result.Moved - restored} could not be put back and are in {result.Destination}"));
+        }
+
+        if (consolidating)
+        {
+            // The folder is empty now and nothing will be promoted back into it. Leaving it would
+            // leave the drop folder full of hollow artist trees.
+            PruneEmptyFolders(albumDir!);
+        }
+
         _logger.LogInformation(
             "Upgrade for {Artist} — {Album}: moved {Moved} existing file(s) aside to {Where}; "
-            + "promoting the {Acquired} copy in their place",
-            item.Artist.ArtistName, item.Album, result.Moved, result.Destination, acquired);
+            + "promoting the {Acquired} copy into {Into}{Consolidated}",
+            item.Artist.ArtistName, item.Album, result.Moved, result.Destination, acquired,
+            promoteInto ?? _config.DownloadDir,
+            consolidating ? $" (consolidated out of {albumDir})" : "");
         await _purchases.SetUpgrade(item.Id, report with
         {
             ReplacedQuality = item.OwnedQuality,
             NewQuality = acquired,
             FilesMoved = result.Moved,
             MovedTo = result.Destination,
-            AlbumFolder = albumDir,
+            AlbumFolder = promoteInto,
+            PreviousFolder = consolidating ? albumDir : null,
         });
-        return SwapOutcome.Ok(albumDir);
+        return SwapOutcome.Ok(promoteInto);
     }
+
+    /// <summary>
+    /// Everything in the folder the old copy occupied, when the album owns that folder outright — so
+    /// a consolidation takes the cover art and the stray .cue along with the tracks. Another album's
+    /// audio sitting in the same folder means this one doesn't own it, and only the files Plex listed
+    /// are taken; our own dot-directories are never swept up either way.
+    /// </summary>
+    private IReadOnlyList<string> WholeFolder(string albumDir, IReadOnlyList<string> present)
+    {
+        try
+        {
+            var all = Directory.EnumerateFiles(albumDir, "*", SearchOption.AllDirectories)
+                .Where(f => !IsOurs(albumDir, f))
+                .ToArray();
+            var known = present.ToHashSet(StringComparer.Ordinal);
+            return all.Any(f => DownloadStaging.IsAudio(f) && !known.Contains(f)) ? present : all;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex, "Could not list {Dir}; moving only the files the library knows about", albumDir);
+            return present;
+        }
+    }
+
+    /// <summary>
+    /// Whether a file under <paramref name="albumDir"/> is Mycelium's own bookkeeping — a previous
+    /// removal's trash, or staging. Moving a trash folder into a trash folder is not a tidy-up.
+    /// </summary>
+    private static bool IsOurs(string albumDir, string file) =>
+        Path.GetRelativePath(albumDir, file)
+            .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar })
+            .Any(segment => segment is LibraryTrash.TrashFolder or DownloadStaging.StagingFolder);
+
+    /// <summary>
+    /// Removes the emptied folder and any parent it leaves empty, stopping below the library root it
+    /// sits in — a drop folder organised by contributor should lose the album and the artist, never
+    /// the contributor's own folder if something else of theirs is still in it, and never the root.
+    /// Only ever removes directories that are already empty.
+    /// </summary>
+    private void PruneEmptyFolders(string albumDir)
+    {
+        var root = _paths.LocalPrefixes
+            .Where(prefix => IsUnder(albumDir, prefix))
+            .OrderByDescending(prefix => prefix.Length)
+            .FirstOrDefault();
+        if (root is null)
+        {
+            return;
+        }
+
+        var dir = albumDir;
+        while (IsUnder(dir, root))
+        {
+            try
+            {
+                if (Directory.EnumerateFileSystemEntries(dir).Any())
+                {
+                    return;
+                }
+                Directory.Delete(dir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not remove the emptied folder {Dir}", dir);
+                return;
+            }
+
+            var parent = Path.GetDirectoryName(dir);
+            if (string.IsNullOrEmpty(parent) || parent == dir)
+            {
+                return;
+            }
+            dir = parent;
+        }
+    }
+
+    /// <summary>Whether <paramref name="path"/> lies strictly inside <paramref name="root"/>.</summary>
+    private static bool IsUnder(string? path, string root) =>
+        path is not null
+        && Normalize(path).StartsWith(Normalize(root) + "/", StringComparison.Ordinal);
+
+    private static string Normalize(string path) => path.Replace('\\', '/').TrimEnd('/');
 
     /// <summary>
     /// The folder the held copy lives in, to promote the upgrade back into — or null if its files

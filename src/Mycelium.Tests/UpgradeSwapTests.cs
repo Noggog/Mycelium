@@ -19,6 +19,7 @@ public class UpgradeSwapTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"mycelium-swap-tests-{Guid.NewGuid():N}");
 
     private readonly string _library;
+    private readonly string _drop;
     private readonly string _staged;
     private readonly ILibraryQuery _query = Substitute.For<ILibraryQuery>();
     private readonly IArtistCatalogRepo _catalog = Substitute.For<IArtistCatalogRepo>();
@@ -29,6 +30,7 @@ public class UpgradeSwapTests : IDisposable
     public UpgradeSwapTests()
     {
         _library = Path.Combine(_root, "music");
+        _drop = Path.Combine(_root, "mediadrop");
         _staged = Path.Combine(_root, "staged");
         Directory.CreateDirectory(Path.Combine(_library, "Alvvays", "Blue Rev"));
         Directory.CreateDirectory(_staged);
@@ -42,12 +44,22 @@ public class UpgradeSwapTests : IDisposable
     /// <summary>Plex's namespace is deliberately different from ours, as it is in reality.</summary>
     private const string PlexRoot = "/plex-media/music";
 
+    /// <summary>
+    /// The second library root — a folder people upload into, organised by contributor rather than by
+    /// artist, so the album sits one level deeper than it does under the main root.
+    /// </summary>
+    private const string PlexDropRoot = "/plex-mediadrop/Music";
+
+    private const string BothRoots = $"{PlexRoot}:__LIBRARY__,{PlexDropRoot}:__DROP__";
+
     private UpgradeSwap Sut(string? pathMap = $"{PlexRoot}:__LIBRARY__", string? trashRoot = null) =>
-        new(_query, _catalog, new LibraryPathMap(pathMap?.Replace("__LIBRARY__", _library)),
+        new(_query, _catalog,
+            new LibraryPathMap(pathMap?.Replace("__LIBRARY__", _library).Replace("__DROP__", _drop)),
             new LibraryTrash(NullLogger<LibraryTrash>.Instance, new LibraryTrashConfig(trashRoot)),
             new UpgradeMatchKeeper(_query, Substitute.For<ILibraryMatcher>(), _catalog, _purchases,
                 DownloaderConfigForTests.Default, NullLogger<UpgradeMatchKeeper>.Instance),
-            _purchases, NullLogger<UpgradeSwap>.Instance);
+            _purchases, DownloaderConfigForTests.Default with { DownloadDir = _library },
+            NullLogger<UpgradeSwap>.Instance);
 
     /// <summary>Puts an owned album on disk and tells the fake library where Plex thinks it is.</summary>
     private string[] ExistingAlbum(params string[] fileNames)
@@ -291,5 +303,194 @@ public class UpgradeSwapTests : IDisposable
         outcome.Swapped.Should().BeFalse();
         outcome.Refusal.Should().Be(SwapRefusal.NotAnUpgrade);
         LibraryFiles().Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// Puts an owned album in the drop folder — which nests it under a contributor — and tells the
+    /// fake library where Plex thinks it is.
+    /// </summary>
+    private string DropAlbum(params string[] fileNames)
+    {
+        var dir = Path.Combine(_drop, "Brennan", "Alvvays", "Blue Rev");
+        Directory.CreateDirectory(dir);
+        foreach (var name in fileNames)
+        {
+            File.WriteAllText(Path.Combine(dir, name), "audio");
+        }
+
+        _catalog.GetAlbumPlexRatingKeys(Arg.Any<IReadOnlyCollection<string>>()).Returns(
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Alvvays"] = new(StringComparer.OrdinalIgnoreCase) { ["Blue Rev"] = AlbumKey },
+            });
+        _query.QueryAlbumFiles(AlbumKey).Returns(
+            fileNames.Select(n => $"{PlexDropRoot}/Brennan/Alvvays/Blue Rev/{n}").ToArray());
+        return dir;
+    }
+
+    /// <summary>What the download produced, in the {artist}/{album} folders streamrip actually writes.</summary>
+    private void DownloadedUnder(string relativeDir, params string[] fileNames)
+    {
+        var dir = Path.Combine(_staged, relativeDir.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(dir);
+        foreach (var name in fileNames)
+        {
+            File.WriteAllText(Path.Combine(dir, name), "audio");
+        }
+    }
+
+    [Fact]
+    public async Task An_album_in_the_drop_folder_is_consolidated_into_the_main_library()
+    {
+        // The drop folder is for uploads, not for the library to grow a second copy of itself in. An
+        // upgrade found there is filed under the main root the way any fresh download would be.
+        DropAlbum("01.mp3");
+        DownloadedUnder("Alvvays/Blue Rev", "01.flac");
+
+        var outcome = await Sut(pathMap: BothRoots).PrepareForPromotion(Upgrade(), _staged, 1, 1);
+
+        outcome.Swapped.Should().BeTrue();
+        outcome.AlbumDir.Should().Be(Path.Combine(_library, "Alvvays", "Blue Rev"));
+    }
+
+    [Fact]
+    public async Task Consolidating_reuses_an_artist_folder_that_differs_only_in_case()
+    {
+        // streamrip names folders from Deezer's metadata and the library's were named by whatever
+        // filed them. On Linux "ALVVAYS" beside "Alvvays" is two artists, which is the whole reason an
+        // in-place upgrade goes back to its own folder — consolidation has to answer it too.
+        Directory.CreateDirectory(Path.Combine(_library, "Alvvays"));
+        DropAlbum("01.mp3");
+        DownloadedUnder("ALVVAYS/Blue Rev", "01.flac");
+
+        var outcome = await Sut(pathMap: BothRoots).PrepareForPromotion(Upgrade(), _staged, 1, 1);
+
+        outcome.AlbumDir.Should().Be(Path.Combine(_library, "Alvvays", "Blue Rev"));
+    }
+
+    [Fact]
+    public async Task Consolidating_takes_the_whole_folder_and_leaves_no_husk_behind()
+    {
+        // Nothing is promoted back into the drop folder, so cover art left there would be orphaned
+        // and the emptied artist folder would be litter in someone's collection.
+        var dir = DropAlbum("01.mp3");
+        File.WriteAllText(Path.Combine(dir, "cover.jpg"), "art");
+        DownloadedUnder("Alvvays/Blue Rev", "01.flac");
+        var trashRoot = Path.Combine(_root, "music-to-delete");
+
+        await Sut(pathMap: BothRoots, trashRoot: trashRoot).PrepareForPromotion(Upgrade(), _staged, 1, 1);
+
+        var trash = Directory.EnumerateFiles(trashRoot, "*", SearchOption.AllDirectories).ToArray();
+        trash.Should().Contain(f => f.EndsWith("01.mp3", StringComparison.Ordinal));
+        trash.Should().Contain(f => f.EndsWith("cover.jpg", StringComparison.Ordinal));
+        // The album and the artist folder go; the contributor's own folder and the root stay.
+        Directory.Exists(Path.Combine(_drop, "Brennan", "Alvvays")).Should().BeFalse();
+        Directory.Exists(_drop).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_shared_folder_in_the_drop_area_keeps_what_isnt_this_albums()
+    {
+        // Loose tracks filed straight under an artist mean the folder isn't this album's to clear out.
+        var dir = Path.Combine(_drop, "Brennan", "Alvvays");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "01.mp3"), "audio");
+        File.WriteAllText(Path.Combine(dir, "someone-elses.mp3"), "audio");
+        _catalog.GetAlbumPlexRatingKeys(Arg.Any<IReadOnlyCollection<string>>()).Returns(
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Alvvays"] = new(StringComparer.OrdinalIgnoreCase) { ["Blue Rev"] = AlbumKey },
+            });
+        _query.QueryAlbumFiles(AlbumKey).Returns(new[] { $"{PlexDropRoot}/Brennan/Alvvays/01.mp3" });
+        DownloadedUnder("Alvvays/Blue Rev", "01.flac");
+
+        var outcome = await Sut(pathMap: BothRoots).PrepareForPromotion(Upgrade(), _staged, 1, 1);
+
+        outcome.Swapped.Should().BeTrue();
+        File.Exists(Path.Combine(dir, "someone-elses.mp3")).Should().BeTrue();
+        File.Exists(Path.Combine(dir, "01.mp3")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_album_already_in_the_main_library_is_still_upgraded_in_place()
+    {
+        // Consolidation is for the drop folder only; everything else keeps the library's own layout.
+        ExistingAlbum("01.mp3");
+        DownloadedUnder("ALVVAYS/Blue Rev", "01.flac");
+
+        var outcome = await Sut(pathMap: BothRoots).PrepareForPromotion(Upgrade(), _staged, 1, 1);
+
+        outcome.AlbumDir.Should().Be(Path.Combine(_library, "Alvvays", "Blue Rev"));
+        _purchases.Items.SingleOrDefault()?.Upgrade?.PreviousFolder.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_half_moved_album_is_put_back_rather_than_promoted_onto()
+    {
+        // The worst reachable state: half the old copy in the trash, the new one about to land on top
+        // of the rest. One file that won't move has to undo the ones that did. A second disc gives a
+        // subfolder to make unwritable, which is the difference between a partial move and no move.
+        var dir = Path.Combine(_library, "Alvvays", "Blue Rev");
+        var disc2 = Path.Combine(dir, "disc2");
+        Directory.CreateDirectory(disc2);
+        File.WriteAllText(Path.Combine(dir, "01.mp3"), "audio");
+        File.WriteAllText(Path.Combine(disc2, "02.mp3"), "audio");
+        _catalog.GetAlbumPlexRatingKeys(Arg.Any<IReadOnlyCollection<string>>()).Returns(
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Alvvays"] = new(StringComparer.OrdinalIgnoreCase) { ["Blue Rev"] = AlbumKey },
+            });
+        _query.QueryAlbumFiles(AlbumKey).Returns(new[]
+        {
+            $"{PlexRoot}/Alvvays/Blue Rev/01.mp3", $"{PlexRoot}/Alvvays/Blue Rev/disc2/02.mp3",
+        });
+        Downloaded("01.flac", "02.flac");
+        if (!TryMakeReadOnly(disc2))
+        {
+            return; // Running as root, or on a filesystem that ignores the mode — nothing to prove here.
+        }
+
+        try
+        {
+            var outcome = await Sut(trashRoot: Path.Combine(_root, "music-to-delete"))
+                .PrepareForPromotion(Upgrade(), _staged, 2, 2);
+
+            outcome.Swapped.Should().BeFalse();
+            outcome.Refusal.Should().Be(SwapRefusal.MoveIncomplete);
+        }
+        finally
+        {
+            File.SetUnixFileMode(disc2,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        // Both tracks are still where they were, so the album plays exactly as it did before — the
+        // one that did move has been put back from the manifest.
+        File.Exists(Path.Combine(dir, "01.mp3")).Should().BeTrue();
+        File.Exists(Path.Combine(disc2, "02.mp3")).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Makes a directory unwritable, and says whether that actually took — it doesn't for root, and
+    /// a test that silently passes because the setup did nothing is worse than no test.
+    /// </summary>
+    private static bool TryMakeReadOnly(string dir)
+    {
+        try
+        {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            var probe = Path.Combine(dir, "probe.tmp");
+            File.WriteAllText(probe, "x");
+            File.Delete(probe);
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
     }
 }

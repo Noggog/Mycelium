@@ -42,6 +42,10 @@ public enum UpgradeMatchCheck
 /// <param name="FilesMoved">How many of the old copy's files were moved aside.</param>
 /// <param name="MovedTo">Where they went, to recover or delete them by hand.</param>
 /// <param name="AlbumFolder">The library folder the new copy was promoted into.</param>
+/// <param name="PreviousFolder">
+/// Where the old copy lived, when that isn't where the new one went — a drop-folder album that was
+/// consolidated under the main library root. Null for an ordinary in-place upgrade.
+/// </param>
 /// <param name="Match">How keeping the Plex match has gone.</param>
 /// <param name="OldMatch">What Plex had the old copy matched to (e.g. <c>plex://album/…</c>).</param>
 /// <param name="NewMatch">What Plex matched the new copy to, when that differed.</param>
@@ -59,4 +63,5 @@ public record UpgradeReport(
     string? OldMatch = null,
     string? NewMatch = null,
     DateTimeOffset? MatchCheckSince = null,
-    bool Dismissed = false);
+    bool Dismissed = false,
+    string? PreviousFolder = null);

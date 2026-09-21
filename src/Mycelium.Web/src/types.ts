@@ -376,6 +376,9 @@ export interface UpgradeReport {
   // Where the old copy's files went — to recover them, or delete them once happy.
   movedTo: string | null
   albumFolder: string | null
+  // Where the old copy lived, when the upgrade was consolidated out of a drop folder into the main
+  // library root instead of going back in place. Null for an ordinary in-place upgrade.
+  previousFolder: string | null
   match: UpgradeMatchCheck
   oldMatch: string | null
   // What Plex matched the new copy to, when it differed from the old copy's match.

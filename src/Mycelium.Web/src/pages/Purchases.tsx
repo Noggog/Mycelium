@@ -332,6 +332,9 @@ function UpgradeRow({ item, actions }: { item: PurchaseItem; actions: ReactNode 
               <dt>Old copy</dt>
               <dd>
                 {u.filesMoved} file{u.filesMoved === 1 ? '' : 's'} moved to <code>{u.movedTo}</code>
+                {u.previousFolder && (
+                  <> — out of <code>{u.previousFolder}</code></>
+                )}
               </dd>
               {u.albumFolder && (
                 <>

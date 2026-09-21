@@ -229,6 +229,73 @@ public static class DownloadStaging
     }
 
     /// <summary>
+    /// Where a <i>consolidating</i> upgrade should land under <paramref name="libraryRoot"/> — one
+    /// whose old copy sits outside the main library, in a drop folder people upload into, and which
+    /// is therefore filed under the main root rather than put back where it came from.
+    ///
+    /// <para>The path is the staged album's own <c>{artist}/{album}</c> folders, which is exactly
+    /// where an ordinary <see cref="Promote"/> would have put a fresh download. Each segment is
+    /// resolved against what already exists, so an artist the library files as "Alvvays" is not
+    /// joined by a second "ALVVAYS" that streamrip named from Deezer's metadata — the same
+    /// case-collision <see cref="PromoteInto"/> exists to avoid, which consolidation reopens by
+    /// leaving the old folder behind.</para>
+    ///
+    /// <para>Null when staging holds no folder structure to name a destination from, which leaves
+    /// the caller its ordinary promote into the root.</para>
+    /// </summary>
+    public static string? ConsolidationTarget(string stagedDir, string libraryRoot)
+    {
+        if (string.IsNullOrWhiteSpace(libraryRoot))
+        {
+            return null;
+        }
+
+        var stagedAlbum = CommonDirectory(AudioFiles(stagedDir));
+        if (stagedAlbum is null)
+        {
+            return null;
+        }
+
+        var relative = Path.GetRelativePath(stagedDir, stagedAlbum);
+        if (relative is "." or "" || Path.IsPathRooted(relative)
+            || relative.StartsWith("..", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var target = libraryRoot;
+        foreach (var segment in relative.Split(
+                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            target = ResolveChild(target, Unhide(segment));
+        }
+        return target;
+    }
+
+    /// <summary>
+    /// An existing child directory of <paramref name="parent"/> whose name differs from
+    /// <paramref name="name"/> only in case, or the name as asked when there is none. Linux treats
+    /// "Alvvays" and "ALVVAYS" as two folders; the library only wants one.
+    /// </summary>
+    private static string? ResolveChildOrNull(string parent, string name)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(parent).FirstOrDefault(d =>
+                string.Equals(Path.GetFileName(d), name, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            // The parent doesn't exist yet (or can't be listed) — nothing to collide with.
+            return null;
+        }
+    }
+
+    private static string ResolveChild(string parent, string name) =>
+        ResolveChildOrNull(parent, name) ?? Path.Combine(parent, name);
+
+    /// <summary>
     /// The deepest directory containing every one of <paramref name="files"/> — an album's folder, in
     /// the normal case. Null when there are no files.
     /// </summary>

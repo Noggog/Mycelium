@@ -283,6 +283,15 @@ outside every mapped prefix is **refused, not guessed at** — the download is d
 library left untouched, with `Couldn't replace the existing copy` on the row. Without any mapping,
 upgrades download and are then refused; gap-filling is unaffected.
 
+**An album in a second library root is consolidated into the first.** `MUSIC_DOWNLOAD_DIR_HOST` is
+the main root — where downloads land. Any other mapped root is treated as a drop folder: somewhere
+people upload into, not somewhere the library should grow a second copy of itself. So an upgrade
+found there is filed under the main root the way a fresh download would be (reusing an artist folder
+that differs only in case, rather than adding one), and the old copy leaves the drop folder entirely
+— tracks, cover art and all, with the emptied album and artist folders removed behind it. A
+contributor's own folder and the root itself are never removed. An album already under the main root
+is still upgraded in place, back into the folder it was moved out of.
+
 **Nothing is deleted.** The superseded copy is moved into a folder named for the album, with a
 `manifest.json` recording where each file came from, so a bad swap can be undone by hand. Where that
 folder goes is `LIBRARY_TRASH_DIR` (a path inside the container):
@@ -302,6 +311,9 @@ mounts count as separate filesystems. Clearing the folder out is a separate, man
 **Two gates stand in front of every swap**, and both leave the library untouched when they refuse:
 
 - **Complete** — a short download never replaces a whole album.
+- **Moved whole** — if the old copy can only be moved aside in part (an unwritable trash root, a full
+  disk), what moved is put back from the manifest and nothing is promoted. Promoting onto a
+  half-emptied folder is what produces a doubled album.
 - **Strictly better** — with the fallback ladder on, an album Deezer has no lossless master for comes
   back at 320. Swapping that in would churn files for no gain, so it is refused and the album is
   snoozed for six months (`Deezer has nothing better`) rather than retried on every sync.

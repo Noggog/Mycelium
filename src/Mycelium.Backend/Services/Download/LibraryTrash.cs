@@ -39,6 +39,9 @@ public class LibraryTrash
     /// </summary>
     public const string TrashFolder = ".mycelium-removed";
 
+    /// <summary>The record of where each moved file came from, read back by <see cref="Restore"/>.</summary>
+    private const string ManifestName = "manifest.json";
+
     private readonly ILogger<LibraryTrash> _logger;
     private readonly string? _root;
 
@@ -74,7 +77,18 @@ public class LibraryTrash
         var destination = _root is not null
             ? Path.Combine(_root, folder)
             : Path.Combine(DownloadStaging.CommonDirectory(files) ?? Path.GetTempPath(), TrashFolder, folder);
-        Directory.CreateDirectory(destination);
+        try
+        {
+            Directory.CreateDirectory(destination);
+        }
+        catch (Exception ex)
+        {
+            // An unwritable trash root (a bad LIBRARY_TRASH_DIR, a full disk) must read as "nothing
+            // moved" rather than throw through the caller mid-swap: it is the one failure where the
+            // library is still whole, and the caller's own count check turns it into a clean refusal.
+            _logger.LogError(ex, "Could not open the trash folder {Destination}; nothing was moved", destination);
+            return new TrashResult(0, null);
+        }
 
         var moved = new List<(string From, string To)>();
         foreach (var file in files)
@@ -102,6 +116,82 @@ public class LibraryTrash
     }
 
     /// <summary>
+    /// Puts a move-aside back where it came from, reading the manifest written beside it. Returns how
+    /// many files made it home.
+    ///
+    /// <para>This is the undo <see cref="MoveAside"/>'s manifest was always for, done by the code
+    /// rather than by hand. A swap that can't go through after the move has started leaves the worst
+    /// state of all — half an album in the library and half in the trash — so the caller walks it
+    /// back before refusing. Best-effort by the same reasoning as the move itself: a file that won't
+    /// go back is logged and left, and the manifest stays on disk so a human can finish the job.</para>
+    /// </summary>
+    public int Restore(string? destination)
+    {
+        if (destination is null || !Directory.Exists(destination))
+        {
+            return 0;
+        }
+
+        List<(string From, string To)> moved;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(destination, ManifestName)));
+            moved = document.RootElement.GetProperty("files").EnumerateArray()
+                .Select(e => (From: e.GetProperty("from").GetString()!, To: e.GetProperty("to").GetString()!))
+                .Where(m => m.From is not null && m.To is not null)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Could not read the removal manifest in {Destination}; the files there have to be put "
+                + "back by hand", destination);
+            return 0;
+        }
+
+        var restored = 0;
+        foreach (var (from, to) in moved)
+        {
+            try
+            {
+                if (!File.Exists(to))
+                {
+                    continue;
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(from)!);
+                File.Move(to, from);
+                restored++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not put {File} back at {Original}", to, from);
+            }
+        }
+
+        if (restored == moved.Count)
+        {
+            // Nothing left in there but the manifest describing an undone move, which would only
+            // mislead whoever goes looking through the trash later.
+            try
+            {
+                File.Delete(Path.Combine(destination, ManifestName));
+                if (!Directory.EnumerateFileSystemEntries(destination).Any())
+                {
+                    Directory.Delete(destination);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not clear the emptied trash folder {Destination}", destination);
+            }
+        }
+
+        _logger.LogInformation(
+            "Restored {Restored}/{Total} file(s) from {Destination}", restored, moved.Count, destination);
+        return restored;
+    }
+
+    /// <summary>
     /// Records where every file came from, so a swap that goes wrong can be undone by hand. Written
     /// even when nothing moved: an empty manifest still says which album the folder belongs to.
     /// </summary>
@@ -116,7 +206,7 @@ public class LibraryTrash
                 files = moved.Select(m => new { from = m.From, to = m.To }).ToArray(),
             };
             File.WriteAllText(
-                Path.Combine(destination, "manifest.json"),
+                Path.Combine(destination, ManifestName),
                 JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex)
