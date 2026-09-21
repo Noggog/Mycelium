@@ -1431,6 +1431,38 @@ public class PurchaseServiceTests
     }
 
     [Fact]
+    public async Task A_finished_upgrade_whose_files_were_deleted_is_queued_again_as_a_missing_album()
+    {
+        // Upgraded, dismissed, then the files deleted by hand. The album is still liked, so it must come
+        // back onto the page — not sit in InLibrary for ever while Browse reads "Queued".
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(("justin", "Billie Eilish", "HIT ME HARD AND SOFT"));
+        SeedUpgrade(PurchaseStatus.InLibrary, Swapped(UpgradeMatchCheck.NotMatched, dismissed: true));
+
+        var active = await _sut.GetActive(recentUpgrades: true);
+
+        var row = active.Single();
+        row.Status.Should().Be(PurchaseStatus.Pending);
+        row.Kind.Should().Be(FeedKind.MissingAlbum);
+        row.Upgrade.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_finished_row_still_owned_below_its_target_is_not_re_queued_without_evidence()
+    {
+        // Owned, just lossier than the target, and no AcquiredQuality to say the download fell short:
+        // the "left the library" check must not read that as absent.
+        UserTier("justin", AudioQuality.Lossless);
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossy);
+        LikedBy(("justin", "Billie Eilish", "HIT ME HARD AND SOFT"));
+        SeedUpgrade(PurchaseStatus.InLibrary, Swapped(UpgradeMatchCheck.Kept));
+
+        await _sut.GetActive();
+
+        _purchases.Items.Single().Status.Should().Be(PurchaseStatus.InLibrary);
+    }
+
+    [Fact]
     public async Task An_upgrade_still_in_flight_cannot_be_dismissed()
     {
         SeedUpgrade(PurchaseStatus.Sent, Swapped(UpgradeMatchCheck.Waiting));

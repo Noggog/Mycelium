@@ -350,9 +350,10 @@ public class PurchaseService
         // the library doesn't hold at all — a MissingAlbum. Rewriting the row's kind then would drop it
         // out of the Upgrades section for good and have it credited as newly added when it lands.
         // Only a row still waiting (or failed) may change kind: its album really could have vanished.
+        // So may one that has landed — the swap gap is behind it, so an album missing now was removed.
         var committedUpgrades = (await _purchases.GetAll())
             .Where(r => r.Kind == FeedKind.UpgradeAlbum
-                        && r.Status is not (PurchaseStatus.Pending or PurchaseStatus.Failed))
+                        && r.Status is not (PurchaseStatus.Pending or PurchaseStatus.Failed or PurchaseStatus.InLibrary))
             .Select(r => r.Id)
             .ToHashSet();
 
@@ -515,6 +516,33 @@ public class PurchaseService
                     // what makes it the *first* such moment — so the InLibraryAt the repo stamps
                     // alongside the status is the arrival time, not the time of a later re-reconcile.
                     await _purchases.SetStatus(row.Id, PurchaseStatus.InLibrary);
+                }
+                continue;
+            }
+
+            // Closed out once, but the record has since left the library (deleted by hand, say) and is
+            // still wanted. InLibrary is otherwise terminal — the prune below never touches it — so
+            // without this the row sits hidden for good while every like on the album reads "Queued".
+            // Gated on the album being genuinely absent rather than on nowOwned, for the same reason as
+            // the landing check: an owned-but-lossy copy with no recorded AcquiredQuality is not
+            // evidence of anything, and re-queueing on it would re-fetch the back catalogue.
+            if (row.Status == PurchaseStatus.InLibrary
+                && desired.ContainsKey(row.Id)
+                && row.Album is { } goneAlbum
+                && !AlbumIsOwned(
+                       ownedAlbums, overrideKeys,
+                       MatchArtistFor(row.Artist.ArtistName, goneAlbum, row.AlbumArtist),
+                       goneAlbum))
+            {
+                _logger.LogInformation(
+                    "\"{Album}\" ({Artist}) was in the library but no longer is — queueing it again",
+                    goneAlbum, row.Artist.ArtistName);
+                await _purchases.SetStatus(row.Id, PurchaseStatus.Pending);
+                // The finished upgrade's report is about a copy that is gone; left on, a dismissed one
+                // would keep describing the old swap on the re-queued row.
+                if (row.Upgrade is not null)
+                {
+                    await _purchases.SetUpgrade(row.Id, null);
                 }
                 continue;
             }
