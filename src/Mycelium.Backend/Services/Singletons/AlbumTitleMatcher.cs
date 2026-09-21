@@ -46,10 +46,12 @@ public static partial class AlbumTitleMatcher
     /// Canonical form for the <em>record</em> rather than the listing: everything <see cref="Normalize"/>
     /// folds, plus the trailing "which pressing is this" decoration — any trailing bracket, and a
     /// dash-separated or bare qualifier ("(Deluxe Edition)", "(Standard Version)", "- Remastered",
-    /// "Deluxe Edition") — and a leading article, so "Light Upon the Lake (10th Anniversary Edition)"
+    /// "Deluxe Edition") — and a leading article, so "Light Upon the Lake (Deluxe Edition)"
     /// and "Light Upon the Lake" land on one key, as do "A Change Is Gonna Come" and "Change Is Gonna
-    /// Come". The one bracket that survives names a different performance — "(Live)", "(Remixes)" —
-    /// which is a different record, not a different pressing (see <see cref="IsDistinctRecording"/>).
+    /// Come". The brackets that survive name a different performance — "(Live)", "(Remixes)" —
+    /// which is a different record, not a different pressing (see <see cref="IsDistinctRecording"/>),
+    /// or an anniversary reissue, which is a pressing but one wanted alongside the original (see
+    /// <see cref="IsDistinctPressing"/>).
     ///
     /// This is what <em>ownership</em> is asked at, everywhere it is asked — the missing-album diff, the
     /// purchase reconcile, the Plex deep link, the upgrade swap. Plex names an album from its own
@@ -264,8 +266,8 @@ public static partial class AlbumTitleMatcher
 
     /// <summary>
     /// Drops the trailing "which pressing is this" decoration sources disagree on — any trailing
-    /// bracket that isn't a different performance, plus a dash-separated or unbracketed qualifier
-    /// ("(Deluxe Edition)", "[10th Anniversary Deluxe]", "- Remastered", "Deluxe Edition") —
+    /// bracket that isn't a different performance or an anniversary reissue, plus a dash-separated or
+    /// unbracketed qualifier ("(Deluxe Edition)", "[Remastered]", "- Remastered", "Deluxe Edition") —
     /// repeatedly, so "Every Kingdom (Deluxe Edition) [Remastered]" reduces to "every kingdom". Never
     /// strips the whole title: an album actually called "Deluxe" keeps its name.
     /// </summary>
@@ -292,12 +294,14 @@ public static partial class AlbumTitleMatcher
 
         // "... (deluxe edition)" / "... [remastered]" / "... (standard version)". A trailing bracket is
         // decoration by default: whatever a source parenthesised, it is still shelving the same record,
-        // so the tail only survives when it names a different performance (see IsDistinctRecording).
+        // so the tail only survives when it names a different performance (see IsDistinctRecording) or
+        // an anniversary reissue (see IsDistinctPressing).
         var close = title[^1];
         if (close is ')' or ']')
         {
             var open = title.LastIndexOf(close == ')' ? '(' : '[');
-            if (open > 0 && !IsDistinctRecording(title.AsSpan(open + 1, title.Length - open - 2)))
+            var bracketed = title.AsSpan(open + 1, title.Length - open - 2);
+            if (open > 0 && !IsDistinctRecording(bracketed) && !IsDistinctPressing(bracketed))
             {
                 return Keep(title.AsSpan(0, open));
             }
@@ -307,7 +311,7 @@ public static partial class AlbumTitleMatcher
         // "... - remastered". The typography fold has already turned en/em dashes into hyphens, and
         // the dash has to be free-standing so hyphenated titles ("Post-Nothing") are left alone.
         var dash = title.LastIndexOf(" - ", StringComparison.Ordinal);
-        if (dash > 0 && IsQualifier(title.AsSpan(dash + 3)))
+        if (dash > 0 && IsQualifier(title.AsSpan(dash + 3)) && !IsDistinctPressing(title.AsSpan(dash + 3)))
         {
             return Keep(title.AsSpan(0, dash));
         }
@@ -315,7 +319,7 @@ public static partial class AlbumTitleMatcher
         // The same decoration written without punctuation ("Glitterbug Deluxe Edition"), which also
         // covers a bare format designator that survived Normalize's single pass ("... deluxe ep").
         var bare = BareQualifierTailStart(title);
-        if (bare > 0)
+        if (bare > 0 && !IsDistinctPressing(title.AsSpan(bare)))
         {
             return Keep(title.AsSpan(0, bare));
         }
@@ -430,6 +434,27 @@ public static partial class AlbumTitleMatcher
     }
 
     /// <summary>
+    /// Whether a pressing tail names a pressing distinct enough to count as a record of its own —
+    /// "(25th Anniversary Edition)" — so owning the original doesn't answer for it, and it gets its
+    /// own feed card instead of hiding behind the original as an alternate pressing. Record
+    /// granularity only: on the song axis an anniversary remaster is still the same song.
+    /// </summary>
+    private static bool IsDistinctPressing(ReadOnlySpan<char> tail)
+    {
+        var trimmed = tail.Trim();
+        foreach (var range in trimmed.Split(' '))
+        {
+            var word = trimmed[range].Trim(",.-'\"");
+            if (!word.IsEmpty && DistinctPressings.Contains(word.ToString()))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Whether a trailing bracketed/dashed tail describes the pressing rather than the record: every
     /// word is either a qualifier ("deluxe", "remastered", "anniversary") or filler that only shows up
     /// alongside one ("10th", "the", "bonus track" and friends), and at least one is a qualifier. The
@@ -490,6 +515,16 @@ public static partial class AlbumTitleMatcher
     {
         "live", "acoustic", "unplugged", "demo", "demos", "remix", "remixes", "remixed",
         "instrumental", "instrumentals", "karaoke", "cover", "covers", "session", "sessions",
+    };
+
+    /// <summary>
+    /// Pressing words that nonetheless keep a tail at record granularity (see
+    /// <see cref="IsDistinctPressing"/>). An anniversary reissue is usually a substantially different
+    /// package — remastered, expanded with demos and outtakes — that people want alongside the original.
+    /// </summary>
+    private static readonly HashSet<string> DistinctPressings = new(StringComparer.Ordinal)
+    {
+        "anniversary",
     };
 
     /// <summary>

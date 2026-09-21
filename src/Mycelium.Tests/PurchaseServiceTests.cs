@@ -195,7 +195,7 @@ public class PurchaseServiceTests
         // Plex names an album from its own metadata match, which drops the edition decoration the
         // release was fetched under. Ownership is asked at record granularity precisely so the row can
         // see its own download arrive instead of sitting in Sent for ever.
-        const string deezerTitle = "Light Upon the Lake (10th Anniversary Edition)";
+        const string deezerTitle = "Light Upon the Lake (Deluxe Edition)";
         AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Whitney"), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),
@@ -332,7 +332,7 @@ public class PurchaseServiceTests
         // The library holds one copy of a record, under whatever title Plex gave it, and that copy is
         // the answer to "do we have this album?" whichever pressing Deezer listed. Queuing the deluxe
         // when the record is already on the shelf would download what we have.
-        const string deezerTitle = "Light Upon the Lake (10th Anniversary Edition)";
+        const string deezerTitle = "Light Upon the Lake (Deluxe Edition)";
         AllLiked(new[]
         {
             new AlbumRating(new ArtistKey("Whitney"), new AlbumKey(deezerTitle), "art", DiscoveryStatus.Liked),

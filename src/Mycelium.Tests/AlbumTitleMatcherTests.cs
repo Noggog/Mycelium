@@ -185,9 +185,8 @@ public class AlbumTitleMatcherTests
     // its own metadata match and drops the edition decoration the release was fetched under, so the
     // copy that arrives can't be recognised at release granularity.
     [Theory]
-    [InlineData("Light Upon the Lake (10th Anniversary Edition)")]
-    [InlineData("Light Upon the Lake [10th Anniversary Deluxe]")]
     [InlineData("Light Upon the Lake (Deluxe Edition)")]
+    [InlineData("Light Upon the Lake [Deluxe]")]
     [InlineData("Light Upon the Lake (Bonus Track Version)")]
     [InlineData("Light Upon the Lake - Remastered")]
     [InlineData("Light Upon the Lake (Expanded Edition) [Remastered]")]
@@ -202,8 +201,23 @@ public class AlbumTitleMatcherTests
     {
         // The two live side by side: the same pair of titles is one record and two releases, which is
         // exactly why the landing check may ask the first question and the feed must ask the second.
-        AlbumTitleMatcher.Normalize("Light Upon the Lake (10th Anniversary Edition)")
+        AlbumTitleMatcher.Normalize("Light Upon the Lake (Deluxe Edition)")
             .Should().NotBe(AlbumTitleMatcher.Normalize("Light Upon the Lake"));
+    }
+
+    // An anniversary reissue is a pressing, but one wanted alongside the original rather than instead
+    // of it — so owning the original doesn't answer for it, however the source punctuates it.
+    [Theory]
+    [InlineData("Light Upon the Lake (10th Anniversary Edition)")]
+    [InlineData("Light Upon the Lake [10th Anniversary Deluxe]")]
+    [InlineData("Light Upon the Lake (25th Anniversary Edition)")]
+    [InlineData("Light Upon the Lake - 10th Anniversary Edition")]
+    [InlineData("Light Upon the Lake 10th Anniversary Edition")]
+    [InlineData("Light Upon the Lake (Tenth Anniversary Edition) [Remastered]")]
+    public void An_anniversary_edition_is_a_record_of_its_own(string title)
+    {
+        AlbumTitleMatcher.NormalizeRecord(title)
+            .Should().NotBe(AlbumTitleMatcher.NormalizeRecord("Light Upon the Lake"));
     }
 
     // A different performance of the songs is a different record, at either granularity.
@@ -313,7 +327,6 @@ public class AlbumTitleMatcherTests
     [InlineData("Glitterbug Deluxe Edition")]
     [InlineData("Glitterbug deluxe edition")]
     [InlineData("Glitterbug Remastered")]
-    [InlineData("Glitterbug 10th Anniversary Edition")]
     [InlineData("Glitterbug")]
     public void An_unbracketed_edition_is_the_same_record(string title)
     {

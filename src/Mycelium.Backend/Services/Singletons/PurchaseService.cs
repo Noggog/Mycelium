@@ -469,8 +469,8 @@ public class PurchaseService
             }
 
             // Post-download landing under another act. Ownership already forgives the renaming Plex
-            // does to a title — "Light Upon the Lake (10th Anniversary Edition)" arriving as "Light
-            // Upon the Lake" is the same record either way (AlbumTitleMatcher.NormalizeRecord). What it
+            // does to a title — "Light Upon the Lake (Deluxe Edition)" arriving as "Light Upon the
+            // Lake" is the same record either way (AlbumTitleMatcher.NormalizeRecord). What it
             // doesn't forgive is the album landing under an act nobody asked about: a collaboration
             // Deezer credits one way and Plex files another. That row would sit in Sent for ever while
             // the diff kept calling the release a gap, so this looks for the record under the listing
