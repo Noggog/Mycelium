@@ -367,6 +367,9 @@ export type UpgradeMatchCheck =
   | 'Rematched'
   | 'NeedsFixMatch'
   | 'NotMatched'
+  // Held before downloading: the copy in the library isn't matched in Plex (oldMatch says what it is
+  // instead, usually local://…). Released once it's matched there; dismissed with the ✕.
+  | 'AwaitingPlexMatch'
 
 // Mirrors UpgradeReport (UpgradeReport.cs).
 export interface UpgradeReport {

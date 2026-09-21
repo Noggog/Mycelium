@@ -29,6 +29,13 @@ public enum UpgradeMatchCheck
 
     /// <summary>The old copy wasn't matched to anything in Plex, so there was no release to keep.</summary>
     NotMatched,
+
+    /// <summary>
+    /// Held back before downloading: the copy in the library isn't matched in Plex (<c>local://…</c>),
+    /// so there is no release to keep the upgrade on and the old copy's ratings wouldn't survive the
+    /// swap. Nothing downloads until it's matched in Plex, or the upgrade is dismissed.
+    /// </summary>
+    AwaitingPlexMatch,
 }
 
 /// <summary>

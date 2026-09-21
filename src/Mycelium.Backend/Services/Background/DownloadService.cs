@@ -343,6 +343,11 @@ public class DownloadService : BackgroundService
             return false;
         }
 
+        if (!await ClearedToDownload(item))
+        {
+            return false;
+        }
+
         // Mark it in-flight before the (slow) fetch so the monitor shows what's downloading now.
         await _repo.SetStatus(item.Id, PurchaseStatus.Downloading);
 
@@ -397,6 +402,33 @@ public class DownloadService : BackgroundService
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="item"/> may be fetched now — the gate for an upgrade whose album isn't
+    /// matched in Plex (see <see cref="UpgradeMatchKeeper.ClearToDownload"/>). Checked here, right
+    /// before the fetch, so every route in (the automatic pass, Download now, Retry) goes through it. A
+    /// row that may not goes back to Pending — held, or merely unchecked when Plex couldn't be read, in
+    /// which case the next pass asks again.
+    /// </summary>
+    private async Task<bool> ClearedToDownload(PurchaseItem item)
+    {
+        try
+        {
+            if (await _matches.ClearToDownload(item))
+            {
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not check the Plex match of {Artist} — {Album} before upgrading it; leaving it pending",
+                item.Artist.ArtistName, item.Album);
+        }
+
+        await _repo.SetStatus(item.Id, PurchaseStatus.Pending);
+        return false;
     }
 
     /// <summary>
@@ -524,10 +556,14 @@ public class DownloadService : BackgroundService
 
             var fast = await FastMode();
             await _purchases.Reconcile();
+            // A held upgrade sits out until its album is matched in Plex; one matched since the last
+            // pass is released here so it can join this one.
+            await _matches.ReleaseMatched();
             var candidates = (await _repo.GetAll())
                 .Where(p => p.Status == PurchaseStatus.Pending
                             && p.Kind.IsDownloadableAlbum()
-                            && p.DeezerAlbumId is > 0)
+                            && p.DeezerAlbumId is > 0
+                            && !UpgradeMatchKeeper.IsHeld(p))
                 .OrderBy(p => p.RequestedAt);
             var pending = (fast ? candidates : candidates.Take(_config.BatchSize)).ToList();
             if (fast && pending.Count > 0)

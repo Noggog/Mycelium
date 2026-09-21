@@ -1474,7 +1474,8 @@ api.MapDelete("/purchases/manual", async (string id, PurchaseService purchases) 
     .WithName("RemoveManualPurchase");
 
 // Check a finished upgrade's Plex match again, rematching it to the old copy's release if it has
-// drifted. For after a Fix Match by hand, or to give a rematch that didn't take another go. Answers
+// drifted. For after a Fix Match by hand, or to give a rematch that didn't take another go. On an
+// upgrade held because its album isn't matched in Plex, checks again and releases it if it now is. Answers
 // with the row as it now stands, so the page can show the result without waiting for its next poll.
 api.MapPost("/purchases/upgrade/recheck", async (
         string id, UpgradeMatchKeeper matches, IPurchaseRepo repo) =>

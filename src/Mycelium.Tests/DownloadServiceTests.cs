@@ -271,6 +271,66 @@ public class DownloadServiceTests
         _repo.Items.Single().Status.Should().Be(PurchaseStatus.Sent);
     }
 
+    /// <summary>
+    /// An upgrade of an album the library lists under rating key 77, which Plex has matched to
+    /// <paramref name="match"/>.
+    /// </summary>
+    private PurchaseItem UpgradeOf(string match, PurchaseStatus status, bool held = false)
+    {
+        _catalogRepo.GetAlbumPlexRatingKeys(Arg.Any<IReadOnlyCollection<string>>()).Returns(
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Ana Roxanne"] = new(StringComparer.OrdinalIgnoreCase) { ["Because of a Flower"] = 77 },
+            });
+        _libraryQuery.QueryAlbumMatch(77).Returns(match);
+        var item = new PurchaseItem(
+            PurchaseKey.ForAlbum("Ana Roxanne", "Because of a Flower"), FeedKind.UpgradeAlbum,
+            new ArtistKey("Ana Roxanne"), "Because of a Flower", null, 0, Array.Empty<string>(), status,
+            DateTimeOffset.UtcNow, null, 999, Manual: true, OwnedQuality: AudioQuality.Lossy,
+            Upgrade: held
+                ? new UpgradeReport(DateTimeOffset.UtcNow, Match: UpgradeMatchCheck.AwaitingPlexMatch, OldMatch: match)
+                : null);
+        _repo.Seed(item);
+        return item;
+    }
+
+    [Fact]
+    public async Task An_upgrade_of_an_album_plex_has_not_matched_is_held_instead_of_downloaded()
+    {
+        var item = UpgradeOf("local://261057", PurchaseStatus.Queued);
+
+        var ran = await Sut().ProcessOne(item.Id);
+
+        ran.Should().BeFalse();
+        await _downloader.DidNotReceiveWithAnyArgs().Request(default!);
+        var row = _repo.Items.Single();
+        row.Status.Should().Be(PurchaseStatus.Pending);
+        row.Upgrade!.Match.Should().Be(UpgradeMatchCheck.AwaitingPlexMatch);
+    }
+
+    [Fact]
+    public async Task An_upgrade_of_a_matched_album_downloads()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
+        var item = UpgradeOf("plex://album/abc", PurchaseStatus.Queued);
+
+        (await Sut().ProcessOne(item.Id)).Should().BeTrue();
+
+        await _downloader.Received(1).Request(Arg.Any<PurchaseItem>());
+    }
+
+    [Fact]
+    public async Task An_upgrade_whose_match_cannot_be_read_is_left_pending_not_downloaded()
+    {
+        var item = UpgradeOf("plex://album/abc", PurchaseStatus.Queued);
+        _libraryQuery.QueryAlbumMatch(77).Returns<string?>(_ => throw new HttpRequestException("Plex down"));
+
+        (await Sut().ProcessOne(item.Id)).Should().BeFalse();
+
+        await _downloader.DidNotReceiveWithAnyArgs().Request(default!);
+        _repo.Items.Single().Status.Should().Be(PurchaseStatus.Pending);
+    }
+
     [Fact]
     public async Task Failed_download_marks_the_item_failed()
     {
@@ -404,6 +464,29 @@ public class DownloadServiceTests
 
         _repo.Items.Single(i => i.Album == "Capacity").Status.Should().Be(PurchaseStatus.Queued);
         _repo.Items.Single(i => i.Album == "Unfetchable").Status.Should().Be(PurchaseStatus.Pending);
+    }
+
+    [Fact]
+    public async Task The_automatic_pass_skips_a_held_upgrade()
+    {
+        UpgradeOf("local://261057", PurchaseStatus.Pending, held: true);
+
+        await Sut().EnqueuePendingBatch();
+
+        _repo.Items.Single().Status.Should().Be(PurchaseStatus.Pending);
+    }
+
+    [Fact]
+    public async Task The_automatic_pass_queues_a_held_upgrade_once_plex_has_matched_it()
+    {
+        UpgradeOf("local://261057", PurchaseStatus.Pending, held: true);
+        _libraryQuery.QueryAlbumMatch(77).Returns("plex://album/abc");
+
+        await Sut().EnqueuePendingBatch();
+
+        var row = _repo.Items.Single();
+        row.Status.Should().Be(PurchaseStatus.Queued);
+        row.Upgrade.Should().BeNull();
     }
 
     [Fact]

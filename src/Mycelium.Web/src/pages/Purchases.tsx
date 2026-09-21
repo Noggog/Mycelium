@@ -247,6 +247,15 @@ function upgradeStatus(item: PurchaseItem): { text: string; tone: Tone } {
   const u = item.upgrade
   switch (item.status) {
     case 'Pending':
+      if (u?.match === 'AwaitingPlexMatch') {
+        return {
+          text: 'On hold \u2014 the copy in your library isn\u2019t matched in Plex'
+            + (u.oldMatch ? ` (${u.oldMatch})` : '')
+            + ', so its ratings couldn\u2019t be kept across an upgrade. Match it in Plex, then Recheck '
+            + '\u2014 or \u2715 to keep the copy you have.',
+          tone: 'bad',
+        }
+      }
       return { text: 'Waiting to download', tone: 'dim' }
     case 'Queued':
       return { text: 'Queued…', tone: 'dim' }
@@ -290,9 +299,11 @@ function upgradeStatus(item: PurchaseItem): { text: string; tone: Tone } {
   }
 }
 
-// Wants a person to act: a failed download, or ratings Plex may have dropped.
+// Wants a person to act: a failed download, ratings Plex may have dropped, or an upgrade held until
+// its album is matched in Plex.
 const needsAttention = (item: PurchaseItem) =>
   item.status === 'Failed' || item.upgrade?.match === 'NeedsFixMatch'
+  || item.upgrade?.match === 'AwaitingPlexMatch'
 
 // Rank for the section: what needs attention, then what's moving, then what's waiting, then history.
 function upgradeRank(item: PurchaseItem) {
@@ -718,6 +729,23 @@ export default function Purchases() {
   const upgradeActions = (item: PurchaseItem): ReactNode => {
     switch (item.status) {
       case 'Pending':
+        // Held until the album is matched in Plex: downloading would only hit the same hold, so the
+        // way forward is Recheck once it's matched — or ✕ to keep the copy in the library.
+        if (item.upgrade?.match === 'AwaitingPlexMatch') {
+          return (
+            <>
+              <button
+                className="disc-btn up"
+                title="Check Plex again — once the album is matched there, the upgrade goes ahead"
+                disabled={busy}
+                onClick={() => recheck.mutate(item.id)}
+              >
+                Recheck
+              </button>
+              {removeBtn(item)}
+            </>
+          )
+        }
         return (
           <>
             <button

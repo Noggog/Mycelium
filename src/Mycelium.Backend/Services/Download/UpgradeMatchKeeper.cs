@@ -52,7 +52,7 @@ public class UpgradeMatchKeeper
         var match = await _library.QueryAlbumMatch(albumRatingKey);
         var now = DateTimeOffset.UtcNow;
         UpgradeReport report;
-        if (match is null || !match.StartsWith(AgentMatchPrefix, StringComparison.Ordinal))
+        if (!IsAgentMatch(match))
         {
             _logger.LogInformation(
                 "{Artist} — {Album} isn't matched in Plex ({Match}); no match to carry across the upgrade",
@@ -73,16 +73,93 @@ public class UpgradeMatchKeeper
     public static bool IsPending(PurchaseItem item) =>
         item.Kind == FeedKind.UpgradeAlbum && item.Upgrade?.Match == UpgradeMatchCheck.Waiting;
 
+    /// <summary>Whether this row is an upgrade held back until the copy it replaces is matched in Plex.</summary>
+    public static bool IsHeld(PurchaseItem item) =>
+        item.Kind == FeedKind.UpgradeAlbum && item.Upgrade?.Match == UpgradeMatchCheck.AwaitingPlexMatch;
+
+    /// <summary>
+    /// Whether <paramref name="item"/> may be downloaded now. Anything but an upgrade may. An upgrade
+    /// may only when the copy it would replace is matched in Plex: an unmatched copy has no release to
+    /// keep the new one on, so its ratings would be lost in the swap with nothing to rematch back to.
+    /// Such a row is marked held (see <see cref="UpgradeMatchCheck.AwaitingPlexMatch"/>) and stays that
+    /// way until a later call finds it matched, which clears the hold.
+    ///
+    /// <para>An album the library doesn't list at all isn't held: there is no match to ask about, and
+    /// the swap refuses it on its own terms (<see cref="SwapRefusal.NotLocatable"/>).</para>
+    /// </summary>
+    public async Task<bool> ClearToDownload(PurchaseItem item)
+    {
+        if (item.Kind != FeedKind.UpgradeAlbum || await AlbumRatingKey(_catalog, item) is not { } key)
+        {
+            return true;
+        }
+
+        var match = await _library.QueryAlbumMatch(key);
+        if (IsAgentMatch(match))
+        {
+            if (IsHeld(item))
+            {
+                _logger.LogInformation(
+                    "{Artist} — {Album} is now matched in Plex ({Match}); its upgrade can go ahead",
+                    item.Artist.ArtistName, item.Album, match);
+                await _purchases.SetUpgrade(item.Id, null);
+            }
+            return true;
+        }
+
+        // Rewritten only when something changed, so a pass re-checking a held row doesn't churn it.
+        if (!IsHeld(item) || item.Upgrade!.OldMatch != match)
+        {
+            _logger.LogInformation(
+                "Holding the upgrade of {Artist} — {Album}: the copy in the library isn't matched in Plex "
+                + "({Match}), so its ratings couldn't be kept across the swap. Match it in Plex to release it",
+                item.Artist.ArtistName, item.Album, match ?? "no match");
+            await _purchases.SetUpgrade(item.Id, new UpgradeReport(
+                DateTimeOffset.UtcNow, Match: UpgradeMatchCheck.AwaitingPlexMatch, OldMatch: match));
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Re-checks every held upgrade, releasing the ones that have been matched in Plex since. One
+    /// album's Plex hiccup leaves it held for the next pass rather than stopping the rest.
+    /// </summary>
+    public async Task ReleaseMatched()
+    {
+        foreach (var item in (await _purchases.GetAll()).Where(IsHeld))
+        {
+            try
+            {
+                await ClearToDownload(item);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not re-check the Plex match of the held upgrade {Artist} — {Album}",
+                    item.Artist.ArtistName, item.Album);
+            }
+        }
+    }
+
+    private static bool IsAgentMatch(string? match) =>
+        match is not null && match.StartsWith(AgentMatchPrefix, StringComparison.Ordinal);
+
     /// <summary>
     /// Starts checking a finished upgrade's match again — after a Fix Match by hand, say, or to give a
-    /// rematch that didn't take another go — and runs the first check straight away. Returns false when
-    /// the row isn't an upgrade with a saved match to check against.
+    /// rematch that didn't take another go — and runs the first check straight away. For an upgrade
+    /// held until its album is matched in Plex, checks whether it has been, releasing it if so. Returns
+    /// false when the row is neither: not an upgrade with a saved match to check against.
     /// </summary>
     public async Task<bool> Recheck(string id)
     {
         var item = (await _purchases.GetAll()).FirstOrDefault(p => p.Id == id);
+        if (item is not null && IsHeld(item))
+        {
+            await ClearToDownload(item);
+            return true;
+        }
+
         if (item?.Kind != FeedKind.UpgradeAlbum || item.Upgrade?.OldMatch is not { } old
-            || !old.StartsWith(AgentMatchPrefix, StringComparison.Ordinal))
+            || !IsAgentMatch(old))
         {
             return false;
         }

@@ -181,4 +181,106 @@ public class UpgradeMatchKeeperTests
         await act.Should().NotThrowAsync();
         Report().Match.Should().Be(UpgradeMatchCheck.Waiting);
     }
+
+    // ---- Holding an upgrade whose album isn't matched in Plex ----
+
+    private const string Unmatched = "local://261057";
+
+    /// <summary>An upgrade row not yet downloaded, optionally already held.</summary>
+    private PurchaseItem NotYetDownloaded(bool held = false)
+    {
+        var item = new PurchaseItem(
+            "album:children of bodom hate crew deathroll", FeedKind.UpgradeAlbum,
+            new ArtistKey("Children of Bodom"), "Hate Crew Deathroll", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Pending, DateTimeOffset.UtcNow, null, 1,
+            OwnedQuality: AudioQuality.Lossy,
+            Upgrade: held
+                ? new UpgradeReport(DateTimeOffset.UtcNow, Match: UpgradeMatchCheck.AwaitingPlexMatch, OldMatch: Unmatched)
+                : null);
+        _purchases.Seed(item);
+        return item;
+    }
+
+    private PurchaseItem Row() => _purchases.Items.Single();
+
+    [Fact]
+    public async Task An_upgrade_of_an_unmatched_album_is_held_before_it_downloads()
+    {
+        // The Ana Roxanne case: the album looked fine in Plex but was local://, so the swap had no
+        // release to keep and its ratings had nothing to be rematched back to.
+        Plex(AudioQuality.Lossy, Unmatched);
+        var item = NotYetDownloaded();
+
+        (await Sut().ClearToDownload(item)).Should().BeFalse();
+
+        Report().Match.Should().Be(UpgradeMatchCheck.AwaitingPlexMatch);
+        Report().OldMatch.Should().Be(Unmatched);
+    }
+
+    [Fact]
+    public async Task An_upgrade_of_a_matched_album_goes_ahead_untouched()
+    {
+        Plex(AudioQuality.Lossy, OldMatch);
+        var item = NotYetDownloaded();
+
+        (await Sut().ClearToDownload(item)).Should().BeTrue();
+
+        Row().Upgrade.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task An_album_the_library_does_not_list_is_left_to_the_swap()
+    {
+        _catalog.GetAlbumPlexRatingKeys(Arg.Any<IReadOnlyCollection<string>>()).Returns(
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase));
+        var item = NotYetDownloaded();
+
+        (await Sut().ClearToDownload(item)).Should().BeTrue();
+
+        await _library.DidNotReceiveWithAnyArgs().QueryAlbumMatch(default);
+    }
+
+    [Fact]
+    public async Task Matching_it_in_plex_releases_the_hold_on_the_next_pass()
+    {
+        NotYetDownloaded(held: true);
+        Plex(AudioQuality.Lossy, OldMatch);
+
+        await Sut().ReleaseMatched();
+
+        Row().Upgrade.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_still_unmatched_album_stays_held()
+    {
+        NotYetDownloaded(held: true);
+        Plex(AudioQuality.Lossy, Unmatched);
+
+        await Sut().ReleaseMatched();
+
+        Report().Match.Should().Be(UpgradeMatchCheck.AwaitingPlexMatch);
+    }
+
+    [Fact]
+    public async Task Recheck_releases_a_held_upgrade_once_it_is_matched()
+    {
+        var item = NotYetDownloaded(held: true);
+        Plex(AudioQuality.Lossy, OldMatch);
+
+        (await Sut().Recheck(item.Id)).Should().BeTrue();
+
+        Row().Upgrade.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Recheck_of_a_held_upgrade_still_unmatched_keeps_it_held()
+    {
+        var item = NotYetDownloaded(held: true);
+        Plex(AudioQuality.Lossy, Unmatched);
+
+        (await Sut().Recheck(item.Id)).Should().BeTrue();
+
+        Report().Match.Should().Be(UpgradeMatchCheck.AwaitingPlexMatch);
+    }
 }
