@@ -158,10 +158,16 @@ body::before {
   color: #fff;
 }
 
-/* Themed scrollbars. */
+/* Themed scrollbars. Chromium 121+ and Firefox both honour `scrollbar-color` over the -webkit rules
+   below, so the resting look is decided here: a bright thumb on a faint track, so the page's
+   scrollbar stays findable without hovering. */
 * {
-  scrollbar-color: var(--purple-light) transparent;
+  scrollbar-color: var(--purple-fg) rgba(116, 88, 219, 0.12);
   scrollbar-width: thin;
+}
+/* The window's own scrollbar is the one people reach for; give it full width. */
+html {
+  scrollbar-width: auto;
 }
 *::-webkit-scrollbar {
   width: 10px;
