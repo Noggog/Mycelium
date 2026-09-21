@@ -121,4 +121,28 @@ public class RelatedArtistUnifierTests
 
         result.Select(r => r.ArtistKey.ArtistName).Should().Equal("Apple", "mango", "zebra");
     }
+
+    [Fact]
+    public void Only_the_top_edges_of_each_source_count()
+    {
+        var ranked = Enumerable.Range(1, RelatedArtistUnifier.MaxEdgesPerSource + 5)
+            .Select(i => Rel($"Artist {i:D3}"))
+            .ToArray();
+
+        var result = RelatedArtistUnifier.Unify(new[] { Source("listenbrainz", ranked) });
+
+        result.Select(r => r.ArtistKey.ArtistName).Should()
+            .BeEquivalentTo(ranked.Take(RelatedArtistUnifier.MaxEdgesPerSource).Select(r => r.ArtistKey.ArtistName));
+    }
+
+    [Fact]
+    public void Manual_edges_are_never_trimmed()
+    {
+        var many = Enumerable.Range(1, RelatedArtistUnifier.MaxEdgesPerSource + 5)
+            .Select(i => Rel($"Artist {i:D3}"))
+            .ToArray();
+
+        RelatedArtistUnifier.Unify(new[] { Source(ManualRecommendations.SourceName, many) })
+            .Should().HaveCount(many.Length);
+    }
 }

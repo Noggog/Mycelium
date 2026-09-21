@@ -10,6 +10,14 @@ namespace Mycelium.Backend.Services.Singletons;
 /// </summary>
 public static class RelatedArtistUnifier
 {
+    /// <summary>
+    /// How many of each source's edges count. Sources return their lists best-first and the tail is
+    /// weak signal — ListenBrainz hands back 100, and a popular act sitting in the bottom half of
+    /// many liked artists' lists would otherwise out-score a genuine top match. Deezer caps at 20
+    /// on its own. Hand-entered pairs are deliberate, so they're never trimmed.
+    /// </summary>
+    public const int MaxEdgesPerSource = 30;
+
     public static IReadOnlyList<UnifiedRelatedArtist> Unify(IReadOnlyList<ArtistRelations> perSource)
     {
         // Dedupe on a normalized key (case- and diacritic-insensitive) so the same artist spelled
@@ -20,7 +28,10 @@ public static class RelatedArtistUnifier
 
         foreach (var source in perSource)
         {
-            foreach (var related in source.Related)
+            var edges = source.Source == ManualRecommendations.SourceName
+                ? source.Related
+                : source.Related.Take(MaxEdgesPerSource);
+            foreach (var related in edges)
             {
                 var name = related.ArtistKey.ArtistName;
                 var key = NormalizeKey(name);
