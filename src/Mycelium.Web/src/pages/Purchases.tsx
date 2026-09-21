@@ -197,28 +197,35 @@ function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode
       {/* The name/provenance block deep-links into Browse, opened + filtered to this artist
           (the same /browse?artist= mechanism the Discover "Go to artist" link uses) so you can
           jump from a queued album to the artist's full readout. */}
-      <Link
-        className="disc-row-main disc-row-link"
-        to={`/browse?artist=${encodeURIComponent(item.artist.artistName)}`}
-        title={`Go to ${item.artist.artistName} in Browse`}
-      >
-        <div className="disc-name">{item.album ?? item.artist.artistName}</div>
-        <span className="disc-provenance">
-          {item.album
-            ? `Album · ${item.artist.artistName}`
-            : item.sources.length > 0
-              ? `Artist · via ${item.sources.slice(0, 3).join(', ')}`
-              : 'Artist'}
-          {/* Nothing rated this one, so it has no provenance to show and it won't disappear when a
-              rating changes — say where it came from, or it reads as an unexplained row. */}
-          {item.manual && <span className="disc-provenance"> · added by link</span>}
-          {/* Why this row failed, inline with its provenance. The banner covers the systemic case in
-              full; this is what distinguishes "this album wasn't available" from "nothing is". */}
-          {item.status === 'Failed' && FAILURE_COPY[item.failure] && (
-            <span className="dl-fail-note"> · {FAILURE_COPY[item.failure]!.note}</span>
-          )}
-        </span>
-      </Link>
+      <div className="disc-row-main">
+        <Link
+          className="disc-row-link"
+          to={`/browse?artist=${encodeURIComponent(item.artist.artistName)}`}
+          title={`Go to ${item.artist.artistName} in Browse`}
+        >
+          <div className="disc-name">{item.album ?? item.artist.artistName}</div>
+          <span className="disc-provenance">
+            {item.album
+              ? `Album · ${item.artist.artistName}`
+              : item.sources.length > 0
+                ? `Artist · via ${item.sources.slice(0, 3).join(', ')}`
+                : 'Artist'}
+            {/* Nothing rated this one, so it has no provenance to show and it won't disappear when a
+                rating changes — say where it came from, or it reads as an unexplained row. */}
+            {item.manual && <span className="disc-provenance"> · added by link</span>}
+            {/* Why this row failed, inline with its provenance. The banner covers the systemic case in
+                full; this is what distinguishes "this album wasn't available" from "nothing is". */}
+            {item.status === 'Failed' && FAILURE_COPY[item.failure] && (
+              <span className="dl-fail-note"> · {FAILURE_COPY[item.failure]!.note}</span>
+            )}
+          </span>
+        </Link>
+        {/* Where a finished download was filed — outside the link so the path can be selected and
+            copied, which is the point of showing it while Plex hasn't picked the album up yet. */}
+        {item.status === 'Sent' && item.downloadedTo && (
+          <code className="dl-path" title="Where the download was filed">{item.downloadedTo}</code>
+        )}
+      </div>
       <div className="disc-actions">{actions}</div>
     </div>
   )

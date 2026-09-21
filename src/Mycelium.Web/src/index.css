@@ -2629,6 +2629,16 @@ button.detail-chip.via:hover {
   color: var(--bad);
 }
 
+/* Where a completed download was filed, under its provenance line. */
+.dl-path {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  /* Library paths are long unbroken strings; wrap rather than widen the row. */
+  overflow-wrap: anywhere;
+}
+
 .dl-counts {
   display: flex;
   gap: 1.4rem;

@@ -317,17 +317,19 @@ public class StreamripDownloader : IDownloader
         // An upgrade goes back into the folder its predecessor was moved out of, not wherever
         // streamrip's naming lands — the two can differ by as little as a capital letter, which on
         // Linux is a second artist folder and an emptied original.
+        string folder;
         if (upgradeInto is not null)
         {
             DownloadStaging.PromoteInto(preferredDir, upgradeInto);
+            folder = upgradeInto;
         }
         else
         {
-            DownloadStaging.Promote(preferredDir, _config.DownloadDir);
+            folder = DownloadStaging.Promote(preferredDir, _config.DownloadDir);
         }
         _logger.LogInformation(
             "Downloaded {Artist} — {Album}: {Landed} track(s) promoted to {Dir} as {Acquired}",
-            item.Artist.ArtistName, item.Album, landed, upgradeInto ?? _config.DownloadDir,
+            item.Artist.ArtistName, item.Album, landed, folder,
             acquired?.ToString() ?? "unknown quality");
 
         if (item.TargetQuality is { } wanted && acquired is { } got2 && got2 < wanted)
@@ -339,7 +341,7 @@ public class StreamripDownloader : IDownloader
                 item.Artist.ArtistName, item.Album, wanted, got2);
         }
 
-        return DownloadOutcome.Success(acquired);
+        return DownloadOutcome.Success(acquired, folder);
     }
 
     /// <summary>

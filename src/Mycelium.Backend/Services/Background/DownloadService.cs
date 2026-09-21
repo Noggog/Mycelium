@@ -361,7 +361,8 @@ public class DownloadService : BackgroundService
             item.Id,
             outcome.Accepted ? PurchaseStatus.Sent : PurchaseStatus.Failed,
             outcome.Failure,
-            outcome.Acquired);
+            outcome.Acquired,
+            outcome.Folder);
 
         // An upgrade that found nothing better is a fact about the album, not a transient failure:
         // without recording it, every sync would re-offer the same album and every attempt would burn

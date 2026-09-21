@@ -83,12 +83,18 @@ public static class DownloadFailureExtensions
 /// tells a later pass whether re-requesting the album could ever do better. Null when the backend
 /// couldn't say (or nothing was acquired).
 /// </param>
+/// <param name="Folder">
+/// The library folder the album was filed into, as this process sees it. Null when the backend
+/// couldn't say — an unstaged download lands wherever streamrip's own config points it.
+/// </param>
 public readonly record struct DownloadOutcome(
     bool Accepted,
     DownloadFailure Failure = DownloadFailure.None,
-    AudioQuality? Acquired = null)
+    AudioQuality? Acquired = null,
+    string? Folder = null)
 {
-    public static DownloadOutcome Success(AudioQuality? acquired = null) => new(true, Acquired: acquired);
+    public static DownloadOutcome Success(AudioQuality? acquired = null, string? folder = null) =>
+        new(true, Acquired: acquired, Folder: folder);
 
     public static DownloadOutcome Failed(DownloadFailure failure = DownloadFailure.Unknown) =>
         new(false, failure);

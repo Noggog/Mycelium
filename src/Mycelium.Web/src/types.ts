@@ -353,6 +353,9 @@ export interface PurchaseItem {
   // reached the swap. Finished upgrades stay on the Download page for a while (recentUpgrades=true)
   // so this can be read after the row has landed.
   upgrade: UpgradeReport | null
+  // The library folder the last successful download was filed into, as the backend sees it. Null
+  // until something has downloaded, and when the backend couldn't say where it went.
+  downloadedTo: string | null
 }
 
 // Mirrors UpgradeMatchCheck (UpgradeReport.cs): whether the upgraded album kept the Plex match its

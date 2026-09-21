@@ -32,6 +32,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldOwnedQuality = "ownedQuality";
     private const string FieldAddedBy = "addedBy";
     private const string FieldUpgrade = "upgrade";
+    private const string FieldDownloadedTo = "downloadedTo";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -202,7 +203,8 @@ public class PurchaseRepo : IPurchaseRepo
         string id,
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
-        AudioQuality? acquired = null)
+        AudioQuality? acquired = null,
+        string? downloadedTo = null)
     {
         // Written on every transition, not just failures: a row moving back to Queued/Pending for a
         // retry must lose the previous reason, or the page would keep explaining a failure that no
@@ -229,6 +231,13 @@ public class PurchaseRepo : IPurchaseRepo
         if (acquired is not null)
         {
             update = update.Set(FieldAcquiredQuality, acquired.Value.ToString());
+        }
+
+        // Same rule as the quality: a later attempt that couldn't say where it put things shouldn't
+        // erase where an earlier one did.
+        if (downloadedTo is not null)
+        {
+            update = update.Set(FieldDownloadedTo, downloadedTo);
         }
 
         var result = await Collection.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", id), update);
@@ -286,6 +295,8 @@ public class PurchaseRepo : IPurchaseRepo
             // field existed — which reads as "finished, arrival time unknown" rather than "unfinished",
             // since Status is still what says the row is done.
             inLibraryAt,
-            UpgradeFrom(doc));
+            UpgradeFrom(doc),
+            // Absent until a download has landed, and on rows downloaded before this was recorded.
+            StrN(FieldDownloadedTo));
     }
 }

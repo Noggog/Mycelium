@@ -204,9 +204,31 @@ public static class DownloadStaging
     /// Moves a verified staging tree's contents into the library root, merging into artist/album
     /// folders that already exist rather than failing on them, and <see cref="Unhide">un-hiding</see>
     /// every name on the way in.
+    ///
+    /// <para>Returns the library folder the album landed in — the promoted counterpart of the staged
+    /// album's deepest common folder, so a multi-disc download names the album rather than one disc.
+    /// Falls back to <paramref name="libraryRoot"/> when staging held no folder structure.</para>
     /// </summary>
-    public static void Promote(string stagedDir, string libraryRoot) =>
+    public static string Promote(string stagedDir, string libraryRoot)
+    {
+        var landed = libraryRoot;
+        if (CommonDirectory(AudioFiles(stagedDir)) is { } stagedAlbum)
+        {
+            var relative = Path.GetRelativePath(stagedDir, stagedAlbum);
+            if (relative is not ("." or "") && !Path.IsPathRooted(relative)
+                && !relative.StartsWith("..", StringComparison.Ordinal))
+            {
+                // Named the way MoveInto will name it: each segment un-hidden, nothing else changed.
+                landed = relative
+                    .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                        StringSplitOptions.RemoveEmptyEntries)
+                    .Aggregate(libraryRoot, (dir, segment) => Path.Combine(dir, Unhide(segment)));
+            }
+        }
+
         MoveInto(stagedDir, libraryRoot, unhide: true);
+        return landed;
+    }
 
     /// <summary>
     /// Moves a verified upgrade into the folder of the copy it replaced, instead of wherever

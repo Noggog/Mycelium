@@ -101,7 +101,11 @@ public record PurchaseItem(
     // For an UpgradeAlbum row: what the last attempt to swap it in did — refused and why, or what it
     // moved where, and whether the album kept its Plex match (which is what its ratings hang on).
     // Null until an upgrade has reached the swap.
-    UpgradeReport? Upgrade = null);
+    UpgradeReport? Upgrade = null,
+    // The library folder the last successful download was filed into, so the Download page can say
+    // where to find it before Plex has picked it up. Null until something has downloaded, when the
+    // backend couldn't say (an unstaged download), and on every row written before this existed.
+    string? DownloadedTo = null);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -224,7 +228,8 @@ public interface IPurchaseRepo
         string id,
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
-        AudioQuality? acquired = null);
+        AudioQuality? acquired = null,
+        string? downloadedTo = null);
 
     /// <summary>
     /// Records <paramref name="username"/> as the person who asked for this record, unless someone

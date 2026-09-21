@@ -52,6 +52,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 InLibraryAt = existing.InLibraryAt,
                 // Written only by SetUpgrade; the Mongo upsert doesn't name it.
                 Upgrade = existing.Upgrade,
+                // Written only by the status transition; the Mongo upsert doesn't name it.
+                DownloadedTo = existing.DownloadedTo,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;
@@ -80,7 +82,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
         string id,
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
-        AudioQuality? acquired = null)
+        AudioQuality? acquired = null,
+        string? downloadedTo = null)
     {
         if (!_items.TryGetValue(id, out var item))
         {
@@ -100,6 +103,7 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
             // Also mirrors the Mongo repo: only ever written, never cleared, so a backend that
             // couldn't say what it got doesn't erase what an earlier attempt reported.
             AcquiredQuality = acquired ?? item.AcquiredQuality,
+            DownloadedTo = downloadedTo ?? item.DownloadedTo,
         };
         return Task.FromResult(true);
     }

@@ -184,6 +184,19 @@ public class DownloadStagingTests : IDisposable
         File.Exists(Path.Combine(library, "Artist", "Album", "cover.jpg")).Should().BeTrue();
     }
 
+    [Fact]
+    public void Promote_ReportsTheAlbumFolderItLandedIn()
+    {
+        var library = Dir("music");
+        File_(Dir("preferred", "Metallica", "...And Justice for All", "Disc 1"), "01. One.flac");
+        File_(Dir("preferred", "Metallica", "...And Justice for All", "Disc 2"), "01. Two.flac");
+
+        var landed = DownloadStaging.Promote(Dir("preferred"), library);
+
+        landed.Should().Be(Path.Combine(library, "Metallica", "And Justice for All"));
+        Directory.Exists(landed).Should().BeTrue();
+    }
+
     // ---- PromoteInto: an upgrade goes back where the copy it replaced was ----
 
     [Fact]

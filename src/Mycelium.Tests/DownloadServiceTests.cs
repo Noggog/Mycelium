@@ -144,6 +144,23 @@ public class DownloadServiceTests
     }
 
     [Fact]
+    public async Task A_finished_download_records_the_folder_it_landed_in()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>())
+            .Returns(DownloadOutcome.Success(AudioQuality.Lossless, "/music/Big Thief/Capacity"));
+        var item = Album("Big Thief", "Capacity", 12345);
+        _repo.Seed(item);
+        var sut = Sut();
+        await sut.RequestDownload(item.Id);
+
+        await sut.ConsumeNext(CancellationToken.None);
+
+        var row = (await _repo.GetAll()).Single(p => p.Id == item.Id);
+        row.Status.Should().Be(PurchaseStatus.Sent);
+        row.DownloadedTo.Should().Be("/music/Big Thief/Capacity");
+    }
+
+    [Fact]
     public async Task The_batch_gets_one_rescan_once_the_queue_drains()
     {
         _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success());
