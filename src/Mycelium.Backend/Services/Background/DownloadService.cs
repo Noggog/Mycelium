@@ -367,7 +367,11 @@ public class DownloadService : BackgroundService
             outcome.Accepted ? PurchaseStatus.Sent : PurchaseStatus.Failed,
             outcome.Failure,
             outcome.Acquired,
-            outcome.Folder);
+            outcome.Folder,
+            // What this attempt was asked for, beside what it got — so the reconcile can tell a row
+            // that came down short of an unchanged target (nothing better exists; leave it) from one
+            // whose target has since been raised (fetch again).
+            outcome.Accepted ? item.TargetQuality : null);
 
         // An upgrade that found nothing better is a fact about the album, not a transient failure:
         // without recording it, every sync would re-offer the same album and every attempt would burn
@@ -378,30 +382,54 @@ public class DownloadService : BackgroundService
         // identically, and treating those as "no better copy exists" would silently write off the
         // whole library from one expired credential.
         if (outcome.Failure == DownloadFailure.NoBetterQualityAvailable
-            && item.Kind == FeedKind.UpgradeAlbum
-            && item.Album is { } albumName)
+            && item.Kind == FeedKind.UpgradeAlbum)
         {
-            var until = DateTimeOffset.UtcNow.Add(UpgradeRetryAfter);
-            // Under both acts the album can be filed as — the artist whose discography surfaced it and
-            // the one Deezer credits it to — so a collaboration reachable through either member is not
-            // re-offered through the other. The row carries both, which is more reliable than looking
-            // them up again after the album has left the missing set.
-            foreach (var act in new[] { item.Artist.ArtistName, item.AlbumArtist }
-                         .Where(a => !string.IsNullOrWhiteSpace(a))
-                         .Select(a => a!)
-                         .Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                await _blocks.Add(new AlbumBlock(
-                    act, albumName, BlockedBy: null, AlbumBlockScope.Upgrade, until));
-            }
+            await SnoozeUpgrade(item, "Deezer had nothing better than the copy we already hold");
+        }
 
-            _logger.LogInformation(
-                "Deezer had nothing better than the copy of \"{Album}\" ({Artist}) we already hold; "
-                + "not offering the upgrade again until {Until:d}",
-                albumName, item.Artist.ArtistName, until);
+        // The same verdict, reached by a new album: the fallback ladder walked all the way down and
+        // this is the best copy Deezer has. Once it lands it is owned below its target, which on its
+        // own would make it an upgrade candidate the moment it arrives — re-fetched at once, only to
+        // come back at the same tier. The snooze is what lets it close out as the album it is.
+        if (outcome.Accepted
+            && item.Kind == FeedKind.MissingAlbum
+            && outcome.Acquired is { } got
+            && got < item.TargetQuality)
+        {
+            await SnoozeUpgrade(item, $"Deezer only had it at {got}, below the {item.TargetQuality} asked for");
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Records that Deezer has nothing better for <paramref name="item"/>'s album than what it
+    /// served, so it isn't offered as an upgrade again until <see cref="UpgradeRetryAfter"/> lapses.
+    /// </summary>
+    private async Task SnoozeUpgrade(PurchaseItem item, string why)
+    {
+        if (item.Album is not { } albumName)
+        {
+            return;
+        }
+
+        var until = DateTimeOffset.UtcNow.Add(UpgradeRetryAfter);
+        // Under both acts the album can be filed as — the artist whose discography surfaced it and
+        // the one Deezer credits it to — so a collaboration reachable through either member is not
+        // re-offered through the other. The row carries both, which is more reliable than looking
+        // them up again after the album has left the missing set.
+        foreach (var act in new[] { item.Artist.ArtistName, item.AlbumArtist }
+                     .Where(a => !string.IsNullOrWhiteSpace(a))
+                     .Select(a => a!)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            await _blocks.Add(new AlbumBlock(
+                act, albumName, BlockedBy: null, AlbumBlockScope.Upgrade, until));
+        }
+
+        _logger.LogInformation(
+            "\"{Album}\" ({Artist}): {Why}; not offering an upgrade until {Until:d}",
+            albumName, item.Artist.ArtistName, why, until);
     }
 
     /// <summary>

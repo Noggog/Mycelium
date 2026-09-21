@@ -35,6 +35,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldDownloadedTo = "downloadedTo";
     private const string FieldAuditedAt = "auditedAt";
     private const string FieldLikedBy = "likedBy";
+    private const string FieldRequestedQuality = "requestedQuality";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -213,7 +214,8 @@ public class PurchaseRepo : IPurchaseRepo
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
         AudioQuality? acquired = null,
-        string? downloadedTo = null)
+        string? downloadedTo = null,
+        AudioQuality? requested = null)
     {
         // Written on every transition, not just failures: a row moving back to Queued/Pending for a
         // retry must lose the previous reason, or the page would keep explaining a failure that no
@@ -250,6 +252,12 @@ public class PurchaseRepo : IPurchaseRepo
         if (downloadedTo is not null)
         {
             update = update.Set(FieldDownloadedTo, downloadedTo);
+        }
+
+        // Same rule again: kept alongside the quality it was asked for, so the pair describes one attempt.
+        if (requested is not null)
+        {
+            update = update.Set(FieldRequestedQuality, requested.Value.ToString());
         }
 
         var result = await Collection.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", id), update);
@@ -330,6 +338,8 @@ public class PurchaseRepo : IPurchaseRepo
             // Absent until a download has landed, and on rows downloaded before this was recorded.
             StrN(FieldDownloadedTo),
             auditedAt,
-            likedBy);
+            likedBy,
+            // Absent until a download has landed, and on rows downloaded before this was recorded.
+            AudioQualityTier.Parse(StrN(FieldRequestedQuality)));
     }
 }

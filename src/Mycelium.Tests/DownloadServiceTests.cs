@@ -271,6 +271,42 @@ public class DownloadServiceTests
         _repo.Items.Single().Status.Should().Be(PurchaseStatus.Sent);
     }
 
+    [Fact]
+    public async Task A_new_album_that_came_down_short_records_what_it_asked_for_and_snoozes_the_upgrade()
+    {
+        // Deezer had no lossless master, so the fallback ladder landed it at 320. That is the best
+        // copy there is: the row has to say it asked for lossless (so the reconcile doesn't send it
+        // straight back to be fetched again), and the album must not reappear as an upgrade the moment
+        // the 320 copy lands.
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success(AudioQuality.Lossy));
+        var item = Album("Big Thief", "Capacity", 12345, PurchaseStatus.Queued)
+            with { TargetQuality = AudioQuality.Lossless };
+        _repo.Seed(item);
+
+        await Sut().ProcessOne(item.Id);
+
+        var row = _repo.Items.Single();
+        row.Status.Should().Be(PurchaseStatus.Sent);
+        row.AcquiredQuality.Should().Be(AudioQuality.Lossy);
+        row.RequestedQuality.Should().Be(AudioQuality.Lossless);
+        await _blocks.Received(1).Add(Arg.Is<AlbumBlock>(b =>
+            b.Artist == "Big Thief" && b.Album == "Capacity"
+            && b.Scope == AlbumBlockScope.Upgrade && b.RetryAfter != null));
+    }
+
+    [Fact]
+    public async Task A_new_album_that_got_what_it_asked_for_snoozes_nothing()
+    {
+        _downloader.Request(Arg.Any<PurchaseItem>()).Returns(DownloadOutcome.Success(AudioQuality.Lossless));
+        var item = Album("Big Thief", "Capacity", 12345, PurchaseStatus.Queued)
+            with { TargetQuality = AudioQuality.Lossless };
+        _repo.Seed(item);
+
+        await Sut().ProcessOne(item.Id);
+
+        await _blocks.DidNotReceiveWithAnyArgs().Add(default!);
+    }
+
     /// <summary>
     /// An upgrade of an album the library lists under rating key 77, which Plex has matched to
     /// <paramref name="match"/>.

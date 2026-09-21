@@ -1206,7 +1206,8 @@ public class PurchaseServiceTests
             PurchaseKey.ForAlbum("Alvvays", "Blue Rev"), FeedKind.MissingAlbum,
             new ArtistKey("Alvvays"), "Blue Rev", null, 0, Array.Empty<string>(),
             PurchaseStatus.Sent, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1,
-            AcquiredQuality: AudioQuality.Lossy));
+            TargetQuality: AudioQuality.Lossy,
+            AcquiredQuality: AudioQuality.Lossy, RequestedQuality: AudioQuality.Lossy));
         LikedBy(("kelsey", "Alvvays", "Blue Rev"), ("justin", "Alvvays", "Blue Rev"));
 
         var active = await _sut.GetActive();
@@ -1230,6 +1231,55 @@ public class PurchaseServiceTests
         var active = await _sut.GetActive();
 
         active.Single(p => p.Kind == FeedKind.MissingAlbum).Status.Should().Be(PurchaseStatus.Sent);
+    }
+
+    [Fact]
+    public async Task A_row_that_came_down_short_of_an_unchanged_target_is_not_refetched()
+    {
+        // Asked for lossless, Deezer only had 320. Nobody has asked for anything better since, so
+        // fetching again can only produce the same 320 — and did, in a loop, for every album Deezer
+        // has no lossless master of.
+        UserTier("justin", AudioQuality.Lossless);
+        _purchases.Seed(new PurchaseItem(
+            PurchaseKey.ForAlbum("Alvvays", "Blue Rev"), FeedKind.MissingAlbum,
+            new ArtistKey("Alvvays"), "Blue Rev", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Sent, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1,
+            TargetQuality: AudioQuality.Lossless,
+            AcquiredQuality: AudioQuality.Lossy, RequestedQuality: AudioQuality.Lossless));
+        LikedBy(("justin", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        active.Single(p => p.Kind == FeedKind.MissingAlbum).Status.Should().Be(PurchaseStatus.Sent);
+    }
+
+    [Fact]
+    public async Task A_row_that_came_down_short_closes_out_once_its_copy_lands()
+    {
+        // The same album, now in Plex at 320. It is owned below its target, which on its own reads as
+        // an upgrade — but this copy is the one fetched *for* that target, and the downloader snoozed
+        // the upgrade when it came down short. It is finished, and credited as a new album.
+        UserTier("justin", AudioQuality.Lossless);
+        OwnedAlbum("Alvvays", "Blue Rev", AudioQuality.Lossy);
+        _purchases.Seed(new PurchaseItem(
+            PurchaseKey.ForAlbum("Alvvays", "Blue Rev"), FeedKind.MissingAlbum,
+            new ArtistKey("Alvvays"), "Blue Rev", null, 0, Array.Empty<string>(),
+            PurchaseStatus.Sent, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1,
+            TargetQuality: AudioQuality.Lossless,
+            AcquiredQuality: AudioQuality.Lossy, RequestedQuality: AudioQuality.Lossless));
+        LikedBy(("justin", "Alvvays", "Blue Rev"));
+        _blocks.GetAll().Returns(new[]
+        {
+            new AlbumBlock(
+                "Alvvays", "Blue Rev", BlockedBy: null, AlbumBlockScope.Upgrade,
+                DateTimeOffset.UtcNow.AddDays(180)),
+        });
+
+        await _sut.GetActive();
+
+        var row = _purchases.Items.Single();
+        row.Status.Should().Be(PurchaseStatus.InLibrary);
+        row.Kind.Should().Be(FeedKind.MissingAlbum);
     }
 
     [Fact]

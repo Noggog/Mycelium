@@ -43,6 +43,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 // has to be carried across explicitly.) TargetQuality is deliberately NOT carried:
                 // it is recomputed from who currently wants the album, and must be free to rise.
                 AcquiredQuality = existing.AcquiredQuality,
+                // Half of the same history: what that download was asked for.
+                RequestedQuality = existing.RequestedQuality,
                 // Insert-only in Mongo (SetOnInsert), so an upsert can neither claim the credit nor
                 // take it away from whoever already holds it.
                 AddedBy = existing.AddedBy,
@@ -87,7 +89,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
         AudioQuality? acquired = null,
-        string? downloadedTo = null)
+        string? downloadedTo = null,
+        AudioQuality? requested = null)
     {
         if (!_items.TryGetValue(id, out var item))
         {
@@ -108,6 +111,7 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
             // couldn't say what it got doesn't erase what an earlier attempt reported.
             AcquiredQuality = acquired ?? item.AcquiredQuality,
             DownloadedTo = downloadedTo ?? item.DownloadedTo,
+            RequestedQuality = requested ?? item.RequestedQuality,
             // Mirrors the Mongo repo: a fresh arrival is unaudited.
             AuditedAt = status == PurchaseStatus.InLibrary ? null : item.AuditedAt,
         };

@@ -486,12 +486,24 @@ public class PurchaseService
             // An album row closes out only when the library holds it *well enough* for what this row
             // asked. Testing bare ownership would flip an upgrade to InLibrary on the very next
             // reconcile — the lesser copy is right there — and it would never download.
+            //
+            // Or when it holds it at all and that copy is the one this row fetched *for* its current
+            // target: the ladder came down short because Deezer had nothing better, and there is
+            // nothing left to wait for. Only for a row that recorded what it asked for — a row that
+            // didn't is no evidence, and closing it would strand a genuine upgrade.
             var nowOwned = row.Kind is FeedKind.MissingAlbum or FeedKind.UpgradeAlbum
                 ? AlbumIsSatisfied(
-                    ownedAlbums, overrideKeys,
-                    MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist),
-                    row.Album ?? "",
-                    row.TargetQuality)
+                      ownedAlbums, overrideKeys,
+                      MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist),
+                      row.Album ?? "",
+                      row.TargetQuality)
+                  || (row.RequestedQuality is { } asked
+                      && !(asked < row.TargetQuality)
+                      && row.Status is PurchaseStatus.Sent
+                      && AlbumIsOwned(
+                          ownedAlbums, overrideKeys,
+                          MatchArtistFor(row.Artist.ArtistName, row.Album ?? "", row.AlbumArtist),
+                          row.Album ?? ""))
                 : owned.Contains(row.Artist.ArtistName);
 
             // A row that already downloaded, at a quality below what is now being asked of it, is not
@@ -502,10 +514,18 @@ public class PurchaseService
             // actually produced. Null (never downloaded, or too old to have recorded it) is not
             // evidence of anything and must not trigger a re-fetch — that would re-queue the entire
             // back catalogue on the first reconcile after an upgrade.
+            //
+            // And only when the target has risen since that download asked. Coming down short of the
+            // very target it asked for means the fallback ladder already found Deezer's best; fetching
+            // again only gets the same copy, and did so in a loop — download, "short", re-queue —
+            // for every album Deezer has no lossless master of. A row that never recorded what it
+            // asked for is given the same benefit of the doubt as one that never recorded what it got.
             if (desired.TryGetValue(row.Id, out var want)
                 && row.AcquiredQuality is { } have
                 && want.TargetQuality is { } target
                 && have < target
+                && row.RequestedQuality is { } requested
+                && requested < target
                 && row.Status is PurchaseStatus.Sent or PurchaseStatus.InLibrary)
             {
                 _logger.LogInformation(

@@ -118,6 +118,13 @@ public record PurchaseItem(
     // Null on hand-added rows (no like behind them), artist rows, and rows last reconciled before this
     // existed.
     IReadOnlyList<string>? LikedBy = null,
+    // The target the last successful download was asked to fetch at — what the row wanted *then*,
+    // as against TargetQuality, which follows who wants it now. Paired with AcquiredQuality it tells
+    // "Deezer only had 320 for this" (asked FLAC, got 320: done, nothing better to fetch) apart from
+    // "someone entitled to better has asked since" (asked 320, now wanted FLAC: fetch again).
+    // Without it the first reads as the second and the album re-downloads forever. Null until
+    // something has downloaded, and on rows downloaded before this was recorded.
+    AudioQuality? RequestedQuality = null,
     // Not stored: set on a dev's view of the Download page for a row that has finished to the point
     // everyone else stopped seeing it, and hasn't been ticked off yet. The page shows the audit
     // checkbox only on these, so a row can't be signed off while it's still settling.
@@ -245,7 +252,8 @@ public interface IPurchaseRepo
         PurchaseStatus status,
         DownloadFailure failure = DownloadFailure.None,
         AudioQuality? acquired = null,
-        string? downloadedTo = null);
+        string? downloadedTo = null,
+        AudioQuality? requested = null);
 
     /// <summary>
     /// Records <paramref name="username"/> as the person who asked for this record, unless someone
