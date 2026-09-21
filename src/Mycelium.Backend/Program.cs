@@ -1350,15 +1350,19 @@ devSim.MapDelete("/manual", async (string id, ManualRecommendations manual, Disc
 // paired with `ids`, where the result stays bounded by what the client asked about; the Download page
 // leaves it off, because that list must not fill up with every record ever acquired.
 api.MapGet("/purchases", async (
-        PurchaseService purchases, string? ids, bool? includeCompleted, bool? recentUpgrades) =>
+        PurchaseService purchases, HttpContext http, DevUsers devUsers,
+        string? ids, bool? includeCompleted, bool? recentUpgrades, bool? unaudited) =>
     {
         var completed = includeCompleted == true;
         if (ids is null)
         {
             // recentUpgrades: the Download page's Upgrades section, which shows how finished upgrades
             // went (what moved where, whether ratings survived) for a while after they land.
+            // unaudited: the dev audit list — landed albums a dev hasn't ticked off yet. Ignored for
+            // anyone else rather than refused, so the page can always ask and just get the normal list.
             return Results.Ok(await purchases.GetActive(
-                includeCompleted: completed, recentUpgrades: recentUpgrades == true));
+                includeCompleted: completed, recentUpgrades: recentUpgrades == true,
+                unaudited: unaudited == true && devUsers.AllowsDevTools(http.User)));
         }
 
         var wanted = ids
@@ -1494,6 +1498,13 @@ api.MapPost("/purchases/upgrade/dismiss", async (string id, PurchaseService purc
         await purchases.DismissUpgrade(id) ? Results.NoContent() : Results.NotFound())
     .RequireAuthorization()
     .WithName("DismissUpgrade");
+
+// Tick finished downloads off the dev audit list (see GET /purchases?unaudited). Takes a list so the
+// page's "all" button is one request. Display only — nothing about the row or the library changes.
+api.MapPost("/purchases/audit", async (AuditRequest body, PurchaseService purchases) =>
+        Results.Ok(new { audited = await purchases.MarkAudited(body.Ids ?? []) }))
+    .RequireAuthorization("DevUser")
+    .WithName("AuditPurchases");
 
 // Undo — move a downloaded/queued item back to "pending".
 api.MapPost("/purchases/unsend", async (string id, PurchaseService purchases) =>
@@ -1778,6 +1789,9 @@ internal record PlexTokenLinkRequest(string? Token, string? Label);
 /// would have to be escaped into a query param and unescaped back out for no gain.
 /// </summary>
 internal record ManualAddRequest(string? Url);
+
+/// <summary>Body of an audit tick: the purchase ids to take off the dev audit list.</summary>
+internal record AuditRequest(string[]? Ids);
 
 /// <summary>
 /// Body of a batch of discovery verdicts. A POST body rather than query parameters for the reason the

@@ -96,10 +96,14 @@ public class PurchaseService
     /// queued a set and is polling for it wants "these ids, landed ones included", because the answer
     /// it is waiting for is precisely the one the active list drops. Off by default, because the page
     /// this method was written for must not accumulate every record ever acquired.</para>
+    ///
+    /// <para><paramref name="unaudited"/> is the dev view of that page: a row that has left everyone
+    /// else's view stays on it, flagged <see cref="PurchaseItem.ReadyForReview"/>, until it's ticked off
+    /// (<see cref="MarkAudited"/>). See <see cref="IsReadyForReview"/> for what counts.</para>
     /// </summary>
     public async Task<PurchaseItem[]> GetActive(
         IReadOnlyCollection<long>? deezerAlbumIds = null, bool includeCompleted = false,
-        bool recentUpgrades = false)
+        bool recentUpgrades = false, bool unaudited = false)
     {
         await Reconcile();
         var rows = deezerAlbumIds is null
@@ -107,10 +111,41 @@ public class PurchaseService
             : await _purchases.GetByDeezerAlbumIds(deezerAlbumIds);
         var since = DateTimeOffset.UtcNow - RecentUpgradeWindow;
         return rows
+            .Select(p => unaudited && IsReadyForReview(p, since) ? p with { ReadyForReview = true } : p)
             .Where(p => includeCompleted
                         || p.Status != PurchaseStatus.InLibrary
-                        || (recentUpgrades && IsRecentUpgrade(p, since)))
+                        || (recentUpgrades && IsRecentUpgrade(p, since))
+                        || p.ReadyForReview)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Finished to the point that everyone but a dev has stopped seeing it, and not yet ticked off: it
+    /// has landed, and — for an upgrade — nothing is keeping it on the page any more (its Plex match
+    /// was kept, or it was dismissed, or it aged out). An upgrade still waiting on a Fix Match isn't
+    /// ready: it's still everyone's problem, on the page for everyone.
+    ///
+    /// Only rows with an arrival stamp qualify, so the backlog that closed out before arrivals were
+    /// recorded doesn't flood the list.
+    /// </summary>
+    private static bool IsReadyForReview(PurchaseItem p, DateTimeOffset since) =>
+        p.Status == PurchaseStatus.InLibrary && p.InLibraryAt is not null && p.AuditedAt is null
+        && !IsRecentUpgrade(p, since);
+
+    /// <summary>
+    /// Ticks finished downloads off the dev audit list. Only rows that are ready for review — one still
+    /// in flight, or still on everyone's page, isn't settled yet, and ticking it would hide how it ends.
+    /// Returns how many were marked.
+    /// </summary>
+    public async Task<int> MarkAudited(IReadOnlyCollection<string> ids)
+    {
+        var wanted = ids.ToHashSet();
+        var since = DateTimeOffset.UtcNow - RecentUpgradeWindow;
+        var ready = (await _purchases.GetAll())
+            .Where(p => wanted.Contains(p.Id) && IsReadyForReview(p, since))
+            .Select(p => p.Id)
+            .ToArray();
+        return await _purchases.MarkAudited(ready);
     }
 
     /// <summary>

@@ -2630,6 +2630,48 @@ button.detail-chip.via:hover {
 }
 
 /* Where a completed download was filed, under its provenance line. */
+/* Quality + who requested it, under a download row's name. */
+.dl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+.dl-quality {
+  font-weight: 600;
+  color: var(--text);
+}
+/* The fallback ladder landed it below what was asked for. */
+.dl-quality.short {
+  color: var(--salmon-white);
+}
+.dl-audit-all {
+  margin-left: 0.75rem;
+  font-size: 0.75rem;
+}
+.dl-review-badge {
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--text-dim);
+  color: var(--text);
+  font-weight: 600;
+}
+.dl-audit-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.dl-audit-check input {
+  width: 1.2rem;
+  height: 1.2rem;
+  cursor: pointer;
+}
+
 .dl-path {
   display: block;
   margin-top: 0.15rem;

@@ -202,10 +202,12 @@ export async function getRatings(): Promise<RatedItem[]> {
 // isn't merely unused, it silently changes what the first argument means and breaks the call site's
 // types. The filter exists for the automation client, which doesn't go through this module; nothing in
 // the SPA has a set of ids to narrow by.
-export async function getPurchases(): Promise<PurchaseItem[]> {
+export async function getPurchases(unaudited = false): Promise<PurchaseItem[]> {
   // recentUpgrades: keep finished upgrades on the page for a while, so the Upgrades section can say
   // how they went (what moved where, whether ratings survived) after the row has landed.
-  const res = await fetch('/api/purchases?recentUpgrades=true')
+  // unaudited: a dev's view — landed downloads stay until ticked off. The server ignores it for
+  // anyone else.
+  const res = await fetch(`/api/purchases?recentUpgrades=true${unaudited ? '&unaudited=true' : ''}`)
   if (!res.ok) {
     throw new Error(`Failed to load wishlist: ${res.status} ${res.statusText}`)
   }
@@ -315,6 +317,18 @@ export async function dismissUpgrade(id: string): Promise<void> {
   const res = await fetch(`/api/purchases/upgrade/dismiss?id=${encodeURIComponent(id)}`, { method: 'POST' })
   if (!res.ok) {
     throw new Error(`Failed to dismiss the upgrade: ${res.status} ${res.statusText}`)
+  }
+}
+
+// Tick landed downloads off the dev audit list. Dev-only server-side.
+export async function auditPurchases(ids: string[]): Promise<void> {
+  const res = await fetch('/api/purchases/audit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to mark as audited: ${res.status} ${res.statusText}`)
   }
 }
 

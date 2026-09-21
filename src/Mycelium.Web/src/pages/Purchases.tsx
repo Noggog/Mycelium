@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   addManualPurchase,
+  auditPurchases,
   clearRating,
   downloadPurchase,
   getDownloadStatus,
@@ -188,6 +189,42 @@ function BlockedBanner({ failure, onFixed }: { failure: DownloadFailure; onFixed
   )
 }
 
+// Says outright that a dev's card has settled — everyone else's copy of the page has already dropped
+// it — so the checkbox next to it reads as "sign this off", not as something that can be done early.
+function ReviewBadge() {
+  return (
+    <span className="dl-review-badge" title="Finished — gone from everyone else's page. Check it over, then tick it off.">
+      ✓ Ready for review
+    </span>
+  )
+}
+
+// The quality the row is (or will be) fetched at, and who set it going. What it actually got wins
+// over what was asked for once there's an answer — and when the fallback ladder landed it lower,
+// both are shown, since "MP3" alone would read as someone having asked for MP3.
+function DownloadMeta({ item }: { item: PurchaseItem }) {
+  const got = item.acquiredQuality
+  const wanted = item.targetQuality
+  const quality = got
+    ? `${QUALITY_LABEL[got]}${wanted && wanted !== got ? ` (wanted ${QUALITY_LABEL[wanted]})` : ''}`
+    : wanted
+      ? QUALITY_LABEL[wanted]
+      : null
+  return (
+    <span className="dl-meta">
+      {item.readyForReview && <ReviewBadge />}
+      {quality && <span className={got && wanted && got !== wanted ? 'dl-quality short' : 'dl-quality'}>{quality}</span>}
+      {/* No name means nobody pressed anything: it was queued off a like and fetched by the drainer. */}
+      <span title={item.addedBy ? 'Who requested this download' : 'Queued automatically from a like'}>
+        {item.addedBy ? `by ${item.addedBy}` : 'auto'}
+      </span>
+      {item.inLibraryAt && (
+        <span title="When it showed up in Plex">landed {new Date(item.inLibraryAt).toLocaleString()}</span>
+      )}
+    </span>
+  )
+}
+
 function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode }) {
   const accent = useArtAccent(item.imageUrl)
   const accentStyle = accent ? ({ '--art-accent': accent } as CSSProperties) : undefined
@@ -220,9 +257,11 @@ function PurchaseRow({ item, actions }: { item: PurchaseItem; actions: ReactNode
             )}
           </span>
         </Link>
+        {item.album && <DownloadMeta item={item} />}
         {/* Where a finished download was filed — outside the link so the path can be selected and
-            copied, which is the point of showing it while Plex hasn't picked the album up yet. */}
-        {item.status === 'Sent' && item.downloadedTo && (
+            copied, which is the point of showing it while Plex hasn't picked the album up yet (and
+            on the audit list, where checking it landed in the right place is the point). */}
+        {(item.status === 'Sent' || item.status === 'InLibrary') && item.downloadedTo && (
           <code className="dl-path" title="Where the download was filed">{item.downloadedTo}</code>
         )}
       </div>
@@ -342,6 +381,12 @@ function UpgradeRow({ item, actions }: { item: PurchaseItem; actions: ReactNode 
             )}
           </span>
         </Link>
+        <span className="dl-meta">
+          {item.readyForReview && <ReviewBadge />}
+          <span title={item.addedBy ? 'Who requested this upgrade' : 'Queued automatically'}>
+            {item.addedBy ? `by ${item.addedBy}` : 'auto'}
+          </span>
+        </span>
         <div className={`up-status ${status.tone}`}>{status.text}</div>
         {swapped && (
           <details className="up-details">
@@ -609,9 +654,11 @@ export default function Purchases() {
   const { user } = useAuth()
   const [mergingId, setMergingId] = useState<string | null>(null)
 
+  // Devs keep landed downloads on the page until they tick them off; everyone else sees them go.
+  const auditing = !!user?.isDev
   const { data, isPending, isError, error } = useQuery({
-    queryKey: ['purchases'],
-    queryFn: getPurchases,
+    queryKey: ['purchases', auditing],
+    queryFn: () => getPurchases(auditing),
     enabled: !!user,
     refetchInterval: 5000, // keep the list moving as the drainer works
   })
@@ -692,8 +739,9 @@ export default function Purchases() {
   })
   const recheck = useMutation({ mutationFn: (id: string) => recheckUpgrade(id), onSuccess: invalidate })
   const dismiss = useMutation({ mutationFn: (id: string) => dismissUpgrade(id), onSuccess: invalidate })
+  const audit = useMutation({ mutationFn: (ids: string[]) => auditPurchases(ids), onSuccess: invalidate })
   const busy = download.isPending || unsend.isPending || remove.isPending || recheck.isPending
-    || dismiss.isPending
+    || dismiss.isPending || audit.isPending
 
   // The remove (✕) action shared by pending/failed rows — cancels the want before it downloads. An
   // upgrade row isn't a want being dropped (the record is already on the shelf), so it says what it
@@ -832,7 +880,7 @@ export default function Purchases() {
   // Upgrades get their own section: they replace something already in the library, so what matters
   // about them — what moved where, whether ratings survived — isn't what matters about a gap.
   const upgrades = all
-    .filter((i) => i.kind === 'UpgradeAlbum' && i.album)
+    .filter((i) => i.kind === 'UpgradeAlbum' && i.album && !i.readyForReview)
     .sort((a, b) =>
       upgradeRank(a) - upgradeRank(b)
       || (b.upgrade?.at ?? b.requestedAt).localeCompare(a.upgrade?.at ?? a.requestedAt))
@@ -848,6 +896,11 @@ export default function Purchases() {
   const pendingAlbums = items.filter((i) => i.status === 'Pending' && i.album)
   const sent = items.filter((i) => i.status === 'Sent' && i.album)
   const failed = items.filter((i) => i.status === 'Failed' && i.album)
+  // Only ever non-empty for a dev: the server flags these, and leaves them out of everyone else's list.
+  // Upgrades join once they've settled — until then they sit in their own section like everyone's.
+  const toAudit = all
+    .filter((i) => i.readyForReview && i.album)
+    .sort((a, b) => (b.inLibraryAt ?? '').localeCompare(a.inLibraryAt ?? ''))
   const shownCount =
     downloading.length + pendingAlbums.length + sent.length + failed.length + upgradesActive
 
@@ -877,7 +930,7 @@ export default function Purchases() {
       {isError && <p className="error">Failed to load wishlist: {(error as Error).message}</p>}
       {isPending && <p><em>Loading…</em></p>}
 
-      {data && shownCount === 0 && upgrades.length === 0 && (
+      {data && shownCount === 0 && upgrades.length === 0 && toAudit.length === 0 && (
         <p>
           <em>
             Nothing here yet. Thumbs-up albums on the <Link to="/">Discover</Link> page, or add an
@@ -1001,6 +1054,47 @@ export default function Purchases() {
               ),
             )}
           </div>
+        </div>
+      )}
+
+      {toAudit.length > 0 && (
+        <div className="dl-section">
+          <h2 className="feed-section-title">
+            Ready for review <span className="feed-count">{toAudit.length}</span>
+            <button
+              className="disc-btn dl-audit-all"
+              title="Mark every finished download as reviewed"
+              disabled={busy}
+              onClick={() => audit.mutate(toAudit.map((i) => i.id))}
+            >
+              Mark all reviewed
+            </button>
+          </h2>
+          <p className="disc-sub">
+            <em>
+              Finished, and already gone from everyone else's page. Only devs see these — tick each
+              one off once you've checked it.
+            </em>
+          </p>
+          <div className="disc-list">
+            {toAudit.map((item) => {
+              const check = (
+                <label className="dl-audit-check" title="Reviewed — clear it off the list">
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled={busy}
+                    onChange={() => audit.mutate([item.id])}
+                  />
+                  Reviewed
+                </label>
+              )
+              return item.kind === 'UpgradeAlbum'
+                ? <UpgradeRow key={item.id} item={item} actions={check} />
+                : row(item, check)
+            })}
+          </div>
+          {audit.isError && <p className="error">{(audit.error as Error).message}</p>}
         </div>
       )}
 

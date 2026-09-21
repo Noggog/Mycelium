@@ -105,7 +105,16 @@ public record PurchaseItem(
     // The library folder the last successful download was filed into, so the Download page can say
     // where to find it before Plex has picked it up. Null until something has downloaded, when the
     // backend couldn't say (an unstaged download), and on every row written before this existed.
-    string? DownloadedTo = null);
+    string? DownloadedTo = null,
+    // When a dev ticked this finished download off in the Download page's audit list. Everyone else
+    // loses sight of a row the moment it lands; a dev keeps it until they've checked it over, so a
+    // download that went somewhere odd can't slip past unseen. Cleared when the row lands again (an
+    // upgrade re-fetch), since that is a new arrival nobody has checked. Null until then.
+    DateTimeOffset? AuditedAt = null,
+    // Not stored: set on a dev's view of the Download page for a row that has finished to the point
+    // everyone else stopped seeing it, and hasn't been ticked off yet. The page shows the audit
+    // checkbox only on these, so a row can't be signed off while it's still settling.
+    bool ReadyForReview = false);
 
 /// <summary>
 /// A live snapshot of the download subsystem for the monitoring panel: whether downloads are on,
@@ -243,6 +252,12 @@ public interface IPurchaseRepo
     /// later match check fill it in at different times, and a reconcile's upsert must never touch it.
     /// </summary>
     Task SetUpgrade(string id, UpgradeReport? report);
+
+    /// <summary>
+    /// Stamps <see cref="PurchaseItem.AuditedAt"/> on each of <paramref name="ids"/>, taking them off
+    /// the dev audit list. Returns how many rows it matched.
+    /// </summary>
+    Task<int> MarkAudited(IReadOnlyCollection<string> ids);
 
     /// <summary>Removes a row entirely (no longer wanted).</summary>
     Task Remove(string id);

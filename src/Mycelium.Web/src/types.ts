@@ -344,8 +344,8 @@ export interface PurchaseItem {
   addedBy: string | null
   // ISO timestamp of when the reconcile first saw the record in the library — the row saying it is
   // finished, rather than a caller having to read that off the status enum. Null until it lands, and
-  // on rows that closed out before this was recorded. Always null for this app: the Download page asks
-  // for the active list, which drops arrived rows. It is set only for a caller that passes
+  // on rows that closed out before this was recorded. The Download page only sees it on a dev's audit
+  // list (`unaudited=true`) and on finished upgrades; otherwise it's for a caller that passes
   // `includeCompleted=true` — an automation client polling the ids it queued, which needs to see the
   // acquisition finish rather than watch the row disappear.
   inLibraryAt: string | null
@@ -356,6 +356,12 @@ export interface PurchaseItem {
   // The library folder the last successful download was filed into, as the backend sees it. Null
   // until something has downloaded, and when the backend couldn't say where it went.
   downloadedTo: string | null
+  // When a dev ticked this landed download off the audit list. Null until then, and cleared if the
+  // row lands again.
+  auditedAt: string | null
+  // Only on a dev's view: this row has finished to the point everyone else stopped seeing it, and is
+  // waiting to be ticked off. The audit checkbox is offered on these and nothing else.
+  readyForReview: boolean
 }
 
 // Mirrors UpgradeMatchCheck (UpgradeReport.cs): whether the upgraded album kept the Plex match its

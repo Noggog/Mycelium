@@ -33,6 +33,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldAddedBy = "addedBy";
     private const string FieldUpgrade = "upgrade";
     private const string FieldDownloadedTo = "downloadedTo";
+    private const string FieldAuditedAt = "auditedAt";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -223,7 +224,10 @@ public class PurchaseRepo : IPurchaseRepo
         // name the arrival of the copy that is actually on the shelf, not a copy that was replaced.
         if (status == PurchaseStatus.InLibrary)
         {
-            update = update.Set(FieldInLibraryAt, DateTimeOffset.UtcNow.UtcDateTime);
+            // A fresh arrival is one nobody has audited yet, whatever was ticked off for the last copy.
+            update = update
+                .Set(FieldInLibraryAt, DateTimeOffset.UtcNow.UtcDateTime)
+                .Unset(FieldAuditedAt);
         }
 
         // Only ever written, never cleared: a backend that couldn't report what it got shouldn't
@@ -242,6 +246,19 @@ public class PurchaseRepo : IPurchaseRepo
 
         var result = await Collection.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", id), update);
         return result.MatchedCount > 0;
+    }
+
+    public async Task<int> MarkAudited(IReadOnlyCollection<string> ids)
+    {
+        if (ids.Count == 0)
+        {
+            return 0;
+        }
+
+        var result = await Collection.UpdateManyAsync(
+            Builders<BsonDocument>.Filter.In("_id", ids),
+            Builders<BsonDocument>.Update.Set(FieldAuditedAt, DateTimeOffset.UtcNow.UtcDateTime));
+        return (int)result.MatchedCount;
     }
 
     public Task Remove(string id) =>
@@ -266,6 +283,9 @@ public class PurchaseRepo : IPurchaseRepo
             : null;
         DateTimeOffset? inLibraryAt = doc.TryGetValue(FieldInLibraryAt, out var la) && la.IsValidDateTime
             ? (DateTimeOffset)la.ToUniversalTime()
+            : null;
+        DateTimeOffset? auditedAt = doc.TryGetValue(FieldAuditedAt, out var aa) && aa.IsValidDateTime
+            ? (DateTimeOffset)aa.ToUniversalTime()
             : null;
         long? deezerAlbumId = doc.TryGetValue(FieldDeezerAlbumId, out var da) && da.IsNumeric
             ? da.ToInt64()
@@ -297,6 +317,7 @@ public class PurchaseRepo : IPurchaseRepo
             inLibraryAt,
             UpgradeFrom(doc),
             // Absent until a download has landed, and on rows downloaded before this was recorded.
-            StrN(FieldDownloadedTo));
+            StrN(FieldDownloadedTo),
+            auditedAt);
     }
 }

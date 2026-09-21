@@ -1430,6 +1430,68 @@ public class PurchaseServiceTests
         _purchases.Items.Single().Upgrade!.Match.Should().Be(UpgradeMatchCheck.NeedsFixMatch);
     }
 
+    private void SeedLanded(DateTimeOffset? inLibraryAt) =>
+        _purchases.Seed(new PurchaseItem(
+            HmhasKey, FeedKind.MissingAlbum,
+            new ArtistKey("Billie Eilish"), "HIT ME HARD AND SOFT", null, 0, Array.Empty<string>(),
+            PurchaseStatus.InLibrary, DateTimeOffset.UtcNow, null, 1, "Billie Eilish",
+            InLibraryAt: inLibraryAt));
+
+    [Fact]
+    public async Task A_landed_download_stays_on_the_audit_list_until_it_is_ticked_off()
+    {
+        SeedLanded(DateTimeOffset.UtcNow);
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        (await _sut.GetActive()).Should().BeEmpty();
+        (await _sut.GetActive(unaudited: true)).Should().ContainSingle()
+            .Which.ReadyForReview.Should().BeTrue();
+
+        (await _sut.MarkAudited([HmhasKey])).Should().Be(1);
+
+        (await _sut.GetActive(unaudited: true)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_row_that_landed_before_arrivals_were_stamped_is_not_on_the_audit_list()
+    {
+        SeedLanded(null);
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        (await _sut.GetActive(unaudited: true)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_row_still_in_flight_cannot_be_audited()
+    {
+        UserTier("justin", AudioQuality.Lossless);
+        LikedBy(("justin", "Billie Eilish", "HIT ME HARD AND SOFT"));
+        SeedUpgrade(PurchaseStatus.Sent, null);
+
+        (await _sut.MarkAudited([HmhasKey])).Should().Be(0);
+        _purchases.Items.Single().AuditedAt.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(UpgradeMatchCheck.Kept, false, true)]
+    [InlineData(UpgradeMatchCheck.NeedsFixMatch, false, false)]
+    [InlineData(UpgradeMatchCheck.NeedsFixMatch, true, true)]
+    public async Task A_finished_upgrade_is_ready_for_review_only_once_it_has_left_everyone_elses_page(
+        UpgradeMatchCheck match, bool dismissed, bool ready)
+    {
+        _purchases.Seed(new PurchaseItem(
+            HmhasKey, FeedKind.UpgradeAlbum,
+            new ArtistKey("Billie Eilish"), "HIT ME HARD AND SOFT", null, 0, Array.Empty<string>(),
+            PurchaseStatus.InLibrary, DateTimeOffset.UtcNow, null, 1, "Billie Eilish",
+            InLibraryAt: DateTimeOffset.UtcNow, Upgrade: Swapped(match, dismissed)));
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        var active = await _sut.GetActive(recentUpgrades: true, unaudited: true);
+
+        active.Should().ContainSingle().Which.ReadyForReview.Should().Be(ready);
+        (await _sut.MarkAudited([HmhasKey])).Should().Be(ready ? 1 : 0);
+    }
+
     [Fact]
     public async Task A_finished_upgrade_whose_files_were_deleted_is_queued_again_as_a_missing_album()
     {

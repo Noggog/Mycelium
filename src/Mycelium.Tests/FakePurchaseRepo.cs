@@ -54,6 +54,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 Upgrade = existing.Upgrade,
                 // Written only by the status transition; the Mongo upsert doesn't name it.
                 DownloadedTo = existing.DownloadedTo,
+                // Written only by MarkAudited / the InLibrary transition; the Mongo upsert doesn't name it.
+                AuditedAt = existing.AuditedAt,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;
@@ -104,8 +106,24 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
             // couldn't say what it got doesn't erase what an earlier attempt reported.
             AcquiredQuality = acquired ?? item.AcquiredQuality,
             DownloadedTo = downloadedTo ?? item.DownloadedTo,
+            // Mirrors the Mongo repo: a fresh arrival is unaudited.
+            AuditedAt = status == PurchaseStatus.InLibrary ? null : item.AuditedAt,
         };
         return Task.FromResult(true);
+    }
+
+    public Task<int> MarkAudited(IReadOnlyCollection<string> ids)
+    {
+        var matched = 0;
+        foreach (var id in ids)
+        {
+            if (_items.TryGetValue(id, out var item))
+            {
+                _items[id] = item with { AuditedAt = DateTimeOffset.UtcNow };
+                matched++;
+            }
+        }
+        return Task.FromResult(matched);
     }
 
     public Task Remove(string id)
