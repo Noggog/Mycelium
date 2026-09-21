@@ -111,6 +111,13 @@ public record PurchaseItem(
     // download that went somewhere odd can't slip past unseen. Cleared when the row lands again (an
     // upgrade re-fetch), since that is a new arrival nobody has checked. Null until then.
     DateTimeOffset? AuditedAt = null,
+    // The usernames whose likes put this album on the list — who it's for, which AddedBy can't say
+    // for the common case of an album nobody pressed anything on. Refreshed on every reconcile while
+    // the album is still wanted, so it follows likes being added and withdrawn; once the album lands
+    // the reconcile stops touching the row, and the last set stands as the record of who it was for.
+    // Null on hand-added rows (no like behind them), artist rows, and rows last reconciled before this
+    // existed.
+    IReadOnlyList<string>? LikedBy = null,
     // Not stored: set on a dev's view of the Download page for a row that has finished to the point
     // everyone else stopped seeing it, and hasn't been ticked off yet. The page shows the audit
     // checkbox only on these, so a row can't be signed off while it's still settling.

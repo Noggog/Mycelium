@@ -56,6 +56,8 @@ internal sealed class FakePurchaseRepo : IPurchaseRepo
                 DownloadedTo = existing.DownloadedTo,
                 // Written only by MarkAudited / the InLibrary transition; the Mongo upsert doesn't name it.
                 AuditedAt = existing.AuditedAt,
+                // Mirrors the Mongo repo: re-Set when the reconcile supplies it, otherwise left alone.
+                LikedBy = item.LikedBy is { Count: > 0 } ? item.LikedBy : existing.LikedBy,
             }
             : item with { Status = PurchaseStatus.Pending };
         return Task.CompletedTask;

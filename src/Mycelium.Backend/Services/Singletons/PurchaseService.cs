@@ -20,6 +20,7 @@ namespace Mycelium.Backend.Services.Singletons;
 public class PurchaseService
 {
     private readonly IPurchaseRepo _purchases;
+    private readonly IUserRepo _users;
     private readonly IUserQueueRepo _queue;
     private readonly IUserAlbumRatingRepo _albumRatings;
     private readonly ILibraryProvider _library;
@@ -54,8 +55,10 @@ public class PurchaseService
         UserQualityService quality,
         JitterPolicy jitter,
         DownloadSchedule schedule,
+        IUserRepo users,
         ILogger<PurchaseService> logger)
     {
+        _users = users;
         _settings = settings;
         _quality = quality;
         _jitter = jitter;
@@ -408,6 +411,10 @@ public class PurchaseService
                 PurchaseStatus.Pending, default, null, null, null);
         }
 
+        // Likes are keyed by OIDC subject; the page wants the name people know each other by.
+        var names = (await _users.GetAll())
+            .ToDictionary(u => u.Subject, u => u.Username ?? u.DisplayName ?? u.Subject, StringComparer.Ordinal);
+
         // Liked albums come back paired with the user who liked them, so a row shared by several
         // people can be fetched once at the best of their entitlements. Grouped *before* the
         // ownership test, because whether the library already satisfies a want now depends on that
@@ -460,7 +467,11 @@ public class PurchaseService
                 g.Select(l => l.Rating.AlbumArt).FirstOrDefault(a => a != null),
                 0, Array.Empty<string>(),
                 PurchaseStatus.Pending, default, null, deezerAlbumId, albumArtist,
-                TargetQuality: target, OwnedQuality: ownedQuality);
+                TargetQuality: target, OwnedQuality: ownedQuality,
+                LikedBy: g.Select(l => names.TryGetValue(l.UserId, out var n) ? n : l.UserId)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray());
         }
 
         // Insert new wants as pending / refresh display fields on existing rows.

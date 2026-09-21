@@ -362,6 +362,9 @@ export interface PurchaseItem {
   // Only on a dev's view: this row has finished to the point everyone else stopped seeing it, and is
   // waiting to be ticked off. The audit checkbox is offered on these and nothing else.
   readyForReview: boolean
+  // Usernames whose likes put this album on the list. Null on hand-added rows, and on rows the
+  // reconcile hasn't refreshed since this was recorded.
+  likedBy: string[] | null
 }
 
 // Mirrors UpgradeMatchCheck (UpgradeReport.cs): whether the upgraded album kept the Plex match its

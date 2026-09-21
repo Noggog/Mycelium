@@ -199,6 +199,25 @@ function ReviewBadge() {
   )
 }
 
+// Who the album is for: whoever's like queued it, plus whoever pasted it or pressed Download if that
+// was someone else. Old rows may know neither, and then say nothing rather than guess.
+function Requesters({ item }: { item: PurchaseItem }) {
+  const likers = item.likedBy ?? []
+  const presser = item.addedBy && !likers.some((l) => l.toLowerCase() === item.addedBy!.toLowerCase())
+    ? item.addedBy
+    : null
+  return (
+    <>
+      {likers.length > 0 && <span title="Whose likes queued this">liked by {likers.join(', ')}</span>}
+      {presser && (
+        <span title={item.manual ? 'Who added this by link' : 'Who pressed Download'}>
+          {item.manual ? 'added' : 'downloaded'} by {presser}
+        </span>
+      )}
+    </>
+  )
+}
+
 // The quality the row is (or will be) fetched at, and who set it going. What it actually got wins
 // over what was asked for once there's an answer — and when the fallback ladder landed it lower,
 // both are shown, since "MP3" alone would read as someone having asked for MP3.
@@ -214,10 +233,7 @@ function DownloadMeta({ item }: { item: PurchaseItem }) {
     <span className="dl-meta">
       {item.readyForReview && <ReviewBadge />}
       {quality && <span className={got && wanted && got !== wanted ? 'dl-quality short' : 'dl-quality'}>{quality}</span>}
-      {/* No name means nobody pressed anything: it was queued off a like and fetched by the drainer. */}
-      <span title={item.addedBy ? 'Who requested this download' : 'Queued automatically from a like'}>
-        {item.addedBy ? `by ${item.addedBy}` : 'auto'}
-      </span>
+      <Requesters item={item} />
       {item.inLibraryAt && (
         <span title="When it showed up in Plex">landed {new Date(item.inLibraryAt).toLocaleString()}</span>
       )}
@@ -383,9 +399,7 @@ function UpgradeRow({ item, actions }: { item: PurchaseItem; actions: ReactNode 
         </Link>
         <span className="dl-meta">
           {item.readyForReview && <ReviewBadge />}
-          <span title={item.addedBy ? 'Who requested this upgrade' : 'Queued automatically'}>
-            {item.addedBy ? `by ${item.addedBy}` : 'auto'}
-          </span>
+          <Requesters item={item} />
         </span>
         <div className={`up-status ${status.tone}`}>{status.text}</div>
         {swapped && (
@@ -739,9 +753,31 @@ export default function Purchases() {
   })
   const recheck = useMutation({ mutationFn: (id: string) => recheckUpgrade(id), onSuccess: invalidate })
   const dismiss = useMutation({ mutationFn: (id: string) => dismissUpgrade(id), onSuccess: invalidate })
-  const audit = useMutation({ mutationFn: (ids: string[]) => auditPurchases(ids), onSuccess: invalidate })
+  // Optimistic: the card goes the moment it's ticked. The round trip ends in a refetch of the whole
+  // list, which reconciles first and is slow — waiting on it made ticking through a backlog drag.
+  // Put back if the server refuses, so a failed tick can't look like a successful one.
+  const purchasesKey = ['purchases', auditing]
+  const audit = useMutation({
+    mutationKey: ['audit'],
+    mutationFn: (ids: string[]) => auditPurchases(ids),
+    onMutate: async (ids) => {
+      await queryClient.cancelQueries({ queryKey: purchasesKey })
+      const previous = queryClient.getQueryData<PurchaseItem[]>(purchasesKey)
+      const gone = new Set(ids)
+      queryClient.setQueryData<PurchaseItem[]>(purchasesKey, (rows) => rows?.filter((r) => !gone.has(r.id)))
+      return { previous }
+    },
+    onError: (_err, _ids, context) => {
+      if (context?.previous) queryClient.setQueryData(purchasesKey, context.previous)
+    },
+    // Only the last tick in a quick run refetches: an earlier one's refetch could land before a later
+    // tick has reached the server, and bring its card back for a moment.
+    onSettled: () => {
+      if (queryClient.isMutating({ mutationKey: ['audit'] }) <= 1) invalidate()
+    },
+  })
   const busy = download.isPending || unsend.isPending || remove.isPending || recheck.isPending
-    || dismiss.isPending || audit.isPending
+    || dismiss.isPending
 
   // The remove (✕) action shared by pending/failed rows — cancels the want before it downloads. An
   // upgrade row isn't a want being dropped (the record is already on the shelf), so it says what it

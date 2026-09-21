@@ -43,7 +43,7 @@ public class PurchaseServiceTests
             _downloader,
             _deezer, _albumTagger, Config, settings,
             new UserQualityService(_users, AudioQuality.Lossless),
-            new JitterPolicy(0.3), _schedule,
+            new JitterPolicy(0.3), _schedule, _users,
             NullLogger<PurchaseService>.Instance);
 
         _queue.GetAllLiked().Returns(Array.Empty<DiscoveryCandidate>());
@@ -1114,6 +1114,21 @@ public class PurchaseServiceTests
 
     private void UserTier(string subject, AudioQuality quality) =>
         _users.Get(subject).Returns(new AppUser(subject, subject, null, null, default, default, quality));
+
+    [Fact]
+    public async Task A_queued_album_names_everyone_whose_like_put_it_there()
+    {
+        _users.GetAll().Returns(new[]
+        {
+            new AppUser("sub-k", "kelsey", null, null, default, default),
+            new AppUser("sub-j", "justin", null, null, default, default),
+        });
+        LikedBy(("sub-k", "Alvvays", "Blue Rev"), ("sub-j", "Alvvays", "Blue Rev"));
+
+        var active = await _sut.GetActive();
+
+        active.Single().LikedBy.Should().Equal("justin", "kelsey");
+    }
 
     [Fact]
     public async Task An_album_only_a_lossy_user_wants_is_queued_at_the_lossy_tier()

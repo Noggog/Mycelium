@@ -34,6 +34,7 @@ public class PurchaseRepo : IPurchaseRepo
     private const string FieldUpgrade = "upgrade";
     private const string FieldDownloadedTo = "downloadedTo";
     private const string FieldAuditedAt = "auditedAt";
+    private const string FieldLikedBy = "likedBy";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -114,6 +115,13 @@ public class PurchaseRepo : IPurchaseRepo
         if (item.OwnedQuality is not null)
         {
             update = update.Set(FieldOwnedQuality, item.OwnedQuality.Value.ToString());
+        }
+
+        // Re-Set like the target: derived from who currently likes the album. Left alone when the
+        // reconcile has nothing to say (a manual row), so it isn't wiped to empty.
+        if (item.LikedBy is { Count: > 0 })
+        {
+            update = update.Set(FieldLikedBy, new BsonArray(item.LikedBy));
         }
 
         // Insert-only, like the status: who asked for a record is a fact about the moment it was
@@ -274,6 +282,9 @@ public class PurchaseRepo : IPurchaseRepo
         var sources = doc.TryGetValue(FieldSources, out var src) && src.IsBsonArray
             ? src.AsBsonArray.Select(x => x.AsString).ToArray()
             : Array.Empty<string>();
+        IReadOnlyList<string>? likedBy = doc.TryGetValue(FieldLikedBy, out var lb) && lb.IsBsonArray
+            ? lb.AsBsonArray.Where(x => x.IsString).Select(x => x.AsString).ToArray()
+            : null;
         var score = doc.TryGetValue(FieldScore, out var sc) && sc.IsNumeric ? sc.ToDouble() : 0;
         var requestedAt = doc.TryGetValue(FieldRequestedAt, out var ra) && ra.IsValidDateTime
             ? (DateTimeOffset)ra.ToUniversalTime()
@@ -318,6 +329,7 @@ public class PurchaseRepo : IPurchaseRepo
             UpgradeFrom(doc),
             // Absent until a download has landed, and on rows downloaded before this was recorded.
             StrN(FieldDownloadedTo),
-            auditedAt);
+            auditedAt,
+            likedBy);
     }
 }
