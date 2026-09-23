@@ -1550,6 +1550,23 @@ public class PurchaseServiceTests
     }
 
     [Fact]
+    public async Task A_devs_upgrade_that_needs_a_fix_match_still_shows_on_the_page()
+    {
+        _purchases.Seed(new PurchaseItem(
+            HmhasKey, FeedKind.UpgradeAlbum,
+            new ArtistKey("Billie Eilish"), "HIT ME HARD AND SOFT", null, 0, Array.Empty<string>(),
+            PurchaseStatus.InLibrary, DateTimeOffset.UtcNow, null, 1, "Billie Eilish",
+            AddedBy: "justin", InLibraryAt: DateTimeOffset.UtcNow,
+            Upgrade: Swapped(UpgradeMatchCheck.NeedsFixMatch, dismissed: false)));
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        var active = await _sut.GetActive(
+            recentUpgrades: true, unaudited: true, isDev: u => u == "justin");
+
+        active.Should().ContainSingle().Which.ReadyForReview.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task A_row_still_in_flight_cannot_be_audited()
     {
         UserTier("justin", AudioQuality.Lossless);

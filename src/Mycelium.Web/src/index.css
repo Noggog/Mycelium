@@ -2396,6 +2396,10 @@ button.detail-chip.via:hover {
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
 }
+.sample-duration.active {
+  color: var(--cyan);
+  text-shadow: var(--glow-cyan);
+}
 .deezer-link {
   flex-shrink: 0;
   color: var(--cyan);

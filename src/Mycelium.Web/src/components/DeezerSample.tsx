@@ -163,7 +163,9 @@ export function DeezerSample({ artist, albumId }: { artist?: string; albumId?: n
               </span>
               {failed === i && <span className="sample-title muted" title="Preview unavailable"> — unavailable</span>}
               {track.durationSeconds != null && (
-                <span className="sample-duration">{formatDuration(track.durationSeconds)}</span>
+                <span className={selected === i ? 'sample-duration active' : 'sample-duration'}>
+                  {formatDuration(track.durationSeconds)}
+                </span>
               )}
             </li>
           ))}
