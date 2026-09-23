@@ -904,9 +904,10 @@ function DetailPanel({
                 >
                   {isAlbum ? <IconSkip /> : <IconReject />}
                 </button>
-                <SnoozeControl onPick={(duration) => onSnooze(item, duration)} disabled={false} />
                 {isAlbum && <MergeButton disabled={busy} onMerge={() => onMerge(item)} />}
                 {isAlbum && <BlockButton disabled={busy} onBlock={() => onBlock(item)} />}
+                {/* Last, since its flyout grows rightward — anything after it would get covered. */}
+                <SnoozeControl onPick={(duration) => onSnooze(item, duration)} disabled={false} />
               </>
             )}
           </div>
@@ -1041,13 +1042,14 @@ function DiscRow({
               >
                 {isAlbum ? <IconSkip /> : <IconReject />}
               </button>
-              {/* Snooze hides a "not now" pick for a while — works for artists and missing albums. */}
+              {isAlbum && <MergeButton disabled={busy} onMerge={() => onMerge(item)} />}
+              {isAlbum && <BlockButton disabled={busy} onBlock={() => onBlock(item)} />}
+              {/* Snooze hides a "not now" pick for a while — works for artists and missing albums.
+                  Last, since its flyout grows rightward — anything after it would get covered. */}
               <SnoozeControl
                 onPick={(duration) => onSnooze(item, duration)}
                 disabled={false}
               />
-              {isAlbum && <MergeButton disabled={busy} onMerge={() => onMerge(item)} />}
-              {isAlbum && <BlockButton disabled={busy} onBlock={() => onBlock(item)} />}
             </>
           )}
         </div>
