@@ -6,7 +6,9 @@ import VolumeControl from './VolumeControl'
 import MyceliumBackdrop from './MyceliumBackdrop'
 import BackdropToggle from './BackdropToggle'
 
-const navClass = ({ isActive }: { isActive: boolean }) =>
+const TUTORIAL_URL = 'https://videos.noggog.ing/w/dNQpR153LQ5RTN1CddK49Y'
+
+const navClass =({ isActive }: { isActive: boolean }) =>
   isActive ? 'nav-link active' : 'nav-link'
 
 // The header's identity slot. Signing into the app itself is normally invisible — AuthProvider
@@ -243,6 +245,18 @@ export default function Layout({ children }: { children: ReactNode }) {
         <div className="topbar-end">
           <BackdropToggle />
           <VolumeControl />
+          <a
+            className="tutorial-link"
+            href={TUTORIAL_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="Watch the Mycelium walkthrough video"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <span className="tutorial-label">Tutorial</span>
+          </a>
           <AuthBox />
         </div>
       </header>

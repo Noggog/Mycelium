@@ -400,6 +400,30 @@ code {
   display: block;
 }
 
+/* Walkthrough video link, beside the account controls. Ghost styling so it's findable without
+   competing with "Log into Plex" for attention. */
+.tutorial-link {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.tutorial-link:hover {
+  color: var(--text);
+  background: rgba(116, 88, 219, 0.14);
+  border-color: var(--border);
+}
+.tutorial-link svg {
+  color: var(--cyan);
+}
+
 .backdrop-toggle.is-on .backdrop-icon {
   filter: drop-shadow(0 0 5px rgba(250, 115, 118, 0.55));
 }
@@ -1183,6 +1207,12 @@ input[type='checkbox'] {
 .disc-row {
   display: flex;
   align-items: center;
+  /* Wrap so the action cluster drops to its own line under the name once the row is too narrow to
+     hold both (phones). Unwrapped, the buttons kept their full width and starved the name column
+     down to a few characters, which wrapped the title into a tall, one-word-per-line sliver. The
+     name block's flex-basis below is what decides when that happens — no breakpoint needed, so it
+     also covers the narrow readout drawer and any future column width. */
+  flex-wrap: wrap;
   gap: 0.85rem;
   /* Background washed with the card's artwork colour: a translucent accent gradient layered over the
      stock glass panel, so the row reads as "themed from the art" while the dark base shows through. */
@@ -1262,6 +1292,9 @@ input[type='checkbox'] {
 .disc-sub-album {
   display: flex;
   align-items: center;
+  /* Same squeeze as the feed rows, in a narrower column: four buttons beside a 36px cover left the
+     album title a sliver on a phone. Wrap them under the title instead. */
+  flex-wrap: wrap;
   gap: 0.6rem;
   /* Art-tinted card (cover colour washed over the stock panel), same pattern as the feed rows. */
   background: linear-gradient(
@@ -1311,7 +1344,7 @@ input[type='checkbox'] {
     0 0 22px -4px rgba(var(--art-accent, 225, 96, 99), 0.6);
 }
 .disc-sub-album-name {
-  flex: 1;
+  flex: 1 1 10rem;
   min-width: 0;
   font-size: 0.92rem;
   font-weight: 500;
@@ -1409,8 +1442,10 @@ input[type='checkbox'] {
   box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.35);
 }
 
+/* Takes the rest of the line, but never below ~13rem: that basis is the threshold that pushes the
+   action cluster onto the next line instead of squeezing the title (see .disc-row). */
 .disc-row-main {
-  flex: 1;
+  flex: 1 1 13rem;
   min-width: 0;
 }
 /* When the row's name block is a deep link into Browse (the Download queue), strip the anchor
@@ -1442,6 +1477,9 @@ a.disc-row-link:hover .disc-name {
 
 .disc-actions {
   display: flex;
+  /* An album row carries up to six buttons — let them wrap rather than force the row wider than the
+     screen once the cluster is on its own line. */
+  flex-wrap: wrap;
   gap: 0.4rem;
   align-items: center;
 }
@@ -2672,6 +2710,11 @@ button.detail-chip.via:hover {
   color: var(--text-dim);
   cursor: pointer;
 }
+/* Pin the checkbox to the card's top-right rather than the row's vertical centre, so it sits in the
+   same spot on every card no matter how tall the body grows (e.g. an expanded upgrade Details). */
+.disc-actions:has(> .dl-audit-check) {
+  align-self: flex-start;
+}
 .dl-audit-check input {
   width: 1.2rem;
   height: 1.2rem;
@@ -2873,6 +2916,9 @@ button.detail-chip.via:hover {
 @media (max-width: 640px) {
   .topbar {
     padding: 0.55rem 1rem;
+  }
+  .tutorial-label {
+    display: none;
   }
 }
 
