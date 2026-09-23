@@ -5,6 +5,14 @@ import { Spinner } from './icons'
 import { getVolume, useVolume } from '../audio/volume'
 import { startAudioReactive, stopAudioReactive } from '../effects/audioReactive'
 
+// Full-track length as m:ss (h:mm:ss for the rare hour-plus track).
+function formatDuration(total: number): string {
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = String(total % 60).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
+}
+
 // Only one preview should play at a time across the whole page; track the active element so
 // starting a new one pauses the previous (e.g. expanding a second row in the list view).
 let currentAudio: HTMLAudioElement | null = null
@@ -154,6 +162,9 @@ export function DeezerSample({ artist, albumId }: { artist?: string; albumId?: n
                 {track.title}
               </span>
               {failed === i && <span className="sample-title muted" title="Preview unavailable"> — unavailable</span>}
+              {track.durationSeconds != null && (
+                <span className="sample-duration">{formatDuration(track.durationSeconds)}</span>
+              )}
             </li>
           ))}
         </ul>

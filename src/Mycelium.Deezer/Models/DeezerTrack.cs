@@ -11,6 +11,9 @@ public class DeezerTrack
     public string? title { get; set; }
     public string? preview { get; set; }
     public string? link { get; set; }
+
+    /// <summary>Full track length in seconds (not the preview's). 0 when Deezer omits it.</summary>
+    public int duration { get; set; }
 }
 
 /// <summary>

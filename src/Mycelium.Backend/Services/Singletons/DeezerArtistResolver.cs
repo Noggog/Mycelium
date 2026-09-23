@@ -7,8 +7,9 @@ using Mycelium.Interfaces;
 
 namespace Mycelium.Backend.Services.Singletons;
 
-/// <summary>One sampleable track: a title and its ~30s preview MP3.</summary>
-public record DeezerPreviewTrack(string Title, string PreviewUrl);
+/// <summary>One sampleable track: a title, its ~30s preview MP3, and the full track's length.</summary>
+/// <param name="DurationSeconds">Full track length, or null when Deezer didn't say.</param>
+public record DeezerPreviewTrack(string Title, string PreviewUrl, int? DurationSeconds = null);
 
 /// <summary>What the SPA needs to sample an artist: a few 30-second previews and a link out.</summary>
 /// <param name="Id">Deezer artist id.</param>
@@ -315,7 +316,7 @@ public class DeezerArtistResolver
 
         var tracks = (await _deezer.GetAlbumTracks(albumId))
             .Where(t => !string.IsNullOrEmpty(t.preview) && !string.IsNullOrEmpty(t.title))
-            .Select(t => new DeezerPreviewTrack(t.title!, t.preview!))
+            .Select(t => new DeezerPreviewTrack(t.title!, t.preview!, t.duration > 0 ? t.duration : null))
             .ToArray();
 
         await _cache.SetStringAsync(
@@ -339,7 +340,7 @@ public class DeezerArtistResolver
 
         var tracks = (await _deezer.GetTopTracks(artistId, TopTrackCount))
             .Where(t => !string.IsNullOrEmpty(t.preview) && !string.IsNullOrEmpty(t.title))
-            .Select(t => new DeezerPreviewTrack(t.title!, t.preview!))
+            .Select(t => new DeezerPreviewTrack(t.title!, t.preview!, t.duration > 0 ? t.duration : null))
             .ToArray();
 
         await _cache.SetStringAsync(

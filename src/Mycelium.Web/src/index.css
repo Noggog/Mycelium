@@ -2390,6 +2390,12 @@ button.detail-chip.via:hover {
 .sample-title.muted {
   color: var(--text-faint);
 }
+.sample-duration {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
 .deezer-link {
   flex-shrink: 0;
   color: var(--cyan);

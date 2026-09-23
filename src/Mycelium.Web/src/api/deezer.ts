@@ -22,6 +22,8 @@ export const isDeezerBusy = (err: unknown): boolean => err instanceof DeezerBusy
 export interface DeezerPreviewTrack {
   title: string
   previewUrl: string
+  // Full track length (not the 30s preview's); null when Deezer didn't supply one.
+  durationSeconds?: number | null
 }
 
 export interface DeezerPlayInfo {
