@@ -1360,9 +1360,11 @@ api.MapGet("/purchases", async (
             // went (what moved where, whether ratings survived) for a while after they land.
             // unaudited: the dev audit list — landed albums a dev hasn't ticked off yet. Ignored for
             // anyone else rather than refused, so the page can always ask and just get the normal list.
+            // Albums a dev asked for never join it — a dev needn't review their own requests.
             return Results.Ok(await purchases.GetActive(
                 includeCompleted: completed, recentUpgrades: recentUpgrades == true,
-                unaudited: unaudited == true && devUsers.AllowsDevTools(http.User)));
+                unaudited: unaudited == true && devUsers.AllowsDevTools(http.User),
+                isDev: devUsers.IncludesUsername));
         }
 
         var wanted = ids

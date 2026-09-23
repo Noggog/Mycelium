@@ -1526,6 +1526,29 @@ public class PurchaseServiceTests
         (await _sut.GetActive(unaudited: true)).Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("justin", null, false)]
+    [InlineData(null, new[] { "justin" }, false)]
+    [InlineData("justin", new[] { "justin", "sam" }, false)]
+    [InlineData("sam", new[] { "justin" }, false)]
+    [InlineData("sam", new[] { "alex" }, true)]
+    [InlineData(null, null, true)]
+    public async Task Albums_a_dev_asked_for_stay_off_the_audit_list(
+        string? addedBy, string[]? likedBy, bool listed)
+    {
+        _purchases.Seed(new PurchaseItem(
+            HmhasKey, FeedKind.MissingAlbum,
+            new ArtistKey("Billie Eilish"), "HIT ME HARD AND SOFT", null, 0, Array.Empty<string>(),
+            PurchaseStatus.InLibrary, DateTimeOffset.UtcNow, null, 1, "Billie Eilish",
+            AddedBy: addedBy, InLibraryAt: DateTimeOffset.UtcNow, LikedBy: likedBy));
+        OwnedAlbum("Billie Eilish", "HIT ME HARD AND SOFT", AudioQuality.Lossless);
+
+        var active = await _sut.GetActive(
+            unaudited: true, isDev: u => u.Equals("justin", StringComparison.OrdinalIgnoreCase));
+
+        active.Any(p => p.ReadyForReview).Should().Be(listed);
+    }
+
     [Fact]
     public async Task A_row_still_in_flight_cannot_be_audited()
     {

@@ -103,10 +103,13 @@ public class PurchaseService
     /// <para><paramref name="unaudited"/> is the dev view of that page: a row that has left everyone
     /// else's view stays on it, flagged <see cref="PurchaseItem.ReadyForReview"/>, until it's ticked off
     /// (<see cref="MarkAudited"/>). See <see cref="IsReadyForReview"/> for what counts.</para>
+    ///
+    /// <para><paramref name="isDev"/> names the devs, whose own requests skip the audit list: a dev
+    /// doesn't need to sign off on an album they asked for themselves. See <see cref="ADevAsked"/>.</para>
     /// </summary>
     public async Task<PurchaseItem[]> GetActive(
         IReadOnlyCollection<long>? deezerAlbumIds = null, bool includeCompleted = false,
-        bool recentUpgrades = false, bool unaudited = false)
+        bool recentUpgrades = false, bool unaudited = false, Func<string, bool>? isDev = null)
     {
         await Reconcile();
         var rows = deezerAlbumIds is null
@@ -114,7 +117,9 @@ public class PurchaseService
             : await _purchases.GetByDeezerAlbumIds(deezerAlbumIds);
         var since = DateTimeOffset.UtcNow - RecentUpgradeWindow;
         return rows
-            .Select(p => unaudited && IsReadyForReview(p, since) ? p with { ReadyForReview = true } : p)
+            .Select(p => unaudited && IsReadyForReview(p, since) && !ADevAsked(p, isDev)
+                ? p with { ReadyForReview = true }
+                : p)
             .Where(p => includeCompleted
                         || p.Status != PurchaseStatus.InLibrary
                         || (recentUpgrades && IsRecentUpgrade(p, since))
@@ -134,6 +139,16 @@ public class PurchaseService
     private static bool IsReadyForReview(PurchaseItem p, DateTimeOffset since) =>
         p.Status == PurchaseStatus.InLibrary && p.InLibraryAt is not null && p.AuditedAt is null
         && !IsRecentUpgrade(p, since);
+
+    /// <summary>
+    /// Whether a dev is among those known to have asked for this — whoever pressed Download or pasted
+    /// it, and whose likes queued it. Those rows are treated as reviewed already: a dev who wanted the
+    /// album has seen it land, so the audit list is left to what only other people's requests brought
+    /// in. A row nobody is recorded as asking for (an old row, or one queued with no requester) can't be
+    /// said to be a dev's, so it stays on the list.
+    /// </summary>
+    private static bool ADevAsked(PurchaseItem p, Func<string, bool>? isDev) =>
+        isDev is not null && (p.LikedBy ?? []).Append(p.AddedBy).OfType<string>().Any(isDev);
 
     /// <summary>
     /// Ticks finished downloads off the dev audit list. Only rows that are ready for review — one still

@@ -31,9 +31,15 @@ public sealed class DevUsers
     /// </summary>
     public bool Includes(ClaimsPrincipal user)
     {
-        var username = user.FindFirst("preferred_username")?.Value?.ToLowerInvariant();
-        return username != null && _usernames.Contains(username);
+        var username = user.FindFirst("preferred_username")?.Value;
+        return username != null && IncludesUsername(username);
     }
+
+    /// <summary>
+    /// Whether a stored username (a purchase's <c>AddedBy</c> or <c>LikedBy</c>, say) belongs to a dev.
+    /// Case-insensitive, as <see cref="Includes"/> is.
+    /// </summary>
+    public bool IncludesUsername(string username) => _usernames.Contains(username.ToLowerInvariant());
 
     /// <summary>
     /// The real gate on the dev panel and its endpoints: the user is a dev <em>and</em> the credential
