@@ -584,12 +584,12 @@ public class ArchiveBuilderTests
     }
 
     [Fact]
-    public void A_match_correction_is_filed_with_its_artist_too()
+    public void A_match_correction_is_filed_with_the_album_it_names()
     {
-        // Nobody's opinion — a correction to how a release is identified. It belongs to the artist for
-        // the same reason a block does, and needs no `artist` field of its own.
+        // Nobody's opinion — a correction to how a release is identified. It is about one record the
+        // library owns, so it sits in that record's file rather than with the artist.
         var files = new ArchiveBuilder().Build(Input(
-            artists: [Artist("Radiohead", "Kid A")],
+            artists: [Artist("Radiohead", "Kid A", "Amnesiac")],
             matchOverrides:
             [
                 new JsonObject
@@ -600,9 +600,46 @@ public class ArchiveBuilderTests
                 },
             ]));
 
-        var metadata = File(files, "Library/Radiohead/metadata.yaml");
-        metadata.Should().Contain("matchCorrections:");
-        metadata.Should().Contain("deezerTitle: \"Kid A.\"").And.Contain("libraryTitle: \"Kid A\"");
+        File(files, "Library/Radiohead/Kid A.yaml").Should().Contain("deezerTitles:").And.Contain("\"Kid A.\"");
+        File(files, "Library/Radiohead/Amnesiac.yaml").Should().NotContain("deezerTitles");
+        File(files, "Library/Radiohead/metadata.yaml").Should().NotContain("Kid A.");
+    }
+
+    [Fact]
+    public void A_match_correction_finds_its_album_whatever_the_case()
+    {
+        // Overrides are stored under a folded artist and whatever album spelling the library had when
+        // the match was made; neither need match the catalog's casing today.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Radiohead", "Kid A")],
+            matchOverrides:
+            [
+                new JsonObject
+                {
+                    ["matchArtist"] = "radiohead",
+                    ["deezerTitle"] = "Kid A.",
+                    ["libraryTitle"] = "KID A",
+                },
+            ]));
+
+        File(files, "Library/Radiohead/Kid A.yaml").Should().Contain("\"Kid A.\"");
+    }
+
+    [Fact]
+    public void A_match_correction_for_an_album_no_longer_held_is_dropped()
+    {
+        // It only ever stopped an owned record being offered again. With the record gone it explains
+        // nothing, and an artist the library doesn't carry isn't given a directory for it.
+        var files = new ArchiveBuilder().Build(Input(
+            artists: [Artist("Radiohead", "Amnesiac")],
+            matchOverrides:
+            [
+                new JsonObject { ["matchArtist"] = "Radiohead", ["deezerTitle"] = "Kid A.", ["libraryTitle"] = "Kid A" },
+                new JsonObject { ["matchArtist"] = "Portishead", ["deezerTitle"] = "Dummy.", ["libraryTitle"] = "Dummy" },
+            ]));
+
+        files.Should().NotContain(f => f.Contents.Contains("Kid A.") || f.Contents.Contains("Dummy."));
+        Paths(files).Should().NotContain(p => p.StartsWith("Library/Portishead/"));
     }
 
     // ---- playlists ----

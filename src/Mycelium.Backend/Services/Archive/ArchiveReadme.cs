@@ -64,9 +64,10 @@ else.
 ```
 Library/
   Radiohead/
-    metadata.yaml          the artist: resolved identities, who likes them, and what has been
-                           decided about them — blocked records, manual match corrections
-    Kid A.yaml             the album: quality, who acquired it, its songs and their ratings
+    metadata.yaml          the artist: resolved identities, who likes them, and the records
+                           blocked for them
+    Kid A.yaml             the album: quality, who acquired it, the catalogue titles it has
+                           been matched to by hand, its songs and their ratings
 users.yaml                 the people, and their linked media-server accounts
 playlists/
   <person>.yaml            that person's playlists
@@ -94,26 +95,20 @@ blocks:
     scope: "Release"
     blockedBy: "noggog"
     createdAt: "2025-06-02T11:20:41Z"
-matchCorrections:
-  - deezerTitle: "Kid A."
-    libraryTitle: "Kid A"
 ```
 
 `ratings` is the per-person verdict on the **artist** — `Liked`, `Disliked` or `Indifferent`, keyed
 by username, with `confirmed` where somebody stood by it a second time.
 
-`blocks` and `matchCorrections` are the standing decisions made about this act, and they are why a
-directory here may hold nothing but a `metadata.yaml`: a block is usually placed on a record the
-library does *not* have, and the act it belongs to needn't be one the library carries at all.
+`blocks` are the standing decisions made about this act's records, and they are why a directory here
+may hold nothing but a `metadata.yaml`: a block is usually placed on a record the library does *not*
+have, and the act it belongs to needn't be one the library carries at all.
 
 - A **block** takes a record off the offer list for everyone. `scope: "Release"` means don't carry it
   — a bad catalogue entry, a reissue duplicating something owned, a record decided against.
   `scope: "Upgrade"` means keep the copy we have and stop offering to replace it with a better one;
   the record stays owned and visible everywhere else. `blockedBy` names whoever placed it, and is
   absent where nobody was recorded.
-- A **match correction** is a human saying "the catalogue's `deezerTitle` is the record we already
-  hold as `libraryTitle`", stopping an album the library owns from being offered again under a name
-  it doesn't use. It belongs to nobody — it is a fact about the library, not an opinion of it.
 
 ## An album file
 
@@ -122,6 +117,8 @@ album: "Kid A"
 artist: "Radiohead"
 quality: "Lossless"
 acquiredBy: "kelsey"
+deezerTitles:
+  - "Kid A."
 musicBrainz:
   releaseGroup: "b8048f24-c026-3398-b23a-b5e50716cbc7"
 songs:
@@ -145,6 +142,10 @@ as a particular pressing, and the only identifier on this file that is stable fo
 re-key on if the titles have moved by the time you read this. It is absent where MusicBrainz has no
 entry for the record (bootlegs, DJ mixes, a library's own compilations) or where it had not yet been
 looked up when the snapshot was taken.
+
+`deezerTitles` are the catalogue's names for this record wherever they differ from the library's and
+a person matched the two by hand, so it isn't offered again under a name the library doesn't use. It
+belongs to nobody: it records a fact about the library, not an opinion of it.
 
 Songs are listed in running order, so no track numbers are stored. `acquiredBy` names whoever asked
 for the record by hand; most arrive automatically and name nobody. When it was acquired is not a

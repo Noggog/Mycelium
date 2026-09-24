@@ -72,7 +72,7 @@ public class TakeoutTests
         ],
         MatchOverrides:
         [
-            new JsonObject { ["matchArtist"] = "Radiohead", ["deezerTitle"] = "Kid A", ["libraryTitle"] = "Kid A." },
+            new JsonObject { ["matchArtist"] = "Radiohead", ["deezerTitle"] = "Kid A.", ["libraryTitle"] = "Kid A" },
         ],
         TrackRatings:
         [
@@ -135,7 +135,7 @@ public class TakeoutTests
     {
         // Nobody's opinion — a correction to how a release is identified, which is a fact about the
         // library and is needed to read the rest of the export.
-        File(Files(Mine), "Library/Radiohead/metadata.yaml").Should().Contain("Kid A.");
+        File(Files(Mine), "Library/Radiohead/Kid A.yaml").Should().Contain("\"Kid A.\"");
     }
 
     // ---- what is left behind ----

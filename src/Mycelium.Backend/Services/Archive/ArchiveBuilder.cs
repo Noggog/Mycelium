@@ -120,7 +120,8 @@ public class ArchiveBuilder
         var artistRatings = ArtistVerdicts(input.ArtistVerdicts, identities);
         var acquisitions = Acquisitions(input.Purchases);
         var songs = SongsByAlbum(input.LibraryTracks, input.TrackRatings, identities);
-        var (blocks, corrections, filed) = Decisions(input, identities, catalogByName.Keys);
+        var (blocks, filed) = Blocks(input, identities, catalogByName.Keys);
+        var corrections = Corrections(input.MatchOverrides, catalogByName.Keys);
 
         // Every artist the snapshot has anything to say about: the catalog, plus the artists that only
         // a decision names. The whole set is escaped in one call, because two names can only be known
@@ -136,8 +137,7 @@ public class ArchiveBuilder
             files.Add(new ArchiveFile(
                 $"{directory}/{ArtistMetadata}",
                 CanonicalYaml.Document(ArtistFile(
-                    artist, name, artistRatings,
-                    blocks.GetValueOrDefault(name), corrections.GetValueOrDefault(name)))));
+                    artist, name, artistRatings, blocks.GetValueOrDefault(name)))));
 
             if (artist is null)
             {
@@ -148,13 +148,15 @@ public class ArchiveBuilder
             var quality = AlbumQuality(artist);
             var releaseGroups = AlbumIdentities(artist);
             var albumPaths = ArchivePaths.ForNames(albums);
+            var deezerTitles = DeezerTitles(albums, corrections.GetValueOrDefault(name));
 
             foreach (var album in albums)
             {
                 files.Add(new ArchiveFile(
                     $"{directory}/{albumPaths[album]}.yaml",
-                    CanonicalYaml.Document(
-                        AlbumFile(name, album, quality, releaseGroups, acquisitions, songs))));
+                    CanonicalYaml.Document(AlbumFile(
+                        name, album, quality, releaseGroups, acquisitions, songs,
+                        deezerTitles.GetValueOrDefault(album)))));
             }
         }
 
@@ -169,8 +171,7 @@ public class ArchiveBuilder
         JsonObject? artist,
         string name,
         IReadOnlyDictionary<string, JsonObject> artistRatings,
-        JsonArray? blocks,
-        JsonArray? corrections)
+        JsonArray? blocks)
     {
         var row = new JsonObject { ["artist"] = name };
 
@@ -211,11 +212,6 @@ public class ArchiveBuilder
             row["blocks"] = blocks;
         }
 
-        if (corrections is not null)
-        {
-            row["matchCorrections"] = corrections;
-        }
-
         return row;
     }
 
@@ -225,7 +221,8 @@ public class ArchiveBuilder
         IReadOnlyDictionary<string, string> quality,
         IReadOnlyDictionary<string, string> releaseGroups,
         IReadOnlyDictionary<string, string> acquisitions,
-        IReadOnlyDictionary<string, JsonArray> songs)
+        IReadOnlyDictionary<string, JsonArray> songs,
+        JsonArray? deezerTitles)
     {
         var row = new JsonObject
         {
@@ -260,6 +257,11 @@ public class ArchiveBuilder
         if (acquisitions.TryGetValue(key, out var by))
         {
             row["acquiredBy"] = by;
+        }
+
+        if (deezerTitles is not null)
+        {
+            row["deezerTitles"] = deezerTitles;
         }
 
         if (songs.TryGetValue(key, out var tracks))
@@ -476,19 +478,14 @@ public class ArchiveBuilder
     // ---- decisions ----
 
     /// <summary>
-    /// Blocks and manual match corrections, grouped into the artist file each belongs in, plus the
-    /// artists those rows name (<c>Filed</c>) so the caller can give an artist the library doesn't
-    /// hold a directory of their own.
+    /// Blocks, grouped into the artist file each belongs in, plus the artists those rows name
+    /// (<c>Filed</c>) so the caller can give an artist the library doesn't hold a directory of their
+    /// own.
     ///
-    /// <para>Both are per-artist facts, so they live with the artist rather than in a register of
-    /// their own — one place to look for everything decided about an act, and a change to one of them
-    /// diffs as that artist rather than as a line moving inside a file covering every artist at
-    /// once.</para>
+    /// <para>A block lives with the artist rather than the album because the album is usually one the
+    /// library does <em>not</em> have — there is no album file for it to go in.</para>
     /// </summary>
-    private static (
-        IReadOnlyDictionary<string, JsonArray> Blocks,
-        IReadOnlyDictionary<string, JsonArray> Corrections,
-        IReadOnlyList<string> Filed) Decisions(
+    private static (IReadOnlyDictionary<string, JsonArray> Blocks, IReadOnlyList<string> Filed) Blocks(
         ArchiveInput input,
         IReadOnlyDictionary<string, string> identities,
         IEnumerable<string> catalog)
@@ -501,29 +498,9 @@ public class ArchiveBuilder
             .Where(b => Str(b, "artist") is not null && b["retryAfter"] is null)
             .ToList();
 
-        var corrections = input.MatchOverrides.Where(o => Str(o, "matchArtist") is not null).ToList();
-
-        var filing = Filing(
-            catalog,
-            blocks.Select(b => Str(b, "artist")!)
-                .Concat(corrections.Select(o => Str(o, "matchArtist")!))
-                .ToList());
+        var filing = Filing(catalog, blocks.Select(b => Str(b, "artist")!).ToList());
 
         var byArtist = new Dictionary<string, List<(string Sort, JsonObject Row)>>(StringComparer.Ordinal);
-        var correctionsByArtist =
-            new Dictionary<string, List<(string Sort, JsonObject Row)>>(StringComparer.Ordinal);
-
-        void Add(
-            Dictionary<string, List<(string Sort, JsonObject Row)>> target,
-            string artist, string sort, JsonObject row)
-        {
-            if (!target.TryGetValue(artist, out var rows))
-            {
-                target[artist] = rows = [];
-            }
-
-            rows.Add((sort, row));
-        }
 
         foreach (var block in blocks)
         {
@@ -547,22 +524,104 @@ public class ArchiveBuilder
                 row["blockedBy"] = identities.TryGetValue(by, out var name) ? name : by;
             }
 
-            Add(byArtist, filing[Str(block, "artist")!],
-                SortKey(Str(block, "album"), Str(block, "scope")), row);
+            var artist = filing[Str(block, "artist")!];
+            if (!byArtist.TryGetValue(artist, out var rows))
+            {
+                byArtist[artist] = rows = [];
+            }
+
+            rows.Add((SortKey(Str(block, "album"), Str(block, "scope")), row));
         }
 
-        foreach (var over in corrections)
+        return (Collapse(byArtist), filing.Values.Distinct(StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>
+    /// Manual match corrections, grouped by the catalog artist they belong to: each is a
+    /// <c>(libraryTitle, deezerTitle)</c> pair saying the catalogue's title is a record the library
+    /// already holds under another name.
+    ///
+    /// <para>Only artists the library carries are kept. A correction always points at an album the
+    /// library owns, so one whose artist has gone has nothing left to explain.</para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, List<(string LibraryTitle, string DeezerTitle)>> Corrections(
+        IReadOnlyList<JsonObject> overrides, IEnumerable<string> catalog)
+    {
+        var known = catalog.ToHashSet(StringComparer.Ordinal);
+        var rows = overrides
+            .Where(o => Str(o, "matchArtist") is not null
+                        && Str(o, "libraryTitle") is not null
+                        && Str(o, "deezerTitle") is not null)
+            .ToList();
+
+        var filing = Filing(known, rows.Select(o => Str(o, "matchArtist")!).ToList());
+
+        var result = new Dictionary<string, List<(string, string)>>(StringComparer.Ordinal);
+        foreach (var row in rows)
         {
-            var row = new JsonObject();
-            Copy(over, row, "deezerTitle", "libraryTitle", "createdAt");
-            Add(correctionsByArtist, filing[Str(over, "matchArtist")!],
-                SortKey(Str(over, "deezerTitle")), row);
+            var artist = filing[Str(row, "matchArtist")!];
+            if (!known.Contains(artist))
+            {
+                continue;
+            }
+
+            if (!result.TryGetValue(artist, out var list))
+            {
+                result[artist] = list = [];
+            }
+
+            list.Add((Str(row, "libraryTitle")!, Str(row, "deezerTitle")!));
         }
 
-        return (
-            Collapse(byArtist),
-            Collapse(correctionsByArtist),
-            filing.Values.Distinct(StringComparer.Ordinal).ToList());
+        return result;
+    }
+
+    /// <summary>
+    /// Album title -> the catalogue titles corrected onto it, for one artist.
+    ///
+    /// <para>Same rule as <see cref="Filing"/>: an exact title wins and a case-insensitive one is the
+    /// fallback, since the correction was recorded under whatever spelling the library had at the
+    /// time. A correction naming an album the artist no longer holds is dropped — once the record is
+    /// gone, there is nothing for it to stop being offered again.</para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, JsonArray> DeezerTitles(
+        IReadOnlyList<string> albums, List<(string LibraryTitle, string DeezerTitle)>? corrections)
+    {
+        if (corrections is null)
+        {
+            return new Dictionary<string, JsonArray>();
+        }
+
+        var exact = albums.ToHashSet(StringComparer.Ordinal);
+        var folded = albums
+            .GroupBy(Fold, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(n => n, StringComparer.Ordinal).First(),
+                StringComparer.Ordinal);
+
+        var byAlbum = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        foreach (var (libraryTitle, deezerTitle) in corrections)
+        {
+            var album = exact.Contains(libraryTitle) ? libraryTitle
+                : folded.GetValueOrDefault(Fold(libraryTitle));
+            if (album is null)
+            {
+                continue;
+            }
+
+            if (!byAlbum.TryGetValue(album, out var titles))
+            {
+                byAlbum[album] = titles = new SortedSet<string>(StringComparer.Ordinal);
+            }
+
+            titles.Add(deezerTitle);
+        }
+
+        return byAlbum.ToDictionary(
+            pair => pair.Key,
+            pair => new JsonArray(pair.Value.Select(t => (JsonNode)t!).ToArray()),
+            StringComparer.Ordinal);
     }
 
     /// <summary>
