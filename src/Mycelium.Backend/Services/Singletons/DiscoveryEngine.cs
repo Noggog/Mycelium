@@ -490,6 +490,10 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
     /// second pressings of a record already listed are persisted but withheld from the cards; they stay
     /// reachable in the artist's discography. Whatever Plex already owns for the artist is diffed out,
     /// so a partly-owned artist only surfaces its gaps.
+    ///
+    /// Globally blocked albums are <em>marked</em> rather than dropped, as on the Artists-page
+    /// drill-down: someone who has just gone looking for this artist's records should see that one was
+    /// blocked (and be able to lift it), not be left wondering where it went.
     /// </summary>
     public async Task<IReadOnlyList<FeedItem>> ArtistAlbums(string userId, string artistName)
     {
@@ -504,10 +508,9 @@ public class DiscoveryEngine : IQueueReplenisher, IVerdictFollowUp, IRecommended
             .Where(m => m.IsFeedEligible)
             .Where(m => !m.AlternatePressing)
             .Where(m => !decided.Contains(AlbumRatingKey.For(m.Artist.ArtistName, m.Album.AlbumName)))
-            .Where(m => !IsBlocked(blocked, m))
             .Select(m => new FeedItem(
                 FeedKind.MissingAlbum, m.Artist, m.Album.AlbumName, m.AlbumArt, 0, Array.Empty<string>(),
-                m.DeezerAlbumId, m.Year))
+                m.DeezerAlbumId, m.Year, Blocked: IsBlocked(blocked, m)))
             .ToList();
     }
 

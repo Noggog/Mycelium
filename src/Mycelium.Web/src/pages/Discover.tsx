@@ -653,7 +653,9 @@ function ArtistAlbumsPanel({
           <SubAlbumRow
             key={rowKey}
             album={album}
-            verdict={rated.get(rowKey)}
+            // A block placed before this panel loaded arrives on the album itself rather than as a
+            // mark made here; shown the same way (as on Browse) so it can be seen and lifted.
+            verdict={rated.get(rowKey) ?? (album.blocked ? 'blocked' : undefined)}
             isOpen={openAlbum === rowKey}
             canPlay={!!album.deezerAlbumId}
             disabled={disabled}
@@ -1231,10 +1233,19 @@ export default function Discover() {
   // Optimistically drops the in-place mark so the card's 👍/👎/💤 reappear instantly; rolls back on
   // failure. Undoing a recommended artist also clears the album decisions made in its readout panel —
   // you went back on the artist, so its album picks shouldn't linger.
+  // Whether undoing this row means lifting a global block: one placed here this session, or one the
+  // server reported on an inline album.
+  const isBlockedRow = (item: FeedItem) => rated.get(rowKeyFor(item)) === 'blocked' || item.blocked
+  // Sets the server-reported block flag on a cached inline album. Cleared as soon as an unblock is
+  // sent, so the row doesn't go back to showing "Blocked" from stale data until the panel refetches.
+  const setCachedBlocked = (item: FeedItem, blocked: boolean) =>
+    queryClient.setQueryData<FeedItem[]>(['artist-albums', item.artist.artistName], (albums) =>
+      albums?.map((a) => (rowKeyFor(a) === rowKeyFor(item) ? { ...a, blocked } : a)))
+
   const undo = useMutation({
     mutationFn: async (item: FeedItem) => {
       // A block isn't a verdict — there's no rating to clear, so undo means lifting it globally.
-      if (rated.get(rowKeyFor(item)) === 'blocked') {
+      if (isBlockedRow(item)) {
         await unblockAlbum(item.artist.artistName, item.album!)
         return
       }
@@ -1245,20 +1256,28 @@ export default function Discover() {
     },
     onMutate: (item) => {
       const prev = new Map(rated)
+      const wasBlocked = !!item.blocked
+      if (wasBlocked) setCachedBlocked(item, false)
       const next = new Map(rated)
       next.delete(rowKeyFor(item))
       if (item.kind === 'RecommendedArtist') {
         decidedAlbumsFor(item.artist.artistName).forEach((a) => next.delete(rowKeyFor(a)))
       }
       setRated(next)
-      return { prev }
+      return { prev, wasBlocked }
     },
-    onError: (_err, _item, ctx) => {
+    onError: (_err, item, ctx) => {
       if (ctx?.prev) setRated(ctx.prev)
+      if (ctx?.wasBlocked) setCachedBlocked(item, true)
     },
-    onSuccess: () => {
+    onSuccess: (_data, item) => {
       queryClient.invalidateQueries({ queryKey: ['ratings'] })
       queryClient.invalidateQueries({ queryKey: ['purchases'] })
+      // Lifting a block changes what every album surface shows, same as placing one.
+      if (item.album) {
+        queryClient.invalidateQueries({ queryKey: ['artist-discography'] })
+        queryClient.invalidateQueries({ queryKey: ['artist-albums'] })
+      }
     },
   })
   const shuffle = () => {

@@ -239,7 +239,10 @@ public record FeedItem(
     // For a FeedKind.UpgradeAlbum card: how good the copy already in the library is, so the card can
     // say what it is offering to replace ("You have this as MP3") rather than reading like a gap.
     // Null on every other kind.
-    AudioQuality? OwnedQuality = null);
+    AudioQuality? OwnedQuality = null,
+    // Blocked for everyone (see IAlbumBlockRepo). Only ever set on a liked artist's inline albums,
+    // which mark a block rather than hide it; every feed drops blocked albums outright.
+    bool Blocked = false);
 
 /// <summary>
 /// Why the weekly sweep thinks a verdict was wrong — a keeper thumbed down, or a dud thumbed up: a

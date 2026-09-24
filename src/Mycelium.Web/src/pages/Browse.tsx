@@ -777,6 +777,7 @@ function ArtistAlbums({ artist }: { artist: string }) {
     year: a.year,
     reconsider: null,
         ownedQuality: null,
+    blocked: a.blocked,
   })
 
   const rateAlbum = useMutation({
@@ -1543,6 +1544,7 @@ export default function Browse() {
         year: null,
         reconsider: null,
         ownedQuality: null,
+        blocked: false,
       }
       return current === verdictStatus(verdict) ? clearRating(item) : rate(item, verdict)
     },

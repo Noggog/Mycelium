@@ -183,6 +183,9 @@ export interface FeedItem {
   // For an UpgradeAlbum card: what quality the copy already in the library is, so the card can say
   // what it's offering to replace. Null on every other kind.
   ownedQuality: AudioQuality | null
+  // Blocked for everyone. Only set on a liked artist's inline albums, which show a block (so it can be
+  // lifted) rather than hide it; the feeds drop blocked albums outright.
+  blocked: boolean
 }
 
 // Mirror ReconsiderSignal (Discovery.cs) — the Plex rating snapshot that got a thumbed artist flagged,

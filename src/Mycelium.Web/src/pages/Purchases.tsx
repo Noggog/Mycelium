@@ -730,6 +730,7 @@ export default function Purchases() {
         year: null,
         reconsider: null,
         ownedQuality: null,
+        blocked: false,
       }
       await (item.kind === 'UpgradeAlbum' ? rate(feedItem, 'down') : clearRating(feedItem))
 

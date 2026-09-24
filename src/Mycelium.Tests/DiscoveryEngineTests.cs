@@ -779,6 +779,30 @@ public class DiscoveryEngineTests
     }
 
     [Fact]
+    public async Task ArtistAlbums_marks_a_blocked_album_rather_than_hiding_it()
+    {
+        // Like the drill-down: someone who went looking for a new artist's records sees the block
+        // (and can lift it) instead of the album silently missing.
+        _deezer.SearchArtists("Phoebe Bridgers", Arg.Any<int>())
+            .Returns(new[] { new DeezerArtist { id = 7, name = "Phoebe Bridgers" } });
+        _deezer.GetAlbums(7).Returns(new[]
+        {
+            new DeezerAlbum { id = 201, title = "Stranger in the Alps", record_type = "album" },
+            new DeezerAlbum { id = 202, title = "Punisher", record_type = "album" },
+        });
+        _albumRatings.GetDecidedKeys(User).Returns(new HashSet<string>());
+        _blocks.GetAll().Returns(new[] { new AlbumBlock("Phoebe Bridgers", "Punisher", User) });
+
+        var items = await _sut.ArtistAlbums(User, "Phoebe Bridgers");
+
+        items.Select(i => (i.Album, i.Blocked)).Should().BeEquivalentTo(new[]
+        {
+            ("Stranger in the Alps", false),
+            ("Punisher", true),
+        });
+    }
+
+    [Fact]
     public async Task Ratings_review_hides_albums_that_now_exist_in_the_library()
     {
         _albumRatings.GetRated(User).Returns(new[]
