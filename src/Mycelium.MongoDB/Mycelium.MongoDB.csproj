@@ -14,4 +14,8 @@
       <ProjectReference Include="..\Mycelium.Interfaces\Mycelium.Interfaces.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <InternalsVisibleTo Include="Mycelium.Tests" />
+    </ItemGroup>
+
 </Project>

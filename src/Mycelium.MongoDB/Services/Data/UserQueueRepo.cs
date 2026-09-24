@@ -68,7 +68,7 @@ public class UserQueueRepo : IUserQueueRepo
     /// still acted on it. Lowercased the same way <see cref="AlbumRatingKey"/> is. The stored
     /// <c>artist</c> field keeps whichever spelling first created the row.
     /// </summary>
-    private static string DocId(string userId, string artistName) =>
+    internal static string DocId(string userId, string artistName) =>
         $"{userId}:{artistName.ToLowerInvariant()}";
 
     public async Task UpsertCandidates(string userId, IReadOnlyList<DiscoveryCandidate> candidates)
@@ -547,7 +547,7 @@ public class UserQueueRepo : IUserQueueRepo
         return result.ToArray();
     }
 
-    private static IEnumerable<DiscoveryCandidate> MergeSpellings(IReadOnlyList<DiscoveryCandidate> candidates) =>
+    internal static IEnumerable<DiscoveryCandidate> MergeSpellings(IReadOnlyList<DiscoveryCandidate> candidates) =>
         candidates
             .GroupBy(c => c.Artist.ArtistName, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.Count() == 1
@@ -605,7 +605,7 @@ public class UserQueueRepo : IUserQueueRepo
     /// pending one leads. Sightings are pooled from every row either way: score summed, provenance
     /// unioned, the shortest depth and the earliest arrival kept.
     /// </summary>
-    private static BsonDocument MergeDocs(IReadOnlyList<BsonDocument> docs)
+    internal static BsonDocument MergeDocs(IReadOnlyList<BsonDocument> docs)
     {
         static bool IsDecided(BsonDocument d) =>
             d.TryGetValue(FieldStatus, out var s) && s.IsString && s.AsString != StatusPending;

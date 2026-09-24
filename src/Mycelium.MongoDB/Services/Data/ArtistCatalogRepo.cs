@@ -109,6 +109,8 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             await collection.BulkWriteAsync(writes);
         }
 
+        await AdoptCaseVariantDecisions(artists);
+
         // Anything not touched by this sync is no longer in the Plex library.
         var absent = await collection.UpdateManyAsync(
             Builders<BsonDocument>.Filter.And(
@@ -132,6 +134,137 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             MarkedAbsent: (int)absent.ModifiedCount,
             TotalPresent: (int)totalPresent,
             NewlyPresent: newlyPresent);
+    }
+
+    /// <summary>
+    /// Moves a user's identity decisions onto the library artist they were meant for when the two are
+    /// spelt differently. A pin or detach on an artist the library doesn't have creates a doc of its
+    /// own (see <see cref="CreateForUserDecision"/>), on the promise that Plex's sync will later write
+    /// onto that same <c>_id</c>. It won't when Plex capitalises the name differently ("Fitz and The
+    /// Tantrums" pinned from a search, "Fitz and the Tantrums" in the library), and the decision sat on
+    /// a doc nothing reads while the library artist re-guessed its identity by name. The same happens
+    /// to a pin on a library artist whose spelling Plex later changed.
+    ///
+    /// <para>Per source, and never over a decision the library artist already carries: that one was
+    /// made about the name the library actually uses. A pin-only doc is deleted once adopted; an old
+    /// library doc (<c>present: false</c>) is left as it was. A name two incoming artists share
+    /// case-blind is skipped, as there is no telling which one the decision was about.</para>
+    /// </summary>
+    private async Task AdoptCaseVariantDecisions(IReadOnlyList<ArtistMetadata> artists)
+    {
+        var incoming = artists.Select(a => a.ArtistKey.ArtistName).ToList();
+
+        var f = Builders<BsonDocument>.Filter;
+        var decided = await Collection.Find(
+                f.Ne(FieldPresent, true)
+                & (f.Eq(FieldDeezerOverride, true) | f.Eq(FieldDeezerUnlinked, true)
+                   | f.Eq(FieldMusicBrainzOverride, true) | f.Eq(FieldMusicBrainzUnlinked, true)))
+            .ToListAsync();
+        if (decided.Count == 0)
+        {
+            return;
+        }
+
+        var targets = (await Collection.Find(f.In("_id", incoming)).ToListAsync())
+            .ToDictionary(d => d["_id"].AsString, StringComparer.Ordinal);
+
+        foreach (var adoption in PlanAdoptions(incoming, decided, targets))
+        {
+            if (adoption.Set.ElementCount > 0 || adoption.Unset.Count > 0)
+            {
+                var update = Builders<BsonDocument>.Update;
+                var changes = adoption.Set.Elements.Select(e => update.Set(e.Name, e.Value))
+                    .Concat(adoption.Unset.Select(u => update.Unset(u)));
+                await Collection.UpdateOneAsync(f.Eq("_id", adoption.Target), update.Combine(changes));
+            }
+
+            if (adoption.DeleteFrom)
+            {
+                await Collection.DeleteOneAsync(f.Eq("_id", adoption.From));
+            }
+        }
+    }
+
+    /// <summary>What adopting one doc's decisions writes to the library artist it belongs to.</summary>
+    internal record DecisionAdoption(
+        string From, string Target, BsonDocument Set, IReadOnlyList<string> Unset, bool DeleteFrom);
+
+    /// <summary>
+    /// The pure half of <see cref="AdoptCaseVariantDecisions"/>. <paramref name="decided"/> are the
+    /// non-library docs carrying a user decision, <paramref name="targets"/> the current docs of the
+    /// incoming library artists by exact name.
+    /// </summary>
+    internal static IReadOnlyList<DecisionAdoption> PlanAdoptions(
+        IReadOnlyCollection<string> incoming,
+        IReadOnlyList<BsonDocument> decided,
+        IReadOnlyDictionary<string, BsonDocument> targets)
+    {
+        var exact = incoming.ToHashSet(StringComparer.Ordinal);
+        var byCaseBlind = incoming
+            .Distinct(StringComparer.Ordinal)
+            .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() == 1)
+            .ToDictionary(g => g.Key, g => g.Single(), StringComparer.OrdinalIgnoreCase);
+
+        var plan = new List<DecisionAdoption>();
+        foreach (var doc in decided)
+        {
+            var id = doc["_id"].AsString;
+            if (exact.Contains(id) || !byCaseBlind.TryGetValue(id, out var target))
+            {
+                continue;
+            }
+
+            var current = targets.TryGetValue(target, out var t) ? t : new BsonDocument();
+            var set = new BsonDocument();
+            var unset = new List<string>();
+            AdoptDecision(doc, current, set, unset, FieldDeezerOverride, FieldDeezerUnlinked,
+                [FieldDeezerId, FieldDeezerName, FieldDeezerFans, FieldDeezerLink, FieldImageUrl]);
+            AdoptDecision(doc, current, set, unset, FieldMusicBrainzOverride, FieldMusicBrainzUnlinked,
+                [FieldMusicBrainzMbid, FieldMusicBrainzName, FieldMusicBrainzDisambiguation]);
+
+            plan.Add(new DecisionAdoption(id, target, set, unset, DeleteFrom: !doc.Contains(FieldPresent)));
+        }
+
+        return plan;
+    }
+
+    /// <summary>
+    /// Adds one source's decision from <paramref name="from"/> to the pending write: a pin brings its
+    /// identity fields, a detach clears the target's (the same shape SetDeezerUnlinked and
+    /// SetMusicBrainzUnlinked write). Nothing if <paramref name="from"/> made no decision for the
+    /// source, or <paramref name="target"/> already has one.
+    /// </summary>
+    private static void AdoptDecision(
+        BsonDocument from, BsonDocument target, BsonDocument set, List<string> unset,
+        string overrideField, string unlinkedField, string[] identityFields)
+    {
+        static bool Flag(BsonDocument d, string field) =>
+            d.TryGetValue(field, out var v) && v.IsBoolean && v.AsBoolean;
+
+        if (Flag(target, overrideField) || Flag(target, unlinkedField))
+        {
+            return;
+        }
+
+        if (Flag(from, overrideField))
+        {
+            set[overrideField] = true;
+            unset.Add(unlinkedField);
+            foreach (var field in identityFields)
+            {
+                if (from.TryGetValue(field, out var value))
+                {
+                    set[field] = value;
+                }
+            }
+        }
+        else if (Flag(from, unlinkedField))
+        {
+            set[unlinkedField] = true;
+            unset.Add(overrideField);
+            unset.AddRange(identityFields);
+        }
     }
 
     public async Task<int> BackfillImages(IReadOnlyList<ArtistMetadata> artists)
