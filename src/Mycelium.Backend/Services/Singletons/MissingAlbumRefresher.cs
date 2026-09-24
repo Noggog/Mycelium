@@ -95,6 +95,7 @@ public class MissingAlbumRefresher
         var missingTotal = 0;
 
         var skipped = 0;
+        var refreshed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var artist in present)
         {
             // Umbrella acts hold the collections people added by hand (see CollectionService), and
@@ -110,6 +111,7 @@ public class MissingAlbumRefresher
             try
             {
                 missingTotal += (await RefreshOne(artist.ArtistKey, ownedAlbums)).Count;
+                refreshed.Add(artist.ArtistKey.ArtistName);
             }
             catch (DeezerUnavailableException ex)
             {
@@ -121,6 +123,8 @@ public class MissingAlbumRefresher
                     "Missing-album sync: skipping {Artist} — {Reason}", artist.ArtistKey.ArtistName, ex.Message);
             }
         }
+
+        await PruneCaseVariants(present, refreshed);
 
         _logger.LogInformation(
             "Missing-album sync: scanned {Scanned} owned artist(s), {Missing} missing album(s) total"
@@ -202,6 +206,41 @@ public class MissingAlbumRefresher
             }
         }
         return all;
+    }
+
+    /// <summary>
+    /// Deletes rows filed under another spelling of an artist this pass just re-diffed — "the Beaches"
+    /// beside "The Beaches". They are left by the on-demand path, which writes a liked, not-yet-owned
+    /// artist under the name on the card (usually Deezer's). Once the band is in the library the sweep
+    /// walks Plex's spelling, and <see cref="IMissingAlbumRepo.ReplaceForArtist"/> matches exactly, so
+    /// the old set is never replaced: it goes on offering albums the library now holds, and the feed's
+    /// case-blind like check lets them through.
+    ///
+    /// <para>Only a spelling that is not itself a present artist goes. Two catalog entries that differ
+    /// by case can be two different acts, and each is the truth of its own rows. So does only a variant
+    /// of an artist that was actually refreshed: one Deezer wouldn't answer for keeps every spelling's
+    /// rows until a pass that hears back.</para>
+    /// </summary>
+    private async Task PruneCaseVariants(IEnumerable<CatalogArtist> present, HashSet<string> refreshed)
+    {
+        var presentNames = present.Select(a => a.ArtistKey.ArtistName).ToHashSet(StringComparer.Ordinal);
+        var orphans = (await _missing.GetAll())
+            .Select(m => m.Artist.ArtistName)
+            .Distinct(StringComparer.Ordinal)
+            .Where(name => !presentNames.Contains(name) && refreshed.Contains(name))
+            .ToList();
+
+        foreach (var orphan in orphans)
+        {
+            await _missing.ReplaceForArtist(orphan, Array.Empty<MissingAlbum>());
+        }
+
+        if (orphans.Count > 0)
+        {
+            _logger.LogInformation(
+                "Missing-album sync: dropped rows under {Count} stale artist spelling(s): {Spellings}",
+                orphans.Count, string.Join(", ", orphans));
+        }
     }
 
     /// <summary>

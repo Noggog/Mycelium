@@ -60,7 +60,16 @@ public class UserQueueRepo : IUserQueueRepo
     private IMongoCollection<BsonDocument> Collection =>
         _mongoDbProvider.database.GetCollection<BsonDocument>(CollectionName);
 
-    private static string DocId(string userId, string artistName) => $"{userId}:{artistName}";
+    /// <summary>
+    /// One doc per user per artist <em>regardless of casing</em>. Sources disagree on how a name is
+    /// spelt ("the Beaches" on Deezer, "The Beaches" in Plex, "THE BEACHES" from a playlist), and an
+    /// exact key gave each spelling its own row: a like saved under one was invisible to a lookup under
+    /// another, while the case-blind reads (<see cref="GetDecidedArtists"/>, the missing-album feed)
+    /// still acted on it. Lowercased the same way <see cref="AlbumRatingKey"/> is. The stored
+    /// <c>artist</c> field keeps whichever spelling first created the row.
+    /// </summary>
+    private static string DocId(string userId, string artistName) =>
+        $"{userId}:{artistName.ToLowerInvariant()}";
 
     public async Task UpsertCandidates(string userId, IReadOnlyList<DiscoveryCandidate> candidates)
     {
@@ -72,7 +81,9 @@ public class UserQueueRepo : IUserQueueRepo
         var now = DateTimeOffset.UtcNow.UtcDateTime;
         var models = new List<WriteModel<BsonDocument>>(candidates.Count);
 
-        foreach (var c in candidates)
+        // Two spellings of one artist in a batch share a doc id; folded here into one sighting so the
+        // bulk write doesn't upsert the same _id twice.
+        foreach (var c in MergeSpellings(candidates))
         {
             var name = c.Artist.ArtistName;
 
@@ -534,6 +545,125 @@ public class UserQueueRepo : IUserQueueRepo
         }
 
         return result.ToArray();
+    }
+
+    private static IEnumerable<DiscoveryCandidate> MergeSpellings(IReadOnlyList<DiscoveryCandidate> candidates) =>
+        candidates
+            .GroupBy(c => c.Artist.ArtistName, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.Count() == 1
+                ? g.First()
+                : new DiscoveryCandidate(
+                    g.First().Artist,
+                    g.Select(c => c.ImageUrl).FirstOrDefault(i => i != null),
+                    g.Sum(c => c.Score),
+                    g.SelectMany(c => c.Sources).Distinct().ToList(),
+                    g.Min(c => c.Depth)));
+
+    public async Task<int> MergeCaseDuplicates()
+    {
+        // Only the key fields for the scan: the collection is mostly pending candidates, and nearly
+        // every one is already under its lowercased id.
+        var keys = await (await Collection.FindAsync(
+            Builders<BsonDocument>.Filter.Empty,
+            new FindOptions<BsonDocument>
+            {
+                Projection = Builders<BsonDocument>.Projection.Include(FieldUserId).Include(FieldArtist),
+            })).ToListAsync();
+
+        var groups = keys
+            .Where(d => d.TryGetValue(FieldUserId, out var u) && u.IsString
+                        && d.TryGetValue(FieldArtist, out var a) && a.IsString)
+            .GroupBy(d => DocId(d[FieldUserId].AsString, d[FieldArtist].AsString))
+            .Where(g => g.Count() > 1 || g.Single()["_id"] != g.Key)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            var ids = group.Select(d => d["_id"]).ToList();
+            var docs = await (await Collection.FindAsync(Builders<BsonDocument>.Filter.In("_id", ids)))
+                .ToListAsync();
+            if (docs.Count == 0)
+            {
+                continue;
+            }
+
+            var merged = MergeDocs(docs);
+            merged["_id"] = group.Key;
+            await Collection.ReplaceOneAsync(
+                Builders<BsonDocument>.Filter.Eq("_id", group.Key), merged, new ReplaceOptions { IsUpsert = true });
+            await Collection.DeleteManyAsync(
+                Builders<BsonDocument>.Filter.In("_id", ids.Where(id => id != group.Key)));
+        }
+
+        return groups.Count;
+    }
+
+    /// <summary>
+    /// Folds one user's rows for a single artist into one. The verdict comes from the most recently
+    /// decided row, along with everything tied to it (snooze, confirmation flags, reconsider flag):
+    /// the latest thumb is the user's current mind. With no decided row, the highest-scored
+    /// pending one leads. Sightings are pooled from every row either way: score summed, provenance
+    /// unioned, the shortest depth and the earliest arrival kept.
+    /// </summary>
+    private static BsonDocument MergeDocs(IReadOnlyList<BsonDocument> docs)
+    {
+        static bool IsDecided(BsonDocument d) =>
+            d.TryGetValue(FieldStatus, out var s) && s.IsString && s.AsString != StatusPending;
+        static DateTime DecidedAt(BsonDocument d) =>
+            d.TryGetValue(FieldDecidedAt, out var t) && t.IsValidDateTime ? t.ToUniversalTime() : DateTime.MinValue;
+        static double Score(BsonDocument d) =>
+            d.TryGetValue(FieldScore, out var s) && s.IsNumeric ? s.ToDouble() : 0;
+
+        var winner = docs
+            .OrderByDescending(IsDecided)
+            .ThenByDescending(DecidedAt)
+            .ThenByDescending(Score)
+            .First();
+
+        var merged = winner.DeepClone().AsBsonDocument;
+        merged[FieldScore] = docs.Sum(Score);
+
+        var depths = docs
+            .Where(d => d.TryGetValue(FieldDepth, out var v) && v.IsNumeric)
+            .Select(d => d[FieldDepth].ToInt32())
+            .ToList();
+        if (depths.Count > 0)
+        {
+            merged[FieldDepth] = depths.Min();
+        }
+
+        var sources = docs
+            .Where(d => d.TryGetValue(FieldSources, out var v) && v.IsBsonArray)
+            .SelectMany(d => d[FieldSources].AsBsonArray)
+            .Where(v => v.IsString)
+            .Distinct()
+            .ToList();
+        if (sources.Count > 0)
+        {
+            merged[FieldSources] = new BsonArray(sources);
+        }
+
+        var added = docs
+            .Where(d => d.TryGetValue(FieldAddedAt, out var v) && v.IsValidDateTime)
+            .Select(d => d[FieldAddedAt].ToUniversalTime())
+            .ToList();
+        if (added.Count > 0)
+        {
+            merged[FieldAddedAt] = added.Min();
+        }
+
+        if (!merged.Contains(FieldImageUrl) || merged[FieldImageUrl].IsBsonNull)
+        {
+            var image = docs
+                .Select(d => d.TryGetValue(FieldImageUrl, out var v) && v.IsString ? v.AsString : null)
+                .FirstOrDefault(i => i != null);
+            if (image != null)
+            {
+                merged[FieldImageUrl] = image;
+            }
+        }
+
+        return merged;
     }
 
     private static DiscoveryCandidate ToCandidate(BsonDocument doc)

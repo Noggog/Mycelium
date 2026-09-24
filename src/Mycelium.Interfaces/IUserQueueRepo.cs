@@ -144,4 +144,11 @@ public interface IUserQueueRepo
     /// artist side of the combined-name cleanup. Includes Pending rows (cleanup just drops those).
     /// </summary>
     Task<CombinedArtistVerdict[]> FindCombinedRatings();
+
+    /// <summary>
+    /// One-time migration for the case-insensitive row key: folds rows that differ only in how the
+    /// artist is spelt into one per user and artist, and moves every surviving row onto the new key.
+    /// The most recently decided verdict wins. Idempotent. Returns how many artists were rewritten.
+    /// </summary>
+    Task<int> MergeCaseDuplicates();
 }

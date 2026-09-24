@@ -145,6 +145,21 @@ app.UseSerilogRequestLogging();
     }
 }
 
+// One-time migration for the case-insensitive verdict key. Rows used to be keyed on the artist exactly
+// as a source spelt it, so "the Beaches" (Deezer) and "The Beaches" (Plex) were separate verdicts: Browse
+// showed a band as unrated while the missing-album feed, which matches likes case-blind, treated it as
+// liked. Folds each set of spellings into one row, keeping the latest verdict. Idempotent — a second run
+// finds every row already on its key.
+{
+    using var scope = app.Services.CreateScope();
+    var merged = await scope.ServiceProvider.GetRequiredService<IUserQueueRepo>().MergeCaseDuplicates();
+    if (merged > 0)
+    {
+        app.Logger.LogInformation(
+            "Verdict keys: moved {Count} artist row set(s) onto the case-insensitive key", merged);
+    }
+}
+
 // Serve the built SPA (production: the Vite build is copied to wwwroot in the image). No-op in
 // local dev, where Vite serves the SPA itself and proxies /api + /auth to this backend.
 app.UseDefaultFiles();

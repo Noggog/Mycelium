@@ -599,6 +599,54 @@ public class MissingAlbumRefresherTests
             .Should().Be("brick body kids still daydream");
     }
 
+    [Fact]
+    public async Task Sweep_drops_rows_left_under_another_spelling_of_a_refreshed_artist()
+    {
+        // "the Beaches" rows were written while the band was a liked, un-owned Deezer artist; the
+        // library now files it as "The Beaches", which is the spelling the sweep walks.
+        const string plexName = "The Beaches";
+        const string deezerName = "the Beaches";
+        const string otherAct = "SOLE";
+        _catalog.GetAllPresent().Returns(new[]
+        {
+            new CatalogArtist(new ArtistKey(plexName), null, default),
+            new CatalogArtist(new ArtistKey(otherAct), null, default),
+            new CatalogArtist(new ArtistKey("Sole"), null, default),
+        });
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        foreach (var (name, id) in new[] { (plexName, 11L), (otherAct, 12L), ("Sole", 13L) })
+        {
+            _deezer.SearchArtists(name, Arg.Any<int>())
+                .Returns(new[] { new DeezerArtist { id = id, name = name } });
+            _deezer.GetAlbums(id).Returns(Array.Empty<DeezerAlbum>());
+        }
+        MissingAlbum Row(string artist) =>
+            new(new ArtistKey(artist), new AlbumKey("No Hard Feelings"), null, 1);
+        _missing.GetAll().Returns(new[] { Row(deezerName), Row(plexName), Row(otherAct), Row("Sole") });
+
+        await _sut.Refresh();
+
+        await _missing.Received(1).ReplaceForArtist(deezerName, Arg.Is<IReadOnlyList<MissingAlbum>>(l => l.Count == 0));
+        // A casing variant that is itself a present artist is its own act, refreshed on its own.
+        await _missing.Received(1).ReplaceForArtist(otherAct, Arg.Any<IReadOnlyList<MissingAlbum>>());
+        await _missing.Received(1).ReplaceForArtist("Sole", Arg.Any<IReadOnlyList<MissingAlbum>>());
+    }
+
+    [Fact]
+    public async Task Sweep_keeps_other_spellings_of_an_artist_deezer_would_not_answer_for()
+    {
+        _catalog.GetOwnedAlbums().Returns(Owned());
+        _deezer.GetAlbums(DeezerId).Returns((DeezerAlbum[]?)null);
+        _missing.GetAll().Returns(new[]
+        {
+            new MissingAlbum(new ArtistKey(Artist.ToUpperInvariant()), new AlbumKey("x"), null, 1),
+        });
+
+        await _sut.Refresh();
+
+        await _missing.DidNotReceiveWithAnyArgs().ReplaceForArtist(default!, default!);
+    }
+
     // ---- Upgrades: an album we own, but not well enough ----
 
     /// <summary>The owned map with an explicit quality for one album.</summary>

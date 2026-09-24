@@ -65,6 +65,15 @@ const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? s
 const verdictStatus = (v: Verdict): DiscoveryStatus =>
   v === 'up' ? 'Liked' : v === 'indifferent' ? 'Indifferent' : 'Disliked'
 
+// A Map keyed on artist names without regard to case — sources disagree on capitalisation, and the
+// server treats every spelling as one artist.
+class CaseInsensitiveMap<V> extends Map<string, V> {
+  get(key: string) { return super.get(key.toLowerCase()) }
+  has(key: string) { return super.has(key.toLowerCase()) }
+  set(key: string, value: V) { return super.set(key.toLowerCase(), value) }
+  delete(key: string) { return super.delete(key.toLowerCase()) }
+}
+
 // The full library loads in one fetch, but rendering every row at once is the costly part — each
 // row extracts an accent colour from its photo — so we page the rendered rows. Search still spans
 // the whole library (it filters before paging).
@@ -1501,7 +1510,9 @@ export default function Browse() {
   })
 
   // artist name -> current verdict (artist ratings only; album verdicts live in the album drill-down).
-  const verdictByArtist = new Map<string, DiscoveryStatus>()
+  // Case-blind, like the server's verdict key: a like saved under Deezer's "the Beaches" is the same
+  // like on Plex's "The Beaches".
+  const verdictByArtist = new CaseInsensitiveMap<DiscoveryStatus>()
   for (const r of ratings ?? []) {
     if (!r.album) verdictByArtist.set(r.artist.artistName, r.verdict)
   }
