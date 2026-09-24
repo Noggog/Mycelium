@@ -78,8 +78,19 @@ public interface IDeezerApi
     /// <summary>
     /// A single album by its id, including its album-artist (the discography listing omits that).
     /// Null if none/error. Used to learn the real credited act for a collaboration album.
+    ///
+    /// <para>Deezer renumbers albums when a catalogue is reissued, and an old id still answers — with
+    /// the <em>new</em> album. The returned <see cref="DeezerAlbum.id"/> can therefore differ from
+    /// <paramref name="albumId"/>, and is the one to keep.</para>
     /// </summary>
     Task<DeezerAlbum?> GetAlbum(long albumId);
+
+    /// <summary>
+    /// The album with this barcode, as <c>GET /album/upc:{upc}</c> answers. The barcode must be exact —
+    /// Deezer does not find "39841946420" for "039841946420". Null when Deezer didn't answer; an empty
+    /// <see cref="DeezerUpcLookup"/> when it answered that it has no such album.
+    /// </summary>
+    Task<DeezerUpcLookup?> GetAlbumByUpc(string upc);
 
     /// <summary>
     /// An album's tracks, in track order. Empty if none/error. Two callers: preview URLs for the UI,

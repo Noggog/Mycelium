@@ -1,5 +1,6 @@
 using Mycelium.Backend.Services.Singletons;
 using Mycelium.Interfaces;
+using Mycelium.ListenBrainz.Services;
 
 namespace Mycelium.Backend.Services.Background;
 
@@ -38,6 +39,9 @@ public class QueueReplenishService : BackgroundService
     /// <summary>Tops up every user once. Public so it can be unit-tested without the timer.</summary>
     public async Task ReplenishAll()
     {
+        // Topping up resolves artists on MusicBrainz; none of it is something a user is waiting on.
+        using var background = MusicBrainzGate.Background();
+
         string[] userIds;
         try
         {

@@ -56,6 +56,9 @@ public class AlbumIdentityResolver
             return new AlbumIdentityResult(0, 0);
         }
 
+        // A backfill: anything a user is waiting on goes to MusicBrainz first.
+        using var background = MusicBrainzGate.Background();
+
         AlbumIdentityGap[] gaps;
         try
         {

@@ -28,6 +28,28 @@ public class DeezerAlbum
     public DeezerArtist? artist { get; set; }
 
     /// <summary>
+    /// The album's barcode, on <c>GET /album/{id}</c> only. One of possibly several: Deezer answers
+    /// <c>/album/upc:{barcode}</c> for barcodes other than this one, so a MusicBrainz barcode that
+    /// doesn't equal it can still be the same album.
+    /// </summary>
+    public string? upc { get; set; }
+
+    /// <summary>Record label, on <c>GET /album/{id}</c> only.</summary>
+    public string? label { get; set; }
+
+    /// <summary>
+    /// Whether the album can be streamed from where the request was made — Deezer answers per the
+    /// caller's region. On <c>GET /album/{id}</c> only; null when Deezer didn't say.
+    /// </summary>
+    public bool? available { get; set; }
+
+    /// <summary>
+    /// Every credited artist with their role ("Main", "Featured"), on <c>GET /album/{id}</c> only. A
+    /// Deezer artist page lists albums the artist is merely featured on; this tells the two apart.
+    /// </summary>
+    public List<DeezerContributor>? contributors { get; set; }
+
+    /// <summary>
     /// Release date as Deezer supplies it — "2023-05-19" on the discography listing (an older or
     /// sparse release can carry just a year, or nothing at all).
     /// </summary>
@@ -63,6 +85,23 @@ public class DeezerAlbum
             ? date
             : null;
 }
+
+/// <summary>One credited artist on a <see cref="DeezerAlbum"/>.</summary>
+public class DeezerContributor
+{
+    public long id { get; set; }
+    public string? name { get; set; }
+
+    /// <summary>"Main" or "Featured".</summary>
+    public string? role { get; set; }
+}
+
+/// <summary>
+/// What <c>GET /album/upc:{barcode}</c> answered. <see cref="Album"/> is null when Deezer has no album
+/// with that barcode — as opposed to a null <see cref="DeezerUpcLookup"/>, which is Deezer not
+/// answering at all.
+/// </summary>
+public record DeezerUpcLookup(DeezerAlbum? Album);
 
 /// <summary>Envelope Deezer wraps album-list responses in: <c>{ "data": [ ... ] }</c>.</summary>
 public class DeezerAlbumList

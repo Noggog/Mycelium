@@ -14,6 +14,11 @@ public class DeezerTrack
 
     /// <summary>Full track length in seconds (not the preview's). 0 when Deezer omits it.</summary>
     public int duration { get; set; }
+
+    /// <summary>
+    /// The recording's ISRC. On album track listings and <c>GET /track/{id}</c>; null elsewhere.
+    /// </summary>
+    public string? isrc { get; set; }
 }
 
 /// <summary>

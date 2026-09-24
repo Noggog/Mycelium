@@ -217,19 +217,32 @@ public class DeezerApi : IDeezerApi
         return tracks.ToArray();
     }
 
-    private async Task<T?> Get<T>(string url) where T : class
+    public async Task<DeezerUpcLookup?> GetAlbumByUpc(string upc)
+    {
+        var url = $"{_endpointInfo.BaseUri}/album/upc:{Uri.EscapeDataString(upc.Trim())}";
+        var (answered, album) = await Fetch<DeezerAlbum>(url);
+        return answered ? new DeezerUpcLookup(album) : null;
+    }
+
+    private async Task<T?> Get<T>(string url) where T : class => (await Fetch<T>(url)).Value;
+
+    /// <summary>
+    /// The request, retried through the quota. <c>Answered</c> is false when Deezer never gave an
+    /// answer; Deezer saying it has no such thing (its "no data" error) is an answer, with a null value.
+    /// </summary>
+    private async Task<(bool Answered, T? Value)> Fetch<T>(string url) where T : class
     {
         for (var attempt = 0; ; attempt++)
         {
             await Throttle();
-            var (value, quotaHit) = await GetOnce<T>(url);
-            if (!quotaHit || attempt == QuotaRetries)
+            var (value, outcome) = await GetOnce<T>(url);
+            if (outcome != Outcome.Quota || attempt == QuotaRetries)
             {
-                if (quotaHit)
+                if (outcome == Outcome.Quota)
                 {
                     _logger.LogWarning("Deezer still rate-limiting after {Retries} retries for {Url}", attempt, url);
                 }
-                return value;
+                return (outcome is Outcome.Ok or Outcome.NoData, value);
             }
 
             // Sit out the rest of the window before trying again. The throttle above keeps us under
@@ -240,11 +253,21 @@ public class DeezerApi : IDeezerApi
         }
     }
 
-    /// <summary>
-    /// One attempt. Returns the parsed body (null on any failure) plus whether the failure was
-    /// Deezer's rate-limit quota specifically — the one failure worth waiting out and retrying.
-    /// </summary>
-    private async Task<(T? Value, bool QuotaHit)> GetOnce<T>(string url) where T : class
+    private enum Outcome
+    {
+        Ok,
+
+        /// <summary>Deezer answered that there is no such thing.</summary>
+        NoData,
+
+        /// <summary>Deezer's rate-limit quota — the one failure worth waiting out and retrying.</summary>
+        Quota,
+
+        Failed,
+    }
+
+    /// <summary>One attempt. Returns the parsed body (null on any failure) and how the attempt went.</summary>
+    private async Task<(T? Value, Outcome Outcome)> GetOnce<T>(string url) where T : class
     {
         try
         {
@@ -252,7 +275,7 @@ public class DeezerApi : IDeezerApi
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Deezer request failed: {Status} for {Url}", response.StatusCode, url);
-                return (null, response.StatusCode == HttpStatusCode.TooManyRequests);
+                return (null, response.StatusCode == HttpStatusCode.TooManyRequests ? Outcome.Quota : Outcome.Failed);
             }
 
             var body = await response.Content.ReadAsStringAsync();
@@ -262,18 +285,28 @@ public class DeezerApi : IDeezerApi
             // authoritative "nothing found", so unwrap the envelope and fail the call instead.
             if (TryReadError(body, out var error))
             {
+                if (NoDataCode.IsMatch(error))
+                {
+                    _logger.LogDebug("Deezer has nothing at {Url}", url);
+                    return (null, Outcome.NoData);
+                }
+
                 _logger.LogWarning("Deezer returned an error for {Url}: {Error}", url, error);
-                return (null, IsQuotaError(error));
+                return (null, IsQuotaError(error) ? Outcome.Quota : Outcome.Failed);
             }
 
-            return (JsonConvert.DeserializeObject<T>(body), false);
+            return (JsonConvert.DeserializeObject<T>(body), Outcome.Ok);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Deezer request errored for {Url}", url);
-            return (null, false);
+            return (null, Outcome.Failed);
         }
     }
+
+    // Deezer's "no data" (DataException) is code 800: the id or barcode asked about doesn't exist. It
+    // is an answer, unlike every other error envelope. Anchored like the quota code below.
+    private static readonly Regex NoDataCode = new(@"""code""\s*:\s*800(?!\d)", RegexOptions.Compiled);
 
     // Deezer's quota refusal is code 4. Anchored against the following character so it can't also
     // match 40x/41x codes, which mean something else entirely and are not worth retrying.

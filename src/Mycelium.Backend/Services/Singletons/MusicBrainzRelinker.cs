@@ -115,6 +115,8 @@ public class MusicBrainzRelinker
     /// <summary>The pass itself, awaited directly — what <see cref="Start"/> runs in the background.</summary>
     internal async Task RunAsync()
     {
+        // A sweep over every linked artist: anything a user is waiting on goes to MusicBrainz first.
+        using var background = MusicBrainzGate.Background();
         try
         {
             var linked = (await _catalog.GetAllPresent()).Where(a => a.MusicBrainz != null).ToList();

@@ -68,6 +68,36 @@ public class MusicBrainzReleaseGroup
 
     [JsonProperty("primary-type")]
     public string? PrimaryType { get; set; }
+
+    /// <summary>
+    /// What kind of album beyond the primary type: "Live", "Compilation", "Remix", "Demo",
+    /// "Soundtrack" and so on. Empty for a plain studio album. Present on browse and lookup responses.
+    /// </summary>
+    [JsonProperty("secondary-types")]
+    public List<string>? SecondaryTypes { get; set; }
+
+    /// <summary>
+    /// The earliest date any release in the group came out, as MusicBrainz writes it: "2024-04-12",
+    /// "2024-04", "2024", or empty when unknown.
+    /// </summary>
+    [JsonProperty("first-release-date")]
+    public string? FirstReleaseDate { get; set; }
+
+    [JsonProperty("disambiguation")]
+    public string? Disambiguation { get; set; }
+}
+
+/// <summary>
+/// One page of a <c>/ws/2/release-group?artist={mbid}</c> browse: <c>{ "release-group-count": n,
+/// "release-groups": [ ... ] }</c>. The count is across every page.
+/// </summary>
+public class MusicBrainzReleaseGroupBrowse
+{
+    [JsonProperty("release-group-count")]
+    public int Count { get; set; }
+
+    [JsonProperty("release-groups")]
+    public List<MusicBrainzReleaseGroup> ReleaseGroups { get; set; } = new();
 }
 
 /// <summary>Envelope of a <c>/ws/2/release-group</c> search: <c>{ "release-groups": [ ... ] }</c>.</summary>
