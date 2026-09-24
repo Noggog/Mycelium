@@ -341,6 +341,22 @@ code {
   border-color: var(--salmon);
   box-shadow: inset 0 0 18px rgba(225, 96, 99, 0.18), 0 0 14px rgba(225, 96, 99, 0.22);
 }
+/* A count on a nav item — how many things there need a person. */
+.nav-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  min-width: 1.3rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--salmon);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Glowing underline on the active item. */
 .nav-link.active::before {
   content: '';
@@ -3759,4 +3775,82 @@ a.playlist-badge.is-link:hover {
 .up-details code {
   font-size: 0.74rem;
   color: var(--text);
+}
+
+/* ========================================================================== */
+/* Reconcile: library artists matched against MusicBrainz                      */
+/* ========================================================================== */
+
+.reconcile-group {
+  margin-top: 1rem;
+}
+.reconcile-group > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.reconcile-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+.reconcile-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.reconcile-reason {
+  margin: 0.35rem 0 0.5rem;
+  color: var(--text-dim);
+}
+
+.reconcile-candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.reconcile-candidate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border);
+}
+.reconcile-candidate a {
+  color: var(--cyan);
+}
+.reconcile-candidate.is-chosen a {
+  font-weight: 700;
+}
+.reconcile-candidate button {
+  margin-left: auto;
+}
+.reconcile-overlap {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.reconcile-evidence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.reconcile-chip {
+  border: 1px solid var(--border-bright);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* Left-aligned, unlike the centred .controls default: they belong to the row above. */
+.controls.reconcile-actions {
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+.controls.reconcile-actions a {
+  color: var(--cyan);
 }

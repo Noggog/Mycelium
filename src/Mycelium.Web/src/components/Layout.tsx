@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
+import { getReconcileCount, RECONCILE_COUNT_KEY } from '../api/identity'
 import { usePlexLink } from '../auth/usePlexLink'
 import VolumeControl from './VolumeControl'
 import MyceliumBackdrop from './MyceliumBackdrop'
@@ -201,6 +203,32 @@ function AuthBox() {
   )
 }
 
+// The Reconcile link, for maintainers only, badged with how many artists need a person — the
+// notification that MusicBrainz is missing someone, or can't tell two acts apart.
+function ReconcileLink() {
+  const { user } = useAuth()
+  const isDev = user?.isDev === true
+  const { data: count } = useQuery({
+    queryKey: RECONCILE_COUNT_KEY,
+    queryFn: getReconcileCount,
+    enabled: isDev,
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  })
+
+  if (!isDev) return null
+  return (
+    <NavLink to="/reconcile" className={navClass}>
+      Reconcile
+      {count ? (
+        <span className="nav-badge" title={`${count} artist(s) need a look`}>
+          {count}
+        </span>
+      ) : null}
+    </NavLink>
+  )
+}
+
 export default function Layout({ children }: { children: ReactNode }) {
   const topbarRef = useRef<HTMLElement>(null)
 
@@ -241,6 +269,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/other" className={navClass}>
             Other
           </NavLink>
+          <ReconcileLink />
         </nav>
         <div className="topbar-end">
           <BackdropToggle />

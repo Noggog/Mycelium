@@ -63,6 +63,10 @@ builder.Services.AddHostedService<CatalogSyncService>();
 // shortly after startup (so the catalog is populated first), then daily.
 builder.Services.AddHostedService<AlbumSyncService>();
 
+// Checks every library artist against MusicBrainz — which artist it is, and how sure — for the
+// reconciliation page, ahead of keying artists by MBID. Daily; each artist re-checked monthly.
+builder.Services.AddHostedService<ArtistIdentityService>();
+
 // Periodically tops up each user's recommendation queue (additive — grows the frontier and refreshes
 // stale similarity edges without clearing pending). Cadence via QUEUE_REPLENISH_INTERVAL_HOURS.
 builder.Services.AddHostedService<QueueReplenishService>();
@@ -1300,6 +1304,52 @@ devSim.MapPost("/musicbrainz-relink", (MusicBrainzRelinker relinker) =>
 devSim.MapGet("/musicbrainz-relink", (MusicBrainzRelinker relinker) =>
         Results.Ok(relinker.GetStatus()))
     .WithName("DevMusicBrainzRelinkStatus");
+
+// ---- Reconciliation: which MusicBrainz artist each library artist is (see ArtistIdentityAuditor).
+// Read-only as far as the rest of the app goes, except Accept, which is the same pin the Sources tab
+// makes. Dev-gated: fixing identities is operator work, much of it done on MusicBrainz itself. ----
+var devIdentity = api.MapGroup("/dev/identity").RequireAuthorization("DevUser");
+
+devIdentity.MapGet("/report", async (ArtistIdentityAuditor auditor) =>
+        Results.Ok(await auditor.Report()))
+    .WithName("DevIdentityReport");
+
+// Start a pass (single-flight; a second POST just returns the running one's status). all=true
+// re-checks every artist, not only the ones never checked or due.
+devIdentity.MapPost("/pass", (ArtistIdentityAuditor auditor, bool? all) =>
+        Results.Ok(auditor.Start(all ?? false)))
+    .WithName("DevIdentityPass");
+
+devIdentity.MapGet("/reconcile", async (ArtistIdentityAuditor auditor) =>
+        Results.Ok(await auditor.NeedingAttention()))
+    .WithName("DevIdentityReconcile");
+
+// The nav badge: a count, so it can be polled from every page without loading the list.
+devIdentity.MapGet("/reconcile/count", async (IArtistResolutionRepo resolutions) =>
+        Results.Ok(new { count = await resolutions.CountNeedingAttention() }))
+    .WithName("DevIdentityReconcileCount");
+
+// Check one artist again now, skipping the cache — for straight after an edit on MusicBrainz.
+devIdentity.MapPost("/recheck", async (string artist, ArtistIdentityAuditor auditor) =>
+        await auditor.Check(artist, fresh: true) is { } resolution
+            ? Results.Ok(resolution)
+            : Results.Problem("MusicBrainz didn't answer; try again shortly.", statusCode: 503))
+    .WithName("DevIdentityRecheck");
+
+// Settle an artist on a MusicBrainz artist: pin it (the Sources tab's pin, with the same follow-up
+// re-derive of similarity edges), then record the resolution as pinned.
+devIdentity.MapPost("/accept", async (HttpContext http, string artist, string mbid,
+        MusicBrainzArtistResolver resolver, ArtistIdentityAuditor auditor, ArtistFollowUpService followUps) =>
+    {
+        if (await resolver.SetOverride(artist, mbid) is null)
+        {
+            return Results.NotFound(new { error = $"MusicBrainz has no artist {mbid}." });
+        }
+
+        followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
+        return Results.Ok(await auditor.Check(artist, fresh: false));
+    })
+    .WithName("DevIdentityAccept");
 
 // Hand-entered recommendations — pairings no similarity source will ever make (see
 // ManualRecommendations). Each write rebuilds every user's queue, because the queue is precomputed:

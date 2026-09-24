@@ -45,6 +45,45 @@ public static class MusicBrainzArtistMatch
     }
 
     /// <summary>
+    /// Every candidate that goes by <paramref name="artistName"/>, best tier first (the order
+    /// <see cref="Pick"/> takes the first of), each with whether it matched on its own name or only on
+    /// an alias. Where <see cref="Pick"/> has to choose one, this is for a caller weighing the
+    /// same-named acts against other evidence.
+    /// </summary>
+    public static IReadOnlyList<(MusicBrainzArtist Artist, bool ByAlias)> Matching(
+        IEnumerable<MusicBrainzArtist> candidates, string artistName)
+    {
+        var usable = candidates.Where(c => c.Id is { Length: > 0 }).ToList();
+        var strict = Normalize(artistName);
+        var loose = Loose(artistName);
+
+        var tiers = new List<(Func<MusicBrainzArtist, bool> Test, bool ByAlias)>
+        {
+            (c => Normalize(c.Name) == strict, false),
+            (c => Aliases(c).Any(a => Normalize(a) == strict), true),
+        };
+        if (loose.Length > 0)
+        {
+            tiers.Add((c => Loose(c.Name) == loose, false));
+            tiers.Add((c => Aliases(c).Any(a => Loose(a) == loose), true));
+        }
+
+        var matched = new List<(MusicBrainzArtist, bool)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (test, byAlias) in tiers)
+        {
+            foreach (var candidate in usable.Where(test))
+            {
+                if (seen.Add(candidate.Id!))
+                {
+                    matched.Add((candidate, byAlias));
+                }
+            }
+        }
+        return matched;
+    }
+
+    /// <summary>
     /// Whether a stored MusicBrainz name is plausibly the library name — the offline check that lets a
     /// relink pass skip the search for every link that was right all along. Loose on purpose: a stored
     /// identity only kept its <em>primary</em> name, so an alias match can't be re-proven here, and

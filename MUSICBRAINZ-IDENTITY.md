@@ -1,7 +1,7 @@
 # MusicBrainz as the identity authority
 
-> **Status: Phase 0 built (2026-09-24); Phases 1+ not started.** See §3 for what
-> Phase 0 shipped. See
+> **Status: Phases 0 and 1 built (2026-09-24); Phases 2+ not started.** See §3
+> and §4 for what shipped. See
 > `PLAN.md` for the product vision, `METADATA-ARCHIVE.md` §9.3 for the earlier
 > decision to give owned albums MusicBrainz release-group ids, and
 > `QUALITY-TIERS.md` for the upgrade flow this replaces parts of.
@@ -242,6 +242,44 @@ One queue and one worker for every MusicBrainz call.
 
 ## 4. Artist resolution (Phase 1)
 
+> **Built.** Where things live:
+>
+> | Piece | Code |
+> |---|---|
+> | Evidence and pass | `ArtistIdentityAuditor` |
+> | Rules | `ArtistIdentityJudge`, a pure function |
+> | Storage | Mongo `artistResolutions`, keyed by library artist name (`IArtistResolutionRepo`) |
+> | Schedule | `ArtistIdentityService`: daily, 60 minutes after startup. It checks new artists, and any not checked in 30 days |
+> | Endpoints | `/api/dev/identity/{report,pass,reconcile,reconcile/count,recheck,accept}` |
+> | UI | `/reconcile` page. The nav badge is visible to dev users only |
+>
+> Deviations from the text below:
+>
+> - **No Plex MusicBrainz ids yet.** Evidence 1 is not gathered: the Plex
+>   listing drops the `Guid` array, and Plex is on its way out. Owned albums on
+>   a candidate's discography do the same job.
+> - **Library artists only.** Artists that exist only in user decisions or
+>   similarity edges are not checked yet. That is sizing for the Phase 3
+>   migration.
+> - **The panel only shows artists.** Album rows (owned albums with no release
+>   group, Deezer-only albums) need the discography, so they come in Phase 2.
+> - **Accept pins the MBID.** It makes the same pin the Sources tab makes, so the
+>   ListenBrainz follow-up uses it immediately. Everything else in this phase is
+>   read-only.
+>
+> **Confidence rules.** "Overlap" means library albums found on the candidate's
+> discography, compared by record-level title.
+>
+> - **High:** an overlap of 2 or more; or the library's only albums are on it; or
+>   overlap plus the Deezer link.
+> - **Medium:** 1 album out of many. Also a Deezer link alone, when the library
+>   owns no albums.
+> - **Low:** a name alone. Also a Deezer link whose discography holds none of the
+>   owned albums.
+> - **Tied overlap:** broken by the Deezer link, otherwise Ambiguous.
+> - **Pass rule:** only 5 candidates' discographies are fetched per artist, and
+>   if any MusicBrainz call goes unanswered, nothing is stored for that artist.
+
 Evidence, strongest first:
 
 1. **A MusicBrainz id the library already has.** Plex's `Guid` array, which
@@ -298,8 +336,20 @@ is available in the region, and quality (`DeezerQualityProbe`). Editions not
 available in the region are shown but can't be picked.
 
 **Owned albums:** match library titles against the stored release groups
-locally, falling back to the existing search. This replaces the slow
-one-search-per-album backfill in `AlbumIdentityResolver`.
+locally, and write `albumIdentities` from them (the archive reads that field).
+This **replaces** the one-search-per-album backfill:
+
+- **Why replace it.** `AlbumIdentityService` was never registered as a hosted
+  service, so it only ever ran from its dev endpoint. It is deliberately left
+  unscheduled.
+- **Why it can't be fixed instead.** It searches by exact title, under the
+  artist's *current* MBID, and that MBID comes from the name-only resolver and
+  can point at the wrong act.
+- **Cost.** Once this lands the owned-album ids cost no extra requests: the
+  auditor has already cached each resolved artist's release groups.
+- **Cleanup.** Delete `AlbumIdentityService`, `AlbumIdentityResolver`, its dev
+  endpoint, and `IMusicBrainzApi.SearchReleaseGroup`, unless something else
+  still needs that search by then.
 
 **Replacing `missingAlbums`:** it becomes a view derived from
 `artistDiscography` plus ownership. It is keyed by album key (D2) and has a
@@ -435,7 +485,7 @@ decision wins, and any conflict is logged.
 | # | Phase | Changes stored data? | Deliverable |
 |---|---|---|---|
 | 0 | MusicBrainz and Deezer plumbing: gatekeeper, new calls, Mongo-backed cache **(done)** | No | — |
-| 1 | Artist resolution + reconciliation panel + inventory of every name-keyed store | Adds data, no re-key | **Report:** resolved, ambiguous and missing artists |
+| 1 | Artist resolution + reconciliation panel + inventory of every name-keyed store **(done; inventory is §1)** | Adds data, no re-key | **Report:** resolved, ambiguous and missing artists |
 | 2 | Discography + matcher (by MBID) | Adds a collection | **Report:** match rates per method across the library, via `POST /api/dev/discography/match?count=N` and `GET /api/dev/discography/report` |
 | 3 | Re-key migration (§8) | **Yes** | Stores keyed by MBID; pending store |
 | 4 | Wanted list + Downloads page source picking | Yes | D4 |

@@ -5,6 +5,7 @@ import Discover from './pages/Discover'
 import Purchases from './pages/Purchases'
 import Playlists from './pages/Playlists'
 import Other from './pages/Other'
+import Reconcile from './pages/Reconcile'
 
 export default function App() {
   return (
@@ -28,6 +29,8 @@ export default function App() {
             sweeps, similarity debug) that only DEV_USERNAMES sees. Every dev endpoint re-checks
             server-side, so the page's own gate is cosmetic. */}
         <Route path="/other" element={<Other />} />
+        {/* Which MusicBrainz artist each library artist is — the ones that need a person. Dev-only. */}
+        <Route path="/reconcile" element={<Reconcile />} />
         {/* This was the dev panel before the takeout gave it a reason to exist for everyone. */}
         <Route path="/dev" element={<Navigate to="/other" replace />} />
       </Routes>
