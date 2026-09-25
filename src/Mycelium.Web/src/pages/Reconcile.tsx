@@ -188,6 +188,14 @@ const GROUPS: { title: string; blurb: string; test: (r: ArtistResolution) => boo
   },
 ]
 
+// Anything the groups above don't claim. Should stay empty; it exists so a status the page doesn't
+// know about shows up rather than vanishing from a list whose count says it's there.
+const OTHER_GROUP = {
+  title: 'Other',
+  blurb: 'Not in any group above.',
+  test: (r: ArtistResolution) => !GROUPS.some((g) => g.test(r)),
+}
+
 function AttentionList() {
   const [filter, setFilter] = useState('')
   const { data, error, isLoading } = useQuery({ queryKey: LIST_KEY, queryFn: getReconcileList })
@@ -209,7 +217,7 @@ function AttentionList() {
       {error && <p className="error">{(error as Error).message}</p>}
       {data && data.length === 0 && <p className="dev-muted">Nothing to reconcile.</p>}
 
-      {GROUPS.map((g) => {
+      {[...GROUPS, OTHER_GROUP].map((g) => {
         const rows = visible.filter(g.test)
         if (rows.length === 0) return null
         return (

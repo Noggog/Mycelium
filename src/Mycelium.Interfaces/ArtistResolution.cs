@@ -1,6 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace Mycelium.Interfaces;
 
 /// <summary>What checking a library artist against MusicBrainz came to. See <see cref="ArtistResolution"/>.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ArtistResolutionStatus
 {
     /// <summary>A user pinned the MBID by hand. Taken as given.</summary>
@@ -20,6 +23,7 @@ public enum ArtistResolutionStatus
 }
 
 /// <summary>How far a <see cref="ArtistResolutionStatus.Resolved"/> answer can be trusted.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ResolutionConfidence
 {
     /// <summary>Several owned albums are on it, or it is linked from the artist's Deezer page and has one.</summary>
