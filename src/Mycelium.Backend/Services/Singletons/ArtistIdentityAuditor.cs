@@ -336,6 +336,22 @@ public class ArtistIdentityAuditor
 
                     var theirs = groups.Select(g => AlbumTitleMatcher.NormalizeRecord(g.Title)).ToHashSet();
                     lead.ReleaseGroups = groups.Length;
+
+                    // A release group is named after one edition; the library may hold another whose
+                    // title differs ("Firewatch Original Soundtrack" is a release in the group
+                    // "Firewatch Original Score"). So anything the groups didn't account for is looked
+                    // for among the releases too — titles only, the same record-level comparison.
+                    if (owned.Keys.Any(o => !theirs.Contains(o)))
+                    {
+                        var releases = await Releases(lead.Mbid, fresh);
+                        if (releases is null)
+                        {
+                            return null;
+                        }
+
+                        theirs.UnionWith(releases.Select(r => AlbumTitleMatcher.NormalizeRecord(r.Title)));
+                    }
+
                     lead.MatchedAlbums = owned.Where(o => theirs.Contains(o.Key)).Select(o => o.Value).ToList();
                 }
             }
@@ -420,6 +436,13 @@ public class ArtistIdentityAuditor
         _cache.GetOrFetch(
             $"musicbrainz:release-groups:{mbid}",
             () => _musicBrainz.BrowseReleaseGroups(mbid),
+            _ => CacheLifetime,
+            fresh);
+
+    private Task<MusicBrainzRelease[]?> Releases(string mbid, bool fresh) =>
+        _cache.GetOrFetch(
+            $"musicbrainz:releases:{mbid}",
+            () => _musicBrainz.BrowseReleases(mbid),
             _ => CacheLifetime,
             fresh);
 

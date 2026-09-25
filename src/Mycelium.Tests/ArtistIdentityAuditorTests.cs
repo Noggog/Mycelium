@@ -52,6 +52,7 @@ public class ArtistIdentityAuditorTests
         _musicBrainz.BrowseReleaseGroups(GermanMetal).Returns(Groups("Sentinels", "The Guillotine", "Dealin’ Death"));
         _musicBrainz.BrowseReleaseGroups(DanishIndie).Returns(Groups("Tidevand"));
         _musicBrainz.BrowseReleaseGroups(Dubstep).Returns(Groups("Wobble"));
+        _musicBrainz.BrowseReleases(Arg.Any<string>()).Returns(Array.Empty<MusicBrainzRelease>());
     }
 
     private static CatalogArtist Present(string name) => new(new ArtistKey(name), null, Start);
@@ -66,6 +67,9 @@ public class ArtistIdentityAuditorTests
 
     private static MusicBrainzReleaseGroup[] Groups(params string[] titles) =>
         titles.Select((t, i) => new MusicBrainzReleaseGroup { Id = $"rg-{t}-{i}", Title = t }).ToArray();
+
+    private static MusicBrainzRelease[] Releases(params string[] titles) =>
+        titles.Select((t, i) => new MusicBrainzRelease { Id = $"r-{t}-{i}", Title = t }).ToArray();
 
     [Fact]
     public async Task The_act_with_the_librarys_albums_wins_among_same_named_ones()
@@ -90,6 +94,38 @@ public class ArtistIdentityAuditorTests
         var result = await _sut.Check("Vulture", null, fresh: false);
 
         result!.Candidates.Single(c => c.Mbid == GermanMetal).AlbumOverlap.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task An_album_titled_as_one_release_of_a_differently_named_group_still_matches()
+    {
+        // Chris Remo: the library's "Firewatch Original Soundtrack" is a release in the group
+        // "Firewatch Original Score".
+        Own("Vulture", "Sentinels", "Sentinels Original Soundtrack");
+        _musicBrainz.BrowseReleases(GermanMetal).Returns(Releases("Sentinels", "Sentinels Original Soundtrack"));
+
+        var result = await _sut.Check("Vulture", null, fresh: false);
+
+        result!.Candidates.Single(c => c.Mbid == GermanMetal).MatchedAlbums
+            .Should().BeEquivalentTo(["Sentinels", "Sentinels Original Soundtrack"]);
+    }
+
+    [Fact]
+    public async Task Releases_are_only_browsed_when_the_groups_leave_albums_unmatched()
+    {
+        await _sut.Check("Vulture", null, fresh: false);
+
+        await _musicBrainz.DidNotReceive().BrowseReleases(GermanMetal);
+        await _musicBrainz.Received(1).BrowseReleases(DanishIndie);
+    }
+
+    [Fact]
+    public async Task An_unanswered_release_browse_stores_nothing()
+    {
+        _musicBrainz.BrowseReleases(DanishIndie).Returns((MusicBrainzRelease[]?)null);
+
+        (await _sut.Check("Vulture", null, fresh: false)).Should().BeNull();
+        _resolutions.Items.Should().BeEmpty();
     }
 
     [Fact]
