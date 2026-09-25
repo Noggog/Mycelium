@@ -115,6 +115,46 @@ public class ArtistIdentityJudgeTests
         result.Reason.Should().Contain("None of the library's 5 album(s)");
     }
 
+    private static ResolutionCandidate Holding(string mbid, params string[] albums) =>
+        new(mbid, "Doldrums", mbid, albums.Length, [ResolutionEvidence.Name], albums);
+
+    [Fact]
+    public void Candidates_each_holding_a_different_share_of_the_albums_is_mixed()
+    {
+        var result = Judge(4,
+            Holding("canadian", "Lesser Evil", "Egypt"),
+            Holding("space-rock", "Acupuncture", "Feng Shui"));
+
+        result.Status.Should().Be(ArtistResolutionStatus.Mixed);
+        result.Mbid.Should().BeNull();
+        result.NeedsAttention.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_bigger_share_does_not_hide_a_second_act_with_two_albums()
+    {
+        Judge(7,
+                Holding("a", "One", "Two", "Three", "Four", "Five"),
+                Holding("b", "Six", "Seven"))
+            .Status.Should().Be(ArtistResolutionStatus.Mixed);
+    }
+
+    [Fact]
+    public void Two_acts_sharing_the_same_album_title_is_not_a_split()
+    {
+        Judge(3, Holding("a", "Greatest Hits"), Holding("b", "Greatest Hits"))
+            .Status.Should().Be(ArtistResolutionStatus.Ambiguous);
+    }
+
+    [Fact]
+    public void One_stray_common_title_on_another_act_is_not_a_split()
+    {
+        var result = Judge(5, Holding("a", "One", "Two", "Three", "Four"), Holding("b", "Demo"));
+
+        result.Status.Should().Be(ArtistResolutionStatus.Resolved);
+        result.Mbid.Should().Be("a");
+    }
+
     [Fact]
     public void No_candidates_is_missing()
     {

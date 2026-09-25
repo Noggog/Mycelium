@@ -62,6 +62,13 @@ public interface IArtistCatalogRepo
     Task<Dictionary<string, Dictionary<string, AudioQuality?>>> GetOwnedAlbums();
 
     /// <summary>
+    /// Every present artist's owned album titles with the Plex artist each is filed under — how the
+    /// identity check tells apart two acts that share a name. Keyed like <see cref="GetOwnedAlbums"/>.
+    /// Albums synced before the Plex artist was captured come back with a null key.
+    /// </summary>
+    Task<Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>> GetOwnedAlbumArtists();
+
+    /// <summary>
     /// The Plex rating key of each owned album title, for the named artists only — outer key artist,
     /// inner key album title, both case-insensitive. Stored by the same sync as the titles; artists
     /// (or albums) whose keys predate that sync are simply absent, so callers must treat a miss as

@@ -1329,25 +1329,34 @@ devIdentity.MapGet("/reconcile/count", async (IArtistResolutionRepo resolutions)
         Results.Ok(new { count = await resolutions.CountNeedingAttention() }))
     .WithName("DevIdentityReconcileCount");
 
-// Check one artist again now, skipping the cache — for straight after an edit on MusicBrainz.
-devIdentity.MapPost("/recheck", async (string artist, ArtistIdentityAuditor auditor) =>
-        await auditor.Check(artist, fresh: true) is { } resolution
+// Check one library artist again now, skipping the cache — for straight after an edit on MusicBrainz.
+// plexArtistKey picks one Plex artist of a name several share.
+devIdentity.MapPost("/recheck", async (string artist, int? plexArtistKey, ArtistIdentityAuditor auditor) =>
+        await auditor.Check(artist, plexArtistKey, fresh: true) is { } resolution
             ? Results.Ok(resolution)
-            : Results.Problem("MusicBrainz didn't answer; try again shortly.", statusCode: 503))
+            : Results.Problem("MusicBrainz didn't answer (or the artist is gone); try again shortly.", statusCode: 503))
     .WithName("DevIdentityRecheck");
 
-// Settle an artist on a MusicBrainz artist: pin it (the Sources tab's pin, with the same follow-up
-// re-derive of similarity edges), then record the resolution as pinned.
-devIdentity.MapPost("/accept", async (HttpContext http, string artist, string mbid,
+// Settle a library artist on a MusicBrainz artist. For an ordinary name that is the Sources tab's pin,
+// with the same follow-up re-derive of similarity edges. For one Plex artist of a shared name it is a
+// pin on that Plex artist alone — pinning the name would pin every act that shares it.
+devIdentity.MapPost("/accept", async (HttpContext http, string artist, string mbid, int? plexArtistKey,
         MusicBrainzArtistResolver resolver, ArtistIdentityAuditor auditor, ArtistFollowUpService followUps) =>
     {
+        if (plexArtistKey is { } key)
+        {
+            return await auditor.PinPlexArtist(artist, key, mbid) is { } pinned
+                ? Results.Ok(pinned)
+                : Results.NotFound(new { error = $"MusicBrainz has no artist {mbid}, or the Plex artist is gone." });
+        }
+
         if (await resolver.SetOverride(artist, mbid) is null)
         {
             return Results.NotFound(new { error = $"MusicBrainz has no artist {mbid}." });
         }
 
         followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
-        return Results.Ok(await auditor.Check(artist, fresh: false));
+        return Results.Ok(await auditor.Check(artist, null, fresh: false));
     })
     .WithName("DevIdentityAccept");
 

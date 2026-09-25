@@ -693,6 +693,10 @@ public record PlexMusicAlbum
     public string Title { get; set; }       // album title
     public string ParentTitle { get; set; } // owning artist's name
 
+    // The owning artist's rating key. Two Plex artists can share a name (two unrelated bands both called
+    // "Doldrums"), and this is what tells their albums apart.
+    public int ParentRatingKey { get; set; }
+
     // Mood tags, returned inline exactly as they are on an artist. For an album credited to an umbrella
     // act this is where a user's like/dislike verdict lives, since no artist could carry it — see
     // IAlbumTagger. Provider-supplied and hand-applied moods share the field, so writes stay delta-based.

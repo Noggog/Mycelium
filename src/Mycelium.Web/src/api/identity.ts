@@ -5,7 +5,7 @@
 // The nav badge's query key, shared so the page can refresh the badge after settling an artist.
 export const RECONCILE_COUNT_KEY = ['dev', 'identity', 'count']
 
-export type ResolutionStatus = 'Pinned' | 'Resolved' | 'Ambiguous' | 'Missing' | 'Unlinked'
+export type ResolutionStatus = 'Pinned' | 'Resolved' | 'Ambiguous' | 'Mixed' | 'Missing' | 'Unlinked'
 export type ResolutionConfidence = 'High' | 'Medium' | 'Low'
 
 export interface ResolutionCandidate {
@@ -16,10 +16,20 @@ export interface ResolutionCandidate {
   albumOverlap: number | null
   // Why it was considered: 'name' | 'alias' | 'deezer' | 'current'.
   evidence: string[]
+  // The library's titles that are on it; null when it wasn't checked.
+  matchedAlbums: string[] | null
+  // How many release groups it has on MusicBrainz.
+  releaseGroups: number | null
 }
 
 export interface ArtistResolution {
+  // The name, or name + Plex artist when several Plex artists share the name.
+  id: string
   artist: string
+  // Set when the name covers several Plex artists and this is one of them.
+  plexArtistKey: number | null
+  // The library's album titles this was judged on.
+  albums: string[] | null
   status: ResolutionStatus
   confidence: ResolutionConfidence | null
   mbid: string | null
@@ -54,9 +64,12 @@ export interface IdentityReport {
   medium: number
   low: number
   ambiguous: number
+  mixed: number
   missing: number
   unlinked: number
   disagreesWithCurrent: number
+  // Names covering more than one Plex artist, each checked separately.
+  sharedNames: number
   needsAttention: number
   pass: IdentityPassStatus
 }
@@ -96,13 +109,23 @@ export async function getReconcileCount(): Promise<number> {
   return body.count
 }
 
-export async function recheckArtist(artist: string): Promise<ArtistResolution> {
-  const params = new URLSearchParams({ artist })
+function artistParams(artist: string, plexArtistKey: number | null, extra: Record<string, string> = {}) {
+  const params = new URLSearchParams({ artist, ...extra })
+  if (plexArtistKey !== null) params.set('plexArtistKey', String(plexArtistKey))
+  return params
+}
+
+export async function recheckArtist(artist: string, plexArtistKey: number | null): Promise<ArtistResolution> {
+  const params = artistParams(artist, plexArtistKey)
   return json(await fetch(`/api/dev/identity/recheck?${params}`, { method: 'POST' }), `Re-check of ${artist} failed`)
 }
 
-export async function acceptArtist(artist: string, mbid: string): Promise<ArtistResolution> {
-  const params = new URLSearchParams({ artist, mbid })
+export async function acceptArtist(
+  artist: string,
+  plexArtistKey: number | null,
+  mbid: string,
+): Promise<ArtistResolution> {
+  const params = artistParams(artist, plexArtistKey, { mbid })
   return json(await fetch(`/api/dev/identity/accept?${params}`, { method: 'POST' }), `Could not settle ${artist}`)
 }
 

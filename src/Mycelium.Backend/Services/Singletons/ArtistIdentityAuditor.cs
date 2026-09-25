@@ -20,9 +20,13 @@ public record ArtistIdentityPassStatus(
 /// <summary>
 /// How the library stands against MusicBrainz: the Phase 1 report of <c>MUSICBRAINZ-IDENTITY.md</c>.
 /// </summary>
+/// <param name="LibraryArtists">
+/// Library artists: one per name, except a name covering several Plex artists counts each of them.
+/// </param>
 /// <param name="Checked">Library artists with a stored resolution.</param>
 /// <param name="Pinned">Pinned by hand.</param>
 /// <param name="DisagreesWithCurrent">Resolved to a different artist than the one linked today.</param>
+/// <param name="SharedNames">Names that cover more than one Plex artist, each checked separately.</param>
 public record ArtistIdentityReport(
     int LibraryArtists,
     int Checked,
@@ -31,11 +35,47 @@ public record ArtistIdentityReport(
     int Medium,
     int Low,
     int Ambiguous,
+    int Mixed,
     int Missing,
     int Unlinked,
     int DisagreesWithCurrent,
+    int SharedNames,
     int NeedsAttention,
     ArtistIdentityPassStatus Pass);
+
+/// <summary>
+/// One act in the library, as the identity check sees it: usually a name, but one Plex artist of a name
+/// that several share — each with its own albums, so each can be matched to its own MusicBrainz artist.
+/// </summary>
+public record LibraryArtist(string Name, int? PlexArtistKey, IReadOnlyList<string> Albums)
+{
+    public string Id => ArtistResolution.LibraryArtistId(Name, PlexArtistKey);
+
+    /// <summary>
+    /// The library artists a name stands for. Only a name whose albums sit under two or more Plex
+    /// artists is split; albums with no Plex artist (collaborations, entries synced before it was
+    /// recorded) can't be placed then, and are left out rather than guessed at.
+    /// </summary>
+    public static IReadOnlyList<LibraryArtist> For(string name, IReadOnlyList<OwnedAlbumArtist> albums)
+    {
+        var byPlexArtist = albums
+            .Where(a => a.PlexArtistRatingKey is not null)
+            .GroupBy(a => a.PlexArtistRatingKey!.Value)
+            .ToList();
+        if (byPlexArtist.Count < 2)
+        {
+            return [new LibraryArtist(name, null, Titles(albums))];
+        }
+
+        return byPlexArtist
+            .OrderBy(g => g.Key)
+            .Select(g => new LibraryArtist(name, g.Key, Titles(g)))
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> Titles(IEnumerable<OwnedAlbumArtist> albums) =>
+        albums.Select(a => a.Title).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+}
 
 /// <summary>
 /// Checks library artists against MusicBrainz and stores what each came to
@@ -154,15 +194,14 @@ public class ArtistIdentityAuditor
         using var background = MusicBrainzGate.Background();
         try
         {
-            var present = (await _catalog.GetAllPresent()).Select(a => a.ArtistKey.ArtistName).ToList();
-            await _resolutions.DeleteAllExcept(present);
+            var present = await LibraryArtists();
+            await _resolutions.DeleteAllExcept(present.Select(a => a.Id).ToList());
 
             var checkedAt = await _resolutions.GetCheckedAt();
             var now = _time.GetUtcNow();
             var due = all
                 ? present
-                : present.Where(a => !checkedAt.TryGetValue(a, out var at) || now - at >= RecheckAfter).ToList();
-            var owned = OwnedTitles(await _catalog.GetOwnedAlbums());
+                : present.Where(a => !checkedAt.TryGetValue(a.Id, out var at) || now - at >= RecheckAfter).ToList();
 
             lock (_gate)
             {
@@ -173,12 +212,12 @@ public class ArtistIdentityAuditor
             {
                 lock (_gate)
                 {
-                    _currentArtist = artist;
+                    _currentArtist = artist.Name;
                 }
 
                 try
                 {
-                    var resolution = await Check(artist, owned.GetValueOrDefault(artist) ?? [], fresh: false);
+                    var resolution = await Check(artist, fresh: false);
                     if (resolution is null)
                     {
                         Interlocked.Increment(ref _unreachable);
@@ -186,7 +225,7 @@ public class ArtistIdentityAuditor
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Identity check failed for {Artist}", artist);
+                    _logger.LogWarning(ex, "Identity check failed for {Artist}", artist.Id);
                     Interlocked.Increment(ref _errors);
                 }
 
@@ -209,39 +248,79 @@ public class ArtistIdentityAuditor
     }
 
     /// <summary>
-    /// Checks one artist now, at interactive priority — the reconciliation page's Re-check.
-    /// <paramref name="fresh"/> skips the cache, for when someone has just edited MusicBrainz.
+    /// Checks one library artist now, at interactive priority — the reconciliation page's Re-check.
+    /// <paramref name="plexArtistKey"/> picks one Plex artist of a shared name. <paramref name="fresh"/>
+    /// skips the cache, for when someone has just edited MusicBrainz. Null when MusicBrainz didn't
+    /// answer, or there is no such library artist.
     /// </summary>
-    public async Task<ArtistResolution?> Check(string artist, bool fresh)
+    public async Task<ArtistResolution?> Check(string artist, int? plexArtistKey, bool fresh)
     {
-        var owned = OwnedTitles(await _catalog.GetOwnedAlbums());
-        return await Check(artist, owned.GetValueOrDefault(artist) ?? [], fresh);
+        var target = await Find(artist, plexArtistKey);
+        return target is null ? null : await Check(target, fresh);
     }
 
     /// <summary>
-    /// Gathers the evidence for one artist, judges it, and stores the verdict. Null — and nothing
-    /// stored — when MusicBrainz didn't answer part of it: a verdict on half the evidence is exactly
-    /// the kind of wrong answer this exists to avoid.
+    /// Pins one Plex artist of a shared name to a MusicBrainz artist, then re-checks it. The name-level
+    /// pin (the Sources tab's) can't do this — it would pin every act that shares the name. Null when
+    /// MusicBrainz has no such artist or there is no such library artist.
     /// </summary>
-    internal async Task<ArtistResolution?> Check(string artist, IReadOnlyCollection<string> ownedTitles, bool fresh)
+    public async Task<ArtistResolution?> PinPlexArtist(string artist, int plexArtistKey, string mbid)
     {
-        var key = new ArtistKey(artist);
-        var stored = await _catalog.GetMusicBrainz(key);
+        var target = await Find(artist, plexArtistKey);
+        if (target is null || await _musicBrainz.GetArtist(mbid) is not { Id: { Length: > 0 } id } found)
+        {
+            return null;
+        }
+
+        await _resolutions.SetPin(target.Id, new MusicBrainzIdentity(id, found.Name, found.Disambiguation));
+        return await Check(target, fresh: false);
+    }
+
+    private async Task<LibraryArtist?> Find(string artist, int? plexArtistKey)
+    {
+        var owned = await _catalog.GetOwnedAlbumArtists();
+        return LibraryArtist.For(artist, owned.GetValueOrDefault(artist) ?? [])
+            .FirstOrDefault(a => a.PlexArtistKey == plexArtistKey);
+    }
+
+    /// <summary>
+    /// Gathers the evidence for one library artist, judges it, and stores the verdict. Null — and
+    /// nothing stored — when MusicBrainz didn't answer part of it: a verdict on half the evidence is
+    /// exactly the kind of wrong answer this exists to avoid.
+    /// </summary>
+    internal async Task<ArtistResolution?> Check(LibraryArtist artist, bool fresh)
+    {
+        var key = new ArtistKey(artist.Name);
         var unlinked = await _catalog.IsMusicBrainzUnlinked(key);
-        var ownedRecords = ownedTitles
-            .Select(AlbumTitleMatcher.NormalizeRecord)
-            .Where(t => t.Length > 0)
-            .ToHashSet();
+
+        // Today's link is the name's. A pin is the name's too — unless the name is shared, when only a
+        // pin on this very Plex artist says anything about it.
+        var stored = await _catalog.GetMusicBrainz(key);
+        var current = stored?.Identity;
+        var pinned = artist.PlexArtistKey is null
+            ? stored is { IsOverride: true } ? current : null
+            : await _resolutions.GetPin(artist.Id);
+
+        // Record-level key → the library's own spelling, for showing which albums matched.
+        var owned = new Dictionary<string, string>();
+        foreach (var title in artist.Albums)
+        {
+            var record = AlbumTitleMatcher.NormalizeRecord(title);
+            if (record.Length > 0)
+            {
+                owned.TryAdd(record, title);
+            }
+        }
 
         var candidates = new List<Lead>();
-        if (!unlinked && stored is not { IsOverride: true })
+        if (!unlinked && pinned is null)
         {
-            if (!await GatherLeads(key, stored?.Identity, candidates, fresh))
+            if (!await GatherLeads(key, current, candidates, fresh))
             {
                 return null;
             }
 
-            if (ownedRecords.Count > 0)
+            if (owned.Count > 0)
             {
                 foreach (var lead in candidates.Take(MaxDiscographies))
                 {
@@ -252,19 +331,27 @@ public class ArtistIdentityAuditor
                     }
 
                     var theirs = groups.Select(g => AlbumTitleMatcher.NormalizeRecord(g.Title)).ToHashSet();
-                    lead.AlbumOverlap = ownedRecords.Count(theirs.Contains);
+                    lead.ReleaseGroups = groups.Length;
+                    lead.MatchedAlbums = owned.Where(o => theirs.Contains(o.Key)).Select(o => o.Value).ToList();
                 }
             }
         }
 
         var resolution = ArtistIdentityJudge.Judge(
-            artist,
-            ownedRecords.Count,
-            stored?.Identity,
-            stored?.IsOverride ?? false,
-            unlinked,
-            candidates.Select(c => c.ToCandidate()).ToList(),
-            _time.GetUtcNow());
+                artist.Name,
+                owned.Count,
+                pinned ?? current,
+                currentIsPinned: pinned is not null,
+                unlinked,
+                candidates.Select(c => c.ToCandidate()).ToList(),
+                _time.GetUtcNow())
+            with
+            {
+                // Today's link is the name's, whatever this Plex artist was pinned to.
+                CurrentMbid = current?.Mbid,
+                PlexArtistKey = artist.PlexArtistKey,
+                Albums = artist.Albums,
+            };
         await _resolutions.Put(resolution);
         return resolution;
     }
@@ -352,9 +439,11 @@ public class ArtistIdentityAuditor
             resolved.Count(r => r.Confidence == ResolutionConfidence.Medium),
             resolved.Count(r => r.Confidence == ResolutionConfidence.Low),
             resolutions.Count(r => r.Status == ArtistResolutionStatus.Ambiguous),
+            resolutions.Count(r => r.Status == ArtistResolutionStatus.Mixed),
             resolutions.Count(r => r.Status == ArtistResolutionStatus.Missing),
             resolutions.Count(r => r.Status == ArtistResolutionStatus.Unlinked),
             resolutions.Count(r => r.DisagreesWithCurrent),
+            present.Where(a => a.PlexArtistKey is not null).Select(a => a.Name).Distinct().Count(),
             resolutions.Count(r => r.NeedsAttention),
             GetStatus());
     }
@@ -370,43 +459,46 @@ public class ArtistIdentityAuditor
             .Where(r => r.NeedsAttention)
             .OrderBy(r => r.Status switch
             {
-                ArtistResolutionStatus.Ambiguous => 0,
-                ArtistResolutionStatus.Resolved => 1,
-                ArtistResolutionStatus.Missing => 2,
-                _ => 3,
+                ArtistResolutionStatus.Mixed => 0,
+                ArtistResolutionStatus.Ambiguous => 1,
+                ArtistResolutionStatus.Resolved => 2,
+                ArtistResolutionStatus.Missing => 3,
+                _ => 4,
             })
             .ThenByDescending(r => r.OwnedAlbums)
             .ThenBy(r => r.Artist, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    /// <summary>The stored resolutions of artists still in the library.</summary>
-    private async Task<(HashSet<string> Present, List<ArtistResolution> Resolutions)> Current()
+    /// <summary>The stored resolutions of library artists still in the library.</summary>
+    private async Task<(IReadOnlyList<LibraryArtist> Present, List<ArtistResolution> Resolutions)> Current()
     {
-        var present = (await _catalog.GetAllPresent())
-            .Select(a => a.ArtistKey.ArtistName)
-            .ToHashSet();
-        var resolutions = (await _resolutions.GetAll()).Where(r => present.Contains(r.Artist)).ToList();
+        var present = await LibraryArtists();
+        var ids = present.Select(a => a.Id).ToHashSet();
+        var resolutions = (await _resolutions.GetAll()).Where(r => ids.Contains(r.Id)).ToList();
         return (present, resolutions);
     }
 
-    private static Dictionary<string, IReadOnlyCollection<string>> OwnedTitles(
-        Dictionary<string, Dictionary<string, AudioQuality?>> owned) =>
-        owned
-            .GroupBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => (IReadOnlyCollection<string>)g.SelectMany(e => e.Value.Keys).ToList(),
-                StringComparer.OrdinalIgnoreCase);
+    /// <summary>Every library artist: each present name, split per Plex artist where it is shared.</summary>
+    private async Task<IReadOnlyList<LibraryArtist>> LibraryArtists()
+    {
+        var owned = await _catalog.GetOwnedAlbumArtists();
+        return (await _catalog.GetAllPresent())
+            .Select(a => a.ArtistKey.ArtistName)
+            .SelectMany(name => LibraryArtist.For(name, owned.GetValueOrDefault(name) ?? []))
+            .ToList();
+    }
 
     /// <summary>A candidate being assembled: evidence accumulates as each source mentions it.</summary>
     private sealed class Lead(string mbid, string? name, string? disambiguation)
     {
         public string Mbid { get; } = mbid;
         public List<string> Evidence { get; } = new();
-        public int? AlbumOverlap { get; set; }
+        public IReadOnlyList<string>? MatchedAlbums { get; set; }
+        public int? ReleaseGroups { get; set; }
 
         public ResolutionCandidate ToCandidate() =>
-            new(Mbid, name, disambiguation, AlbumOverlap, Evidence.Distinct().ToArray());
+            new(Mbid, name, disambiguation, MatchedAlbums?.Count, Evidence.Distinct().ToArray(),
+                MatchedAlbums, ReleaseGroups);
     }
 }

@@ -56,6 +56,15 @@ public static class ArtistIdentityJudge
         var best = candidates.Max(c => c.AlbumOverlap ?? 0);
         if (best > 0)
         {
+            if (Mixed(candidates) is { } shares)
+            {
+                return Verdict(ArtistResolutionStatus.Mixed,
+                    "The library's albums here belong to different acts: "
+                    + string.Join("; ", shares.Select(c =>
+                        $"{Label(c)} has {string.Join(", ", c.MatchedAlbums!)}"))
+                    + ".");
+            }
+
             var top = candidates.Where(c => c.AlbumOverlap == best).ToList();
             if (top.Count > 1)
             {
@@ -121,6 +130,41 @@ public static class ArtistIdentityJudge
             "Only today's link points at it, and its name doesn't match." + noOverlap,
             candidates[0], ResolutionConfidence.Low);
     }
+
+    /// <summary>
+    /// The candidates that each hold a different share of the library's albums, strongest first — or
+    /// null when the albums don't split that way. Two acts both having a "Greatest Hits" is one act's
+    /// album twice, not a split; so a share must be disjoint from the leader's, and either as large as
+    /// it or at least two albums (one shared common title is too thin to call it a second act).
+    /// </summary>
+    private static IReadOnlyList<ResolutionCandidate>? Mixed(IReadOnlyList<ResolutionCandidate> candidates)
+    {
+        var ranked = candidates
+            .Where(c => c.AlbumOverlap > 0 && c.MatchedAlbums is { Count: > 0 })
+            .OrderByDescending(c => c.AlbumOverlap)
+            .ToList();
+        if (ranked.Count < 2)
+        {
+            return null;
+        }
+
+        var leader = ranked[0];
+        var claimed = new HashSet<string>(leader.MatchedAlbums!, StringComparer.OrdinalIgnoreCase);
+        var shares = new List<ResolutionCandidate> { leader };
+        foreach (var other in ranked.Skip(1))
+        {
+            var disjoint = !other.MatchedAlbums!.Any(claimed.Contains);
+            if (disjoint && (other.AlbumOverlap >= 2 || other.AlbumOverlap == leader.AlbumOverlap))
+            {
+                shares.Add(other);
+                claimed.UnionWith(other.MatchedAlbums!);
+            }
+        }
+        return shares.Count > 1 ? shares : null;
+    }
+
+    private static string Label(ResolutionCandidate c) =>
+        c.Disambiguation is { Length: > 0 } d ? $"{c.Name} ({d})" : c.Name ?? c.Mbid;
 
     private static string Albums(int n) => n == 1 ? "one" : n.ToString();
 

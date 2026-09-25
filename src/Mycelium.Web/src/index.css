@@ -3838,6 +3838,18 @@ a.playlist-badge.is-link:hover {
   flex-wrap: wrap;
   gap: 0.3rem;
 }
+/* Which of the library's albums a candidate holds — the evidence behind its count. Wraps under the
+   candidate's line rather than widening it. */
+.reconcile-matched,
+.reconcile-unmatched {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  margin: 0;
+}
+.reconcile-unmatched {
+  margin-bottom: 0.4rem;
+}
+
 .reconcile-chip {
   border: 1px solid var(--border-bright);
   border-radius: 999px;

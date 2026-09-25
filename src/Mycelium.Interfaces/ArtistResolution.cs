@@ -15,6 +15,13 @@ public enum ArtistResolutionStatus
     /// <summary>Several MusicBrainz artists fit equally well. A person has to choose.</summary>
     Ambiguous,
 
+    /// <summary>
+    /// The albums filed under this one library artist belong to more than one MusicBrainz act — each
+    /// candidate holds a different share of them. No single answer is right; the library needs
+    /// splitting (in Plex) first.
+    /// </summary>
+    Mixed,
+
     /// <summary>MusicBrainz has no artist that fits. Someone has to add it there.</summary>
     Missing,
 
@@ -59,12 +66,16 @@ public static class ResolutionEvidence
 /// answer for the candidate.
 /// </param>
 /// <param name="Evidence">Why it was considered; see <see cref="ResolutionEvidence"/>.</param>
+/// <param name="MatchedAlbums">The library's titles, as the library spells them, that are on it.</param>
+/// <param name="ReleaseGroups">How many release groups (albums, EPs, singles…) it has on MusicBrainz.</param>
 public record ResolutionCandidate(
     string Mbid,
     string? Name,
     string? Disambiguation,
     int? AlbumOverlap,
-    IReadOnlyList<string> Evidence);
+    IReadOnlyList<string> Evidence,
+    IReadOnlyList<string>? MatchedAlbums = null,
+    int? ReleaseGroups = null);
 
 /// <summary>
 /// The outcome of checking one library artist against MusicBrainz: which artist it is, how sure that
@@ -79,6 +90,12 @@ public record ResolutionCandidate(
 /// </param>
 /// <param name="OwnedAlbums">How many albums the library holds by this artist.</param>
 /// <param name="Reason">One line on how the verdict was reached, for a person reading the panel.</param>
+/// <param name="PlexArtistKey">
+/// Set when the name covers several Plex artists (two unrelated bands that share it): then each Plex
+/// artist is checked on its own albums and gets its own resolution, and this says which one it is.
+/// Null for the ordinary case of one act per name.
+/// </param>
+/// <param name="Albums">The library's album titles this was judged on.</param>
 public record ArtistResolution(
     string Artist,
     ArtistResolutionStatus Status,
@@ -90,14 +107,23 @@ public record ArtistResolution(
     int OwnedAlbums,
     IReadOnlyList<ResolutionCandidate> Candidates,
     string Reason,
-    DateTimeOffset CheckedAt)
+    DateTimeOffset CheckedAt,
+    int? PlexArtistKey = null,
+    IReadOnlyList<string>? Albums = null)
 {
+    /// <summary>What it is stored under: the name, or the name and Plex artist when the name is shared.</summary>
+    public string Id => LibraryArtistId(Artist, PlexArtistKey);
+
+    public static string LibraryArtistId(string artist, int? plexArtistKey) =>
+        plexArtistKey is { } key ? $"{artist}#plex:{key}" : artist;
+
     /// <summary>
     /// Whether a person should look at it: anything without an answer, and any answer resting on
     /// nothing but a name. The reconciliation panel is exactly these.
     /// </summary>
     public bool NeedsAttention =>
-        Status is ArtistResolutionStatus.Ambiguous or ArtistResolutionStatus.Missing or ArtistResolutionStatus.Unlinked
+        Status is ArtistResolutionStatus.Ambiguous or ArtistResolutionStatus.Mixed
+            or ArtistResolutionStatus.Missing or ArtistResolutionStatus.Unlinked
         || Confidence == ResolutionConfidence.Low;
 
     /// <summary>Whether it resolved to a different artist than the one linked today.</summary>
@@ -105,14 +131,18 @@ public record ArtistResolution(
         Mbid is not null && CurrentMbid is not null && !string.Equals(Mbid, CurrentMbid, StringComparison.OrdinalIgnoreCase);
 }
 
-/// <summary>Stored <see cref="ArtistResolution"/>s, one per library artist name.</summary>
+/// <summary>
+/// Stored <see cref="ArtistResolution"/>s, one per library artist (<see cref="ArtistResolution.Id"/>),
+/// and the pins made on Plex artists that share a name — which the name-level pin on the catalog can't
+/// express, since it would pin both acts at once.
+/// </summary>
 public interface IArtistResolutionRepo
 {
     Task<ArtistResolution[]> GetAll();
 
-    Task<ArtistResolution?> Get(string artist);
+    Task<ArtistResolution?> Get(string id);
 
-    /// <summary>When each stored artist was last checked, to pick the ones due again without loading everything.</summary>
+    /// <summary>When each stored library artist was last checked, by id, to pick the ones due again.</summary>
     Task<Dictionary<string, DateTimeOffset>> GetCheckedAt();
 
     /// <summary>How many need a person (<see cref="ArtistResolution.NeedsAttention"/>) — the nav badge.</summary>
@@ -121,6 +151,12 @@ public interface IArtistResolutionRepo
     /// <summary>Stores the resolution, replacing the artist's previous one.</summary>
     Task Put(ArtistResolution resolution);
 
-    /// <summary>Drops the resolutions of artists no longer in the library.</summary>
-    Task DeleteAllExcept(IReadOnlyCollection<string> artists);
+    /// <summary>Drops the resolutions of library artists (by id) no longer in the library.</summary>
+    Task DeleteAllExcept(IReadOnlyCollection<string> ids);
+
+    /// <summary>The MusicBrainz artist pinned on one Plex artist of a shared name, if any.</summary>
+    Task<MusicBrainzIdentity?> GetPin(string id);
+
+    /// <summary>Pins (or, with null, unpins) one Plex artist of a shared name.</summary>
+    Task SetPin(string id, MusicBrainzIdentity? identity);
 }

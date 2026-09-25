@@ -267,6 +267,24 @@ One queue and one worker for every MusicBrainz call.
 >   ListenBrainz follow-up uses it immediately. Everything else in this phase is
 >   read-only.
 >
+> **Checked per Plex artist, not per name.** Found in the first real run:
+> Doldrums covers two Plex artists, a Canadian electronic act and a US space-rock
+> band, and the name-keyed catalog merged their eight albums.
+>
+> - **Plex artist on each album.** Owned albums now carry their Plex artist
+>   (`OwnedAlbum.PlexArtistRatingKey`, from the album listing's
+>   `parentRatingKey`).
+> - **Shared names are split.** A name whose albums sit under two or more Plex
+>   artists becomes one library artist per Plex artist (`LibraryArtist`). Each is
+>   judged on its own albums and stored as `{name}#plex:{key}`.
+> - **Pins on a shared name.** They go in `libraryArtistPins`, because the
+>   catalog's name-level pin would pin both acts.
+> - **New status `Mixed`.** Candidates hold disjoint shares of one library
+>   artist's albums: one Plex artist holds albums by two acts, and it needs
+>   splitting in Plex.
+> - **Candidates show their evidence:** the titles they matched and how many
+>   release groups they have.
+>
 > **Confidence rules.** "Overlap" means library albums found on the candidate's
 > discography, compared by record-level title.
 >
@@ -452,6 +470,12 @@ decision wins, and any conflict is logged.
 2. **Library layer.**
    - The catalog stops being "the Plex artist doc". It becomes library links:
      library id ↔ artist MBID and library album ↔ album key.
+   - **The library id is the Plex artist's rating key, not the name.** Doldrums
+     proves one name can be two acts, each with its own Plex artist. Phase 1
+     already resolves shared names per Plex artist (`LibraryArtist`), so the
+     re-key maps `{name}#plex:{key}` resolutions straight across.
+   - Name-keyed decisions on a shared name (a like on "Doldrums") are ambiguous
+     by nature. Send them to the panel instead of guessing.
    - Plex is the first adapter; Navidrome comes later.
 3. **Albums.**
    - Map `(artist, title)` keys to album keys (D2) using the matcher.

@@ -15,8 +15,16 @@ public record ArtistAlbums(ArtistKey Artist, IReadOnlyList<OwnedAlbum> Albums);
 /// tracks (see <see cref="AudioQualityTier.Majority"/>). Null means we haven't determined it: Plex
 /// reported no codecs, or the album was synced before quality tracking existed. Null deliberately
 /// never reads as "needs upgrading" — see <see cref="AudioQuality"/>.</para>
+///
+/// <para><paramref name="PlexArtistRatingKey"/> is the Plex artist the album is filed under. One name
+/// can cover several Plex artists — two unrelated bands that share it — and this is what says which
+/// album is whose. Null for a collaboration (filed under the joint act) and for albums synced before
+/// it was captured.</para>
 /// </summary>
-public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality = null);
+public record OwnedAlbum(string Title, int PlexRatingKey, AudioQuality? Quality = null, int? PlexArtistRatingKey = null);
+
+/// <summary>An owned album title and the Plex artist it is filed under (see <see cref="OwnedAlbum"/>).</summary>
+public record OwnedAlbumArtist(string Title, int? PlexArtistRatingKey);
 
 /// <summary>
 /// An album that exists on Deezer for an artist the user owns, but isn't in the library — a

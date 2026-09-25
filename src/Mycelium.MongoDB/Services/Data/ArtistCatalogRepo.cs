@@ -18,6 +18,8 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     private const string FieldAlbumKeys = "albumKeys";
     private const string FieldAlbumKeyTitle = "title";
     private const string FieldAlbumKeyRatingKey = "key";
+    // The Plex artist the album is filed under; absent on collaborations and entries synced before it.
+    private const string FieldAlbumKeyArtist = "artist";
     private const string FieldAlbumQuality = "albumQuality";
     private const string FieldAlbumKeyQuality = "quality";
     private const string FieldGenres = "genres";
@@ -336,6 +338,54 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         await Collection.BulkWriteAsync(writes);
     }
 
+    public async Task<Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>> GetOwnedAlbumArtists()
+    {
+        var cursor = await Collection.FindAsync(
+            Builders<BsonDocument>.Filter.Eq(FieldPresent, true),
+            new FindOptions<BsonDocument>
+            {
+                Projection = Builders<BsonDocument>.Projection
+                    .Include(FieldName).Include(FieldAlbums).Include(FieldAlbumKeys),
+            });
+
+        // Keyed and merged exactly as GetOwnedAlbums is, so the two agree on who owns what.
+        var result = new Dictionary<string, List<OwnedAlbumArtist>>(ArtistNameComparer.Instance);
+        foreach (var doc in await cursor.ToListAsync())
+        {
+            var name = doc.TryGetValue(FieldName, out var n) && !n.IsBsonNull ? n.AsString : doc["_id"].AsString;
+            if (!result.TryGetValue(name, out var albums))
+            {
+                result[name] = albums = new List<OwnedAlbumArtist>();
+            }
+
+            // The key entries carry the Plex artist; the flat title array is the authority on which
+            // albums exist, so any title without a key entry (synced before keys) still counts.
+            var keyed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (doc.TryGetValue(FieldAlbumKeys, out var k) && k.IsBsonArray)
+            {
+                foreach (var entry in k.AsBsonArray.OfType<BsonDocument>())
+                {
+                    if (!entry.TryGetValue(FieldAlbumKeyTitle, out var title) || !title.IsString)
+                    {
+                        continue;
+                    }
+                    int? artist = entry.TryGetValue(FieldAlbumKeyArtist, out var a) && a.IsNumeric ? a.ToInt32() : null;
+                    albums.Add(new OwnedAlbumArtist(title.AsString, artist));
+                    keyed.Add(title.AsString);
+                }
+            }
+            if (doc.TryGetValue(FieldAlbums, out var t) && t.IsBsonArray)
+            {
+                albums.AddRange(t.AsBsonArray
+                    .Where(x => x.IsString && !keyed.Contains(x.AsString))
+                    .Select(x => new OwnedAlbumArtist(x.AsString, null)));
+            }
+        }
+
+        return result.ToDictionary(
+            e => e.Key, e => (IReadOnlyList<OwnedAlbumArtist>)e.Value, ArtistNameComparer.Instance);
+    }
+
     public async Task<Dictionary<string, Dictionary<string, AudioQuality?>>> GetOwnedAlbums()
     {
         var cursor = await Collection.FindAsync(
@@ -435,11 +485,19 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         return result;
     }
 
-    private static BsonDocument ToAlbumKeyDoc(OwnedAlbum album) => new()
+    private static BsonDocument ToAlbumKeyDoc(OwnedAlbum album)
     {
-        { FieldAlbumKeyTitle, album.Title },
-        { FieldAlbumKeyRatingKey, album.PlexRatingKey },
-    };
+        var doc = new BsonDocument
+        {
+            { FieldAlbumKeyTitle, album.Title },
+            { FieldAlbumKeyRatingKey, album.PlexRatingKey },
+        };
+        if (album.PlexArtistRatingKey is { } artist)
+        {
+            doc[FieldAlbumKeyArtist] = artist;
+        }
+        return doc;
+    }
 
     /// <summary>
     /// One album's determined quality, as an array entry rather than a map key: album titles contain

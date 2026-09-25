@@ -30,7 +30,7 @@ public class ArtistIdentityAuditorTests
     private readonly ManualTimeProvider _clock = new(Start);
     private readonly ArtistIdentityAuditor _sut;
 
-    private readonly Dictionary<string, Dictionary<string, AudioQuality?>> _owned = new();
+    private readonly Dictionary<string, IReadOnlyList<OwnedAlbumArtist>> _owned = new();
 
     public ArtistIdentityAuditorTests()
     {
@@ -38,7 +38,7 @@ public class ArtistIdentityAuditorTests
         _sut = new ArtistIdentityAuditor(
             _musicBrainz, cache, _catalog, _resolutions, NullLogger<ArtistIdentityAuditor>.Instance, _clock);
 
-        _catalog.GetOwnedAlbums().Returns(_ => _owned);
+        _catalog.GetOwnedAlbumArtists().Returns(_ => _owned);
         _catalog.GetAllPresent().Returns([Present("Vulture")]);
 
         Own("Vulture", "Sentinels", "The Guillotine");
@@ -57,7 +57,10 @@ public class ArtistIdentityAuditorTests
     private static CatalogArtist Present(string name) => new(new ArtistKey(name), null, Start);
 
     private void Own(string artist, params string[] albums) =>
-        _owned[artist] = albums.ToDictionary(a => a, _ => (AudioQuality?)null);
+        _owned[artist] = albums.Select(a => new OwnedAlbumArtist(a, null)).ToList();
+
+    private void OwnUnder(string artist, params (string Title, int PlexArtist)[] albums) =>
+        _owned[artist] = albums.Select(a => new OwnedAlbumArtist(a.Title, a.PlexArtist)).ToList();
 
     private static MusicBrainzArtist Artist(string mbid) => new() { Id = mbid, Name = "Vulture" };
 
@@ -67,7 +70,7 @@ public class ArtistIdentityAuditorTests
     [Fact]
     public async Task The_act_with_the_librarys_albums_wins_among_same_named_ones()
     {
-        var result = await _sut.Check("Vulture", fresh: false);
+        var result = await _sut.Check("Vulture", null, fresh: false);
 
         result!.Status.Should().Be(ArtistResolutionStatus.Resolved);
         result.Mbid.Should().Be(GermanMetal);
@@ -84,7 +87,7 @@ public class ArtistIdentityAuditorTests
         // The library has the deluxe edition under a decorated title; MusicBrainz has the album.
         Own("Vulture", "Sentinels (Deluxe Edition)");
 
-        var result = await _sut.Check("Vulture", fresh: false);
+        var result = await _sut.Check("Vulture", null, fresh: false);
 
         result!.Candidates.Single(c => c.Mbid == GermanMetal).AlbumOverlap.Should().Be(1);
     }
@@ -94,7 +97,7 @@ public class ArtistIdentityAuditorTests
     {
         _musicBrainz.SearchArtists("Vulture", Arg.Any<int>()).Returns((MusicBrainzArtist[]?)null);
 
-        (await _sut.Check("Vulture", fresh: false)).Should().BeNull();
+        (await _sut.Check("Vulture", null, fresh: false)).Should().BeNull();
         _resolutions.Items.Should().BeEmpty();
     }
 
@@ -103,7 +106,7 @@ public class ArtistIdentityAuditorTests
     {
         _musicBrainz.BrowseReleaseGroups(DanishIndie).Returns((MusicBrainzReleaseGroup[]?)null);
 
-        (await _sut.Check("Vulture", fresh: false)).Should().BeNull();
+        (await _sut.Check("Vulture", null, fresh: false)).Should().BeNull();
         _resolutions.Items.Should().BeEmpty();
     }
 
@@ -112,7 +115,7 @@ public class ArtistIdentityAuditorTests
     {
         _owned.Clear();
 
-        var result = await _sut.Check("Vulture", fresh: false);
+        var result = await _sut.Check("Vulture", null, fresh: false);
 
         await _musicBrainz.DidNotReceive().BrowseReleaseGroups(Arg.Any<string>());
         result!.Mbid.Should().Be(GermanMetal);
@@ -124,7 +127,7 @@ public class ArtistIdentityAuditorTests
     {
         _catalog.GetMusicBrainz(Vulture).Returns((new MusicBrainzIdentity(GermanMetal, "Vulture"), true));
 
-        var result = await _sut.Check("Vulture", fresh: false);
+        var result = await _sut.Check("Vulture", null, fresh: false);
 
         result!.Status.Should().Be(ArtistResolutionStatus.Pinned);
         await _musicBrainz.DidNotReceive().SearchArtists(Arg.Any<string>(), Arg.Any<int>());
@@ -136,7 +139,7 @@ public class ArtistIdentityAuditorTests
     {
         _catalog.IsDeezerUnlinked(Vulture).Returns(true);
 
-        var result = await _sut.Check("Vulture", fresh: false);
+        var result = await _sut.Check("Vulture", null, fresh: false);
 
         await _musicBrainz.DidNotReceive().LookupUrl(Arg.Any<string>());
         result!.Candidates.SelectMany(c => c.Evidence).Should().NotContain(ResolutionEvidence.Deezer);
@@ -145,11 +148,11 @@ public class ArtistIdentityAuditorTests
     [Fact]
     public async Task Discographies_are_cached_between_checks_unless_fresh()
     {
-        await _sut.Check("Vulture", fresh: false);
-        await _sut.Check("Vulture", fresh: false);
+        await _sut.Check("Vulture", null, fresh: false);
+        await _sut.Check("Vulture", null, fresh: false);
         await _musicBrainz.Received(1).BrowseReleaseGroups(GermanMetal);
 
-        await _sut.Check("Vulture", fresh: true);
+        await _sut.Check("Vulture", null, fresh: true);
         await _musicBrainz.Received(2).BrowseReleaseGroups(GermanMetal);
     }
 
@@ -199,6 +202,107 @@ public class ArtistIdentityAuditorTests
         report.Missing.Should().Be(1);
         report.NeedsAttention.Should().Be(1);
         attention.Select(a => a.Artist).Should().Equal("Nobody");
+    }
+
+    // Two unrelated bands called Doldrums, each its own Plex artist — the case that needed Plex ids.
+    private const string CanadianDoldrums = "5ee481a8-7ca1-4f34-a6a0-fd7b126cb8a8";
+    private const string SpaceRockDoldrums = "6853f967-f91b-48cc-85e7-afd8c74f87cf";
+    private static readonly ArtistKey Doldrums = new("Doldrums");
+
+    private void TwoDoldrums()
+    {
+        _catalog.GetAllPresent().Returns([Present("Doldrums")]);
+        _musicBrainz.SearchArtists("Doldrums", Arg.Any<int>()).Returns(
+        [
+            new MusicBrainzArtist { Id = CanadianDoldrums, Name = "Doldrums", Disambiguation = "Canadian electronic artist" },
+            new MusicBrainzArtist { Id = SpaceRockDoldrums, Name = "Doldrums", Disambiguation = "US space rock/psychedelic rock band" },
+        ]);
+        _musicBrainz.BrowseReleaseGroups(CanadianDoldrums).Returns(
+            Groups("Empire Sound", "Egypt", "Lesser Evil", "The Air Conditioned Nightmare", "Esc", "Flipbook"));
+        _musicBrainz.BrowseReleaseGroups(SpaceRockDoldrums).Returns(
+            Groups("Acupuncture", "Feng Shui", "Desk Trickery", "Secret Life of Machines"));
+    }
+
+    [Fact]
+    public async Task A_name_shared_by_two_Plex_artists_is_checked_as_two_library_artists()
+    {
+        TwoDoldrums();
+        OwnUnder("Doldrums",
+            ("Lesser Evil", 101), ("Egypt", 101), ("Empire Sound", 101), ("The Air Conditioned Nightmare", 101),
+            ("Acupuncture", 202), ("Feng Shui", 202), ("Desk Trickery", 202), ("Secret Life of Machines", 202));
+
+        await _sut.RunPass(all: false);
+
+        _resolutions.Items.Keys.Should().BeEquivalentTo("Doldrums#plex:101", "Doldrums#plex:202");
+        var canadian = _resolutions.Items["Doldrums#plex:101"];
+        canadian.Mbid.Should().Be(CanadianDoldrums);
+        canadian.Confidence.Should().Be(ResolutionConfidence.High);
+        canadian.PlexArtistKey.Should().Be(101);
+        canadian.Albums.Should().HaveCount(4);
+        _resolutions.Items["Doldrums#plex:202"].Mbid.Should().Be(SpaceRockDoldrums);
+
+        var report = await _sut.Report();
+        report.LibraryArtists.Should().Be(2);
+        report.SharedNames.Should().Be(1);
+        report.High.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task One_Plex_artist_holding_two_acts_albums_is_mixed()
+    {
+        TwoDoldrums();
+        OwnUnder("Doldrums",
+            ("Lesser Evil", 101), ("Egypt", 101), ("Acupuncture", 101), ("Feng Shui", 101));
+
+        var result = await _sut.Check("Doldrums", null, fresh: false);
+
+        result!.Status.Should().Be(ArtistResolutionStatus.Mixed);
+        result.NeedsAttention.Should().BeTrue();
+        result.Reason.Should().Contain("Lesser Evil").And.Contain("Acupuncture");
+    }
+
+    [Fact]
+    public async Task Candidates_carry_the_albums_they_matched_and_their_size()
+    {
+        var result = await _sut.Check("Vulture", null, fresh: false);
+
+        var german = result!.Candidates.Single(c => c.Mbid == GermanMetal);
+        german.MatchedAlbums.Should().BeEquivalentTo("Sentinels", "The Guillotine");
+        german.ReleaseGroups.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Pinning_one_Plex_artist_of_a_shared_name_leaves_the_name_and_the_other_alone()
+    {
+        TwoDoldrums();
+        OwnUnder("Doldrums", ("Lesser Evil", 101), ("Acupuncture", 202));
+        _musicBrainz.GetArtist(SpaceRockDoldrums).Returns(
+            new MusicBrainzArtist { Id = SpaceRockDoldrums, Name = "Doldrums", Disambiguation = "US space rock" });
+
+        var pinned = await _sut.PinPlexArtist("Doldrums", 202, SpaceRockDoldrums);
+
+        pinned!.Status.Should().Be(ArtistResolutionStatus.Pinned);
+        pinned.Mbid.Should().Be(SpaceRockDoldrums);
+        pinned.PlexArtistKey.Should().Be(202);
+        await _catalog.DidNotReceive().SetMusicBrainzIdentity(Arg.Any<ArtistKey>(), Arg.Any<MusicBrainzIdentity>(), Arg.Any<bool>());
+
+        // The pin survives a re-check, and the other Doldrums is still judged on its own albums.
+        (await _sut.Check("Doldrums", 202, fresh: true))!.Status.Should().Be(ArtistResolutionStatus.Pinned);
+        (await _sut.Check("Doldrums", 101, fresh: false))!.Mbid.Should().Be(CanadianDoldrums);
+    }
+
+    [Fact]
+    public async Task A_name_level_pin_does_not_settle_a_shared_names_Plex_artists()
+    {
+        TwoDoldrums();
+        OwnUnder("Doldrums", ("Lesser Evil", 101), ("Acupuncture", 202));
+        _catalog.GetMusicBrainz(Doldrums).Returns((new MusicBrainzIdentity(CanadianDoldrums, "Doldrums"), true));
+
+        var other = await _sut.Check("Doldrums", 202, fresh: false);
+
+        other!.Status.Should().Be(ArtistResolutionStatus.Resolved);
+        other.Mbid.Should().Be(SpaceRockDoldrums);
+        other.CurrentMbid.Should().Be(CanadianDoldrums);
     }
 
     private static ArtistResolution Resolution(string artist, DateTimeOffset checkedAt) =>

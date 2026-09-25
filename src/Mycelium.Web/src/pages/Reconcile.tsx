@@ -63,12 +63,18 @@ const TILES: { key: keyof IdentityReport; label: string; hint: string }[] = [
   { key: 'pinned', label: 'Pinned', hint: 'chosen by hand' },
   { key: 'low', label: 'Name only', hint: 'nothing but a matching name — needs a look' },
   { key: 'ambiguous', label: 'Several candidates', hint: 'more than one act fits equally well' },
+  { key: 'mixed', label: 'Mixes acts', hint: 'one Plex artist holds albums by different acts — split it in Plex' },
   { key: 'missing', label: 'Not on MusicBrainz', hint: 'nobody by this name — add it there' },
   { key: 'unlinked', label: 'Detached', hint: 'unlinked from MusicBrainz by hand' },
   {
     key: 'disagreesWithCurrent',
     label: 'Differs from today',
     hint: 'resolved to a different act than the one linked now',
+  },
+  {
+    key: 'sharedNames',
+    label: 'Shared names',
+    hint: 'names that cover several Plex artists — each is checked on its own albums',
   },
 ]
 
@@ -167,6 +173,12 @@ function Summary() {
 
 const GROUPS: { title: string; blurb: string; test: (r: ArtistResolution) => boolean }[] = [
   {
+    title: 'Library mixes several acts',
+    blurb:
+      'Albums by different acts are filed under one Plex artist. Split them in Plex (so each act is its own Plex artist), then re-check — don’t accept either.',
+    test: (r) => r.status === 'Mixed',
+  },
+  {
     title: 'Several candidates',
     blurb: 'More than one MusicBrainz artist fits. Pick the right one.',
     test: (r) => r.status === 'Ambiguous',
@@ -227,7 +239,7 @@ function AttentionList() {
             </summary>
             <p className="dev-muted">{g.blurb}</p>
             {rows.map((r) => (
-              <ArtistRow key={r.artist} resolution={r} />
+              <ArtistRow key={r.id} resolution={r} />
             ))}
           </details>
         )
@@ -247,24 +259,44 @@ function ArtistRow({ resolution: r }: { resolution: ArtistResolution }) {
   }
 
   const accept = useMutation({
-    mutationFn: (mbid: string) => acceptArtist(r.artist, mbid),
+    mutationFn: (mbid: string) => acceptArtist(r.artist, r.plexArtistKey, mbid),
     onSuccess: refresh,
   })
-  const recheck = useMutation({ mutationFn: () => recheckArtist(r.artist), onSuccess: refresh })
+  const recheck = useMutation({
+    mutationFn: () => recheckArtist(r.artist, r.plexArtistKey),
+    onSuccess: refresh,
+  })
 
   const pastedMbid = parseArtistMbid(pasted)
   const busy = accept.isPending || recheck.isPending
   const candidates = [...r.candidates].sort((a, b) => (b.albumOverlap ?? -1) - (a.albumOverlap ?? -1))
+  const matchedAnywhere = new Set(r.candidates.flatMap((c) => c.matchedAlbums ?? []))
+  const unmatched = (r.albums ?? []).filter((a) => !matchedAnywhere.has(a))
+  const checked = r.candidates.some((c) => c.matchedAlbums !== null)
 
   return (
     <div className="reconcile-row">
       <div className="reconcile-head">
         <strong>{r.artist}</strong>
+        {r.plexArtistKey !== null && (
+          <span
+            className="reconcile-chip"
+            title="Several Plex artists share this name; this one is checked on its own albums"
+          >
+            Plex artist {r.plexArtistKey}
+          </span>
+        )}
         <span className="dev-muted">
           {r.ownedAlbums} album{r.ownedAlbums === 1 ? '' : 's'} in the library
         </span>
       </div>
       <p className="reconcile-reason">{r.reason}</p>
+      {checked && unmatched.length > 0 && (
+        <p className="reconcile-unmatched">
+          <span className="dev-muted">Not on any candidate: </span>
+          {unmatched.join(', ')}
+        </p>
+      )}
 
       {candidates.length > 0 && (
         <ul className="reconcile-candidates">
@@ -336,7 +368,8 @@ function CandidateRow({
       </a>
       {c.disambiguation && <span className="dev-muted"> ({c.disambiguation})</span>}
       <span className="reconcile-overlap">
-        {c.albumOverlap === null ? '—' : `${c.albumOverlap} of ${owned} albums`}
+        {c.albumOverlap === null ? '—' : `${c.albumOverlap} of your ${owned}`}
+        {c.releaseGroups !== null && ` · ${c.releaseGroups} release${c.releaseGroups === 1 ? '' : 's'} on MusicBrainz`}
       </span>
       <span className="reconcile-evidence">
         {c.evidence.map((e) => (
@@ -348,6 +381,12 @@ function CandidateRow({
       <button onClick={onAccept} disabled={busy}>
         Accept
       </button>
+      {c.matchedAlbums && c.matchedAlbums.length > 0 && (
+        <div className="reconcile-matched">
+          <span className="dev-muted">On it: </span>
+          {c.matchedAlbums.join(', ')}
+        </div>
+      )}
     </li>
   )
 }

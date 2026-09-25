@@ -107,15 +107,24 @@ public class PlexRepo : ILibraryQuery, ILibraryMatcher
         // regroup by the real artist name (matching the split done in QueryAllArtistMetadata).
         return (await _plexApi.GetMusicAlbums(plexLibrary.Key))
             .Where(a => !string.IsNullOrWhiteSpace(a.ParentTitle) && !string.IsNullOrWhiteSpace(a.Title))
-            .SelectMany(a => ArtistNames.Split(a.ParentTitle).Select(name => (Name: name, a.Title, a.RatingKey)))
+            .SelectMany(a =>
+            {
+                var names = ArtistNames.Split(a.ParentTitle).ToList();
+                // A collaboration's Plex artist is the joint act, which is neither of the names it is
+                // credited to here — so it says nothing about which of a name's Plex artists owns it.
+                int? artistKey = names.Count == 1 && a.ParentRatingKey != 0 ? a.ParentRatingKey : null;
+                return names.Select(name => (Name: name, a.Title, a.RatingKey, ArtistKey: artistKey));
+            })
             .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .Select(g => new ArtistAlbums(
                 new ArtistKey(g.Key),
                 // Keep each title once (as before), now paired with the Plex item it came from so the
                 // merge picker can link the album itself. A repeated title (a second copy of the same
                 // record) keeps the first key — either opens the album in Plex.
-                g.GroupBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
-                    .Select(t => new OwnedAlbum(t.First().Title, t.First().RatingKey))
+                // Grouped per Plex artist as well as per title: two same-named Plex artists can each hold
+                // a record of the same title, and each copy belongs to its own act.
+                g.GroupBy(x => (Title: x.Title.ToLowerInvariant(), x.ArtistKey))
+                    .Select(t => new OwnedAlbum(t.First().Title, t.First().RatingKey, PlexArtistRatingKey: t.Key.ArtistKey))
                     .ToArray()))
             .ToArray();
     }
