@@ -106,10 +106,14 @@ public class ArtistIdentityAuditor
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromDays(30);
 
     /// <summary>
-    /// How many leads get their discography checked. Each is at least one request; past this many
-    /// same-named acts the answer is going to be "a person should look" anyway.
+    /// How many same-named acts the name search asks for — and so how many get their discography
+    /// checked. Generous on purpose: MusicBrainz scores every exact-name act alike, so the one whose
+    /// discography holds the library's albums is as likely to be tenth as first ("Iconoclast" has ten,
+    /// and the right one was sixth). An unchecked candidate can only ever read as "a person should
+    /// look", so checking too few just hands the work to a person. Each check is one request, cached
+    /// for a month, and only names that many acts share pay it.
     /// </summary>
-    internal const int MaxDiscographies = 5;
+    internal const int MaxCandidates = 25;
 
     private readonly IMusicBrainzApi _musicBrainz;
     private readonly SourceCache _cache;
@@ -322,7 +326,7 @@ public class ArtistIdentityAuditor
 
             if (owned.Count > 0)
             {
-                foreach (var lead in candidates.Take(MaxDiscographies))
+                foreach (var lead in candidates.Take(MaxCandidates))
                 {
                     var groups = await ReleaseGroups(lead.Mbid, fresh);
                     if (groups is null)
@@ -397,7 +401,7 @@ public class ArtistIdentityAuditor
             Add(current.Mbid, current.Name, current.Disambiguation).Evidence.Add(ResolutionEvidence.Current);
         }
 
-        var found = await _musicBrainz.SearchArtists(key.ArtistName, MusicBrainzArtistMatch.SearchCandidates);
+        var found = await _musicBrainz.SearchArtists(key.ArtistName, MaxCandidates);
         if (found is null)
         {
             return false;

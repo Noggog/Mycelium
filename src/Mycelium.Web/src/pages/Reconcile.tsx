@@ -368,7 +368,7 @@ function CandidateRow({
       </a>
       {c.disambiguation && <span className="dev-muted"> ({c.disambiguation})</span>}
       <span className="reconcile-overlap">
-        {c.albumOverlap === null ? '—' : `${c.albumOverlap} of your ${owned}`}
+        {c.albumOverlap === null ? 'not checked' : `${c.albumOverlap} of your ${owned}`}
         {c.releaseGroups !== null && ` · ${c.releaseGroups} release${c.releaseGroups === 1 ? '' : 's'} on MusicBrainz`}
       </span>
       <span className="reconcile-evidence">

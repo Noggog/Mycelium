@@ -305,6 +305,32 @@ public class ArtistIdentityAuditorTests
         other.CurrentMbid.Should().Be(CanadianDoldrums);
     }
 
+    [Fact]
+    public async Task Every_same_named_act_is_checked_however_far_down_the_search_it_is()
+    {
+        // Iconoclast: ten acts share the name, and the one holding the library's albums came sixth.
+        const string Perth = "c1b2b705-fbde-42b2-8f8f-bf305b59fcf6";
+        var others = Enumerable.Range(0, 9).Select(i => $"00000000-0000-0000-0000-00000000000{i}").ToArray();
+        _catalog.GetAllPresent().Returns([Present("Iconoclast")]);
+        Own("Iconoclast", "Virulence", "HalluciNation", "In Ashes");
+        _musicBrainz.SearchArtists("Iconoclast", Arg.Any<int>()).Returns(
+            others.Take(5).Append(Perth).Concat(others.Skip(5))
+                .Select(id => new MusicBrainzArtist { Id = id, Name = "Iconoclast" })
+                .ToArray());
+        foreach (var id in others)
+        {
+            _musicBrainz.BrowseReleaseGroups(id).Returns(Groups("Something Else"));
+        }
+        _musicBrainz.BrowseReleaseGroups(Perth).Returns(Groups("Virulence", "HalluciNation", "Liminal"));
+
+        var result = await _sut.Check("Iconoclast", null, fresh: false);
+
+        result!.Mbid.Should().Be(Perth);
+        result.Confidence.Should().Be(ResolutionConfidence.High);
+        result.Candidates.Should().OnlyContain(c => c.AlbumOverlap != null);
+        await _musicBrainz.Received().SearchArtists("Iconoclast", ArtistIdentityAuditor.MaxCandidates);
+    }
+
     private static ArtistResolution Resolution(string artist, DateTimeOffset checkedAt) =>
         new(artist, ArtistResolutionStatus.Resolved, ResolutionConfidence.High, "x", artist, null, null, 0, [],
             "", checkedAt);
