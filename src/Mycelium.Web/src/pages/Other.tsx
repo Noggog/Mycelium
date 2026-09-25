@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import { getRelated } from '../api/related'
 import { getArtists, refreshCatalog } from '../api/artists'
 import { refreshQueue } from '../api/discovery'
+import { getApiTokens, mintApiToken, revokeApiToken, type ApiTokenMinted } from '../api/tokens'
 import {
   getCombinedArtists,
   resolveCombinedArtists,
@@ -72,6 +73,7 @@ export default function Other() {
       {user.isDev && (
         <>
           <PlexServerToken />
+          <ApiTokens />
           <CatalogRefresh />
           <QualitySweep />
           <UserQuality />
@@ -441,6 +443,139 @@ function ManualRecommendations() {
                 <td>
                   <button type="button" onClick={() => remove.mutate(r.id)} disabled={busy}>
                     Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// ---- API tokens for scripts ----
+
+// Minting used to mean pasting a fetch() into the devtools console. The server only mints and revokes
+// for a browser session, so this card is the natural home for it. The token value is in the mint
+// response and nowhere else — shown once here, then gone.
+const TOKEN_LIFETIMES: { label: string; days: number | null }[] = [
+  { label: '30 days', days: 30 },
+  { label: '90 days', days: 90 },
+  { label: '1 year', days: 365 },
+  { label: 'Never expires', days: null },
+]
+
+function ApiTokens() {
+  const queryClient = useQueryClient()
+  const [name, setName] = useState('')
+  const [lifetime, setLifetime] = useState(2)
+  const [dev, setDev] = useState(false)
+  const [minted, setMinted] = useState<ApiTokenMinted | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const { data, isPending, isError, error } = useQuery({
+    queryKey: ['tokens'],
+    queryFn: getApiTokens,
+  })
+
+  const mint = useMutation({
+    mutationFn: () => mintApiToken(name.trim(), TOKEN_LIFETIMES[lifetime].days, dev),
+    onSuccess: (t) => {
+      setMinted(t)
+      setCopied(false)
+      setName('')
+      setDev(false)
+      queryClient.invalidateQueries({ queryKey: ['tokens'] })
+    },
+  })
+  const revoke = useMutation({
+    mutationFn: revokeApiToken,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tokens'] }),
+  })
+
+  const busy = mint.isPending || revoke.isPending
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    if (name.trim()) mint.mutate()
+  }
+  const copy = async () => {
+    if (!minted) return
+    await navigator.clipboard.writeText(minted.token)
+    setCopied(true)
+  }
+
+  // Revoked and expired tokens stay in the list server-side; only the live ones are worth a row.
+  const rows = (data ?? []).filter(t => t.active)
+
+  return (
+    <div className="dev-tool">
+      <h2>API tokens</h2>
+      <p>
+        Long-lived credentials for scripts, acting as <strong>you</strong>. A dev-scoped token can
+        also call the dev endpoints (identity reconcile, pins). The token is shown once — lose it and
+        mint another.
+      </p>
+
+      <form className="controls" onSubmit={onSubmit}>
+        <input
+          placeholder="What it's for"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          disabled={busy}
+        />
+        <select value={lifetime} onChange={e => setLifetime(Number(e.target.value))} disabled={busy}>
+          {TOKEN_LIFETIMES.map((l, i) => (
+            <option key={l.label} value={i}>{l.label}</option>
+          ))}
+        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <input type="checkbox" checked={dev} onChange={e => setDev(e.target.checked)} disabled={busy} />
+          Dev scope
+        </label>
+        <button type="submit" disabled={busy || !name.trim()}>
+          {mint.isPending ? 'Minting…' : 'Mint token'}
+        </button>
+      </form>
+
+      {mint.isError && <p className="error">{(mint.error as Error).message}</p>}
+      {revoke.isError && <p className="error">{(revoke.error as Error).message}</p>}
+
+      {minted && (
+        <div className="controls">
+          <code style={{ wordBreak: 'break-all' }}>{minted.token}</code>
+          <button type="button" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+          <button type="button" onClick={() => setMinted(null)}>Done</button>
+        </div>
+      )}
+
+      {isPending && <p><em>Loading…</em></p>}
+      {isError && <p className="error">Failed to load: {(error as Error).message}</p>}
+      {!isPending && !isError && rows.length === 0 && <p><em>No live tokens.</em></p>}
+
+      {rows.length > 0 && (
+        <table className="dev-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Scope</th>
+              <th>Created</th>
+              <th>Expires</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(t => (
+              <tr key={t.id}>
+                <td>{t.name} <span className="dev-muted">({t.id})</span></td>
+                <td>{t.devScope ? 'dev' : 'user'}</td>
+                <td className="dev-muted">{new Date(t.createdAt).toLocaleDateString()}</td>
+                <td className="dev-muted">
+                  {t.expiresAt ? new Date(t.expiresAt).toLocaleDateString() : 'never'}
+                </td>
+                <td>
+                  <button type="button" onClick={() => revoke.mutate(t.id)} disabled={busy}>
+                    Revoke
                   </button>
                 </td>
               </tr>

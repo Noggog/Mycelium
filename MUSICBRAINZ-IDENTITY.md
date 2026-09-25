@@ -53,6 +53,14 @@ gains a release group, it is re-keyed (§8.2) onto the `rg:` key.
 
 The artist is always a MusicBrainz id, even for a `deezer:` or `title:` album.
 
+**Every album is attempted, and a failure is work, not a resting state.** Each
+owned album and each Deezer album is tried against the artist's release groups
+with a looser matcher than artists get (§5). The artist is already settled, so
+a near-miss on a title is a small, fixable error, not the wrong band. A
+`deezer:` or `title:` key is where a failed attempt lands. When the album is
+clearly yours it becomes a reconciliation item (§6.1), and the fix is usually
+contributing it to MusicBrainz through Harmony.
+
 ### D3: A release group is the album; Deezer albums are editions
 
 One MusicBrainz release group is one row in the UI. Deezer albums matched to it
@@ -344,6 +352,23 @@ New `artistDiscography` collection, one doc per artist MBID:
 automatically, and they only reach Discover if a high-confidence edition exists
 too.
 
+**Looser title matching, for albums only.** Before an album is declared
+unmatched, these are tried within the one artist's release groups:
+
+- **Record-key equality**, as for artists.
+- **Near titles.** Token similarity over record keys with a high threshold,
+  to cover punctuation, "&" vs "and", a dropped subtitle, and "Maiden England"
+  vs "Maiden England '88".
+- **Tie-breaks.** A title matching several release groups is decided by the
+  primary type (album vs single) and then the year. Only if it is still tied
+  is it left unmatched.
+
+These matches are stored as `method: "title-fuzzy"` at low confidence. They
+link the album, but they are listed for review (below).
+
+**Owned albums go through the same matcher.** It fills `albumIdentities` from
+the cached release groups (§5, owned albums).
+
 **Shared Deezer artist pages** such as Vulture's: Deezer albums that match
 nothing go to `unmatchedDeezer`, and are shown collapsed (§7). Grouping them by
 label or ISRC prefix, to tell the bands apart, could come later.
@@ -394,6 +419,61 @@ A page with an in-app badge count on the nav. No push notifications for now.
 - Open MusicBrainz search or the add-artist / add-release page
 - **Re-check.** It bypasses every cache (like the relinker's `fresh: true`),
   so edits you just made on MusicBrainz show up immediately
+
+### 6.1 Albums, and feeding MusicBrainz through Harmony (Phase 2)
+
+> **Planned, not built.** It is part of Phase 2: the album attempts (D2) need
+> the Deezer ↔ release-group matching, and the Harmony links are cheap to add
+> once they exist.
+
+**Album reconciliation.** When an album that is clearly yours fails to link,
+it becomes a panel item:
+
+- **Clearly yours** means it is owned, or someone has wanted, queued or
+  downloaded it.
+- **The guard.** On a shared Deezer page like Vulture's, most unmatched Deezer
+  albums belong to *other bands*. Listing them all would flood the panel with
+  releases nobody wants imported under this artist. So the rest of
+  `unmatchedDeezer` stays on the artist page ("Other Deezer releases"), still
+  with a Harmony link, but out of the panel.
+
+The panel gets two album groups, each ordered by artist, most-owned first:
+
+| Group | What | Actions |
+|---|---|---|
+| **Albums not on MusicBrainz** | Failed attempts on albums that are clearly yours | Harmony import, when there is a Deezer album. Otherwise MusicBrainz search and "add release". Paste a release-group URL to link it by hand. Re-check |
+| **Loose album matches** | `title-fuzzy` links, lower priority | Confirm, or unlink (sends it back to "not on MusicBrainz") |
+
+[Harmony](https://harmony.pulsewidth.org.uk/) takes a store release (a Deezer
+URL or a barcode) and prepares a MusicBrainz import from it. Wherever
+Mycelium knows about something MusicBrainz lacks, it can hand that straight
+to Harmony. That turns the gaps the identity work finds into contributions,
+and every contribution makes the next match automatic.
+
+**The links.** Harmony's lookup is a plain GET form, so the links are simple:
+
+| Harmony action | URL |
+|---|---|
+| Import a release | `https://harmony.pulsewidth.org.uk/release?url=<Deezer album URL>`, or `?gtin=<barcode>` (Deezer's `upc`); optional `&region=<CC>` |
+| Add cover art, ISRCs and store links to a release MusicBrainz already has | `https://harmony.pulsewidth.org.uk/release/actions?release_mbid=<release MBID>` |
+
+**Where the links appear:**
+
+| Situation | Where | Link |
+|---|---|---|
+| Deezer album with no release group (`unmatchedDeezer`, D2's `deezer:` albums) | Artist page, "Other Deezer releases"; the panel | Import, from the Deezer URL + UPC |
+| Artist not on MusicBrainz, but its Deezer page is known | The panel's "Not on MusicBrainz" rows | Import one of its Deezer albums. The MusicBrainz release editor then creates the artist as part of the release, which beats adding a bare artist |
+| Release group matched by barcode or title, but MusicBrainz has no Deezer link on it | The panel, low priority | Release actions, to add the Deezer URL. The next match then goes through the url-rel, and the artist gains its Deezer link for §4's evidence |
+| Owned album with no release group and no Deezer album | The panel | No Harmony link: there is no store release to import from. MusicBrainz search only |
+
+**In the panel.** "Albums not on MusicBrainz" is this group. A separate,
+optional **Contribute to MusicBrainz** group holds the release-actions rows:
+releases already matched that only lack their Deezer link. None of that work
+blocks Mycelium. After submitting in Harmony, Re-check the row.
+
+**What Mycelium never does.** Mycelium never submits edits itself. Harmony
+seeds the MusicBrainz editor, and a person reviews and submits. Mycelium only
+builds the link and re-checks afterwards.
 
 ## 7. UI
 
@@ -510,11 +590,11 @@ decision wins, and any conflict is logged.
 |---|---|---|---|
 | 0 | MusicBrainz and Deezer plumbing: gatekeeper, new calls, Mongo-backed cache **(done)** | No | — |
 | 1 | Artist resolution + reconciliation panel + inventory of every name-keyed store **(done; inventory is §1)** | Adds data, no re-key | **Report:** resolved, ambiguous and missing artists |
-| 2 | Discography + matcher (by MBID) | Adds a collection | **Report:** match rates per method across the library, via `POST /api/dev/discography/match?count=N` and `GET /api/dev/discography/report` |
+| 2 | Discography + matcher (by MBID); every album attempted, failures and loose matches in the panel, Harmony import links (§6.1) | Adds a collection | **Report:** match rates per method across the library, via `POST /api/dev/discography/match?count=N` and `GET /api/dev/discography/report` |
 | 3 | Re-key migration (§8) | **Yes** | Stores keyed by MBID; pending store |
 | 4 | Wanted list + Downloads page source picking | Yes | D4 |
 | 5 | Browse and Discover on release groups with editions | No | §7 |
-| 6 | Later: Navidrome adapter; write MBID tags into downloaded files; slskd as a real source | — | — |
+| 6 | Later: Navidrome adapter; write MBID tags into downloaded files; slskd as a real source; the panel's "Contribute to MusicBrainz" group (Harmony release actions, §6.1) | — | — |
 
 Go/no-go points: after Phase 1 (how many library artists would disappear), and
 after Phase 2 (whether matching is good enough to drive downloads).
