@@ -52,33 +52,9 @@ public static partial class DeezerEditionMatcher
         bool IsRejected(string group, long albumId) =>
             rejected.TryGetValue(group, out var ids) && ids.Contains(albumId);
 
-        void Place(string group, DeezerAlbum album, EditionMatchMethod method)
-        {
-            if (!IsRejected(group, album.id) && !placed.ContainsKey(album.id))
-            {
-                placed[album.id] = (group, Edition(album, method));
-            }
-        }
-
         var editions = releases
             .Where(r => r.ReleaseGroup?.Id is { } g && groupIds.Contains(g))
             .ToList();
-
-        foreach (var release in editions)
-        {
-            foreach (var album in linked.GetValueOrDefault(release.Id ?? "") ?? [])
-            {
-                Place(release.ReleaseGroup!.Id!, album, EditionMatchMethod.MbLink);
-            }
-        }
-
-        foreach (var release in editions)
-        {
-            if (release.Barcode is { Length: > 0 } barcode && byBarcode.TryGetValue(barcode, out var album))
-            {
-                Place(release.ReleaseGroup!.Id!, album, EditionMatchMethod.Upc);
-            }
-        }
 
         // Record key → the groups answering to it, by their own title or any release's.
         var byTitle = new Dictionary<string, HashSet<string>>();
@@ -97,6 +73,49 @@ public static partial class DeezerEditionMatcher
         foreach (var release in editions)
         {
             Title(release.Title, release.ReleaseGroup!.Id!);
+        }
+
+        // Every word any title of a group has: what a link or barcode match is checked against.
+        var groupWords = new Dictionary<string, HashSet<string>>();
+        foreach (var (key, owners) in byTitle)
+        {
+            foreach (var group in owners)
+            {
+                (groupWords.TryGetValue(group, out var set) ? set : groupWords[group] = new()).UnionWith(Words(key));
+            }
+        }
+
+        void Place(string group, DeezerAlbum album, EditionMatchMethod method)
+        {
+            if (IsRejected(group, album.id) || placed.ContainsKey(album.id))
+            {
+                return;
+            }
+
+            // A link or barcode is trusted over a title, but not over a title with nothing in common:
+            // MusicBrainz links an EP to the box set that holds it, and barcodes get reused.
+            var words = Words(AlbumTitleMatcher.NormalizeRecord(album.title));
+            var disagrees = method is EditionMatchMethod.MbLink or EditionMatchMethod.Upc
+                            && words.Count > 0
+                            && groupWords.TryGetValue(group, out var theirs)
+                            && !words.Overlaps(theirs);
+            placed[album.id] = (group, Edition(album, method) with { TitleDisagrees = disagrees });
+        }
+
+        foreach (var release in editions)
+        {
+            foreach (var album in linked.GetValueOrDefault(release.Id ?? "") ?? [])
+            {
+                Place(release.ReleaseGroup!.Id!, album, EditionMatchMethod.MbLink);
+            }
+        }
+
+        foreach (var release in editions)
+        {
+            if (release.Barcode is { Length: > 0 } barcode && byBarcode.TryGetValue(barcode, out var album))
+            {
+                Place(release.ReleaseGroup!.Id!, album, EditionMatchMethod.Upc);
+            }
         }
 
         var groupsById = known.ToDictionary(g => g.Id!);

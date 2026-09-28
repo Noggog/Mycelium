@@ -1378,6 +1378,11 @@ devDiscography.MapGet("/report", async (ArtistDiscographyBuilder discographies) 
         Results.Ok(await discographies.Report()))
     .WithName("DevDiscographyReport");
 
+// Every built discography in brief, worst matched first. limit caps the rows.
+devDiscography.MapGet("/artists", async (ArtistDiscographyBuilder discographies, int? limit) =>
+        Results.Ok((await discographies.Summaries()).Take(limit ?? int.MaxValue)))
+    .WithName("DevDiscographyArtists");
+
 devDiscography.MapGet("/artist/{mbid}", async (string mbid, IArtistDiscographyRepo stored) =>
         await stored.Get(mbid) is { } discography ? Results.Ok(discography) : Results.NotFound())
     .WithName("DevDiscographyArtist");

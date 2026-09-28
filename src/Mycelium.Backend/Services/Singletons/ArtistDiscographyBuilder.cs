@@ -31,6 +31,10 @@ public record DiscographyPassStatus(
 /// <param name="CoreWithLowEditionOnly">Core groups whose only editions were found by title.</param>
 /// <param name="DeezerAlbums">Deezer albums placed or left over, across every built discography.</param>
 /// <param name="EditionsByMethod">Placed Deezer albums per <see cref="EditionMatchMethod"/>, by name.</param>
+/// <param name="TitleDisagrees">
+/// Link or barcode matches demoted to low confidence because the titles share nothing
+/// (<see cref="DeezerEdition.TitleDisagrees"/>). Counted in <paramref name="DeezerLow"/> too.
+/// </param>
 public record DiscographyReport(
     int Artists,
     int Built,
@@ -44,7 +48,43 @@ public record DiscographyReport(
     int DeezerLow,
     int DeezerUnmatched,
     IReadOnlyDictionary<string, int> EditionsByMethod,
+    int TitleDisagrees,
     DiscographyPassStatus Pass);
+
+/// <summary>One built discography in brief, for finding the artists whose matching went worst.</summary>
+public record DiscographySummary(
+    string Mbid,
+    string? Name,
+    DateTimeOffset BuiltAt,
+    int ReleaseGroups,
+    int CoreReleaseGroups,
+    int CoreWithHighEdition,
+    int CoreWithLowEditionOnly,
+    int CoreWithoutEdition,
+    int DeezerHigh,
+    int DeezerLow,
+    int DeezerUnmatched,
+    int TitleDisagrees)
+{
+    public static DiscographySummary Of(ArtistDiscography d)
+    {
+        var core = d.ReleaseGroups.Where(g => g.IsCore).ToList();
+        var editions = d.ReleaseGroups.SelectMany(g => g.Editions).ToList();
+        return new DiscographySummary(
+            d.Mbid,
+            d.Name,
+            d.BuiltAt,
+            d.ReleaseGroups.Count,
+            core.Count,
+            core.Count(g => g.Editions.Any(e => e.Confidence == EditionConfidence.High)),
+            core.Count(g => g.Editions.Count > 0 && g.Editions.All(e => e.Confidence == EditionConfidence.Low)),
+            core.Count(g => g.Editions.Count == 0),
+            editions.Count(e => e.Confidence == EditionConfidence.High),
+            editions.Count(e => e.Confidence == EditionConfidence.Low),
+            d.UnmatchedDeezer.Count,
+            editions.Count(e => e.TitleDisagrees));
+    }
+}
 
 /// <summary>
 /// One MusicBrainz artist to build a discography for, and the Deezer pages whose albums go on it.
@@ -479,8 +519,21 @@ public partial class ArtistDiscographyBuilder
             editions.Count(e => e.Confidence == EditionConfidence.Low),
             unmatched,
             Enum.GetValues<EditionMatchMethod>().ToDictionary(m => m.ToString(), m => editions.Count(e => e.Method == m)),
+            editions.Count(e => e.TitleDisagrees),
             GetStatus());
     }
+
+    /// <summary>
+    /// Every built discography in brief, the most unmatched Deezer albums first, then the most core
+    /// release groups without an edition: where the matching needs looking at.
+    /// </summary>
+    public async Task<IReadOnlyList<DiscographySummary>> Summaries() =>
+        (await _discographies.GetAll())
+            .Select(DiscographySummary.Of)
+            .OrderByDescending(s => s.DeezerUnmatched)
+            .ThenByDescending(s => s.CoreWithoutEdition)
+            .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     [GeneratedRegex(@"^https?://(?:www\.)?deezer\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?album/(\d+)/?$", RegexOptions.IgnoreCase)]
     private static partial Regex DeezerAlbumUrl();

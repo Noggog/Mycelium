@@ -233,4 +233,45 @@ public class DeezerEditionMatcherTests
         groups.Single().Editions.Select(e => (e.AlbumId, e.Method)).Should().Equal(
             (912, EditionMatchMethod.Upc), (913, EditionMatchMethod.Title));
     }
+
+    [Fact]
+    public void A_link_to_an_album_with_an_unrelated_title_is_kept_at_low_confidence()
+    {
+        // MusicBrainz links the Otherness EP to the box set that holds it.
+        Group("rg-otherness", "Otherness", "EP", "1995-10-01");
+        Release("r-otherness", "rg-otherness");
+        _linked["r-otherness"] = [Album(914, "Lullabies To Violaine - Volume 2")];
+
+        var (groups, _) = Match();
+
+        var edition = Edition(groups, "rg-otherness");
+        edition.Method.Should().Be(EditionMatchMethod.MbLink);
+        edition.TitleDisagrees.Should().BeTrue();
+        edition.Confidence.Should().Be(EditionConfidence.Low);
+    }
+
+    [Fact]
+    public void A_barcode_answered_by_another_record_is_kept_at_low_confidence()
+    {
+        Group("rg-aikea", "Aikea-Guinea", "Single", "1985-03-01");
+        Release("r-aikea", "rg-aikea", barcode: "222");
+        _byBarcode["222"] = Album(915, "Gentle Creatures");
+
+        var (groups, _) = Match();
+
+        Edition(groups, "rg-aikea").Confidence.Should().Be(EditionConfidence.Low);
+    }
+
+    [Fact]
+    public void A_link_whose_title_differs_only_in_decoration_stays_high()
+    {
+        // "Stars and Topsoil: A Collection (1982–1990)" against Deezer's own spelling of it.
+        Group("rg-stars", "Stars and Topsoil: A Collection (1982–1990)", "Album", "2000", "Compilation");
+        Release("r-stars", "rg-stars");
+        _linked["r-stars"] = [Album(916, "Stars And Topsoil - A Collection 1982-1990")];
+
+        var (groups, _) = Match();
+
+        Edition(groups, "rg-stars").Confidence.Should().Be(EditionConfidence.High);
+    }
 }

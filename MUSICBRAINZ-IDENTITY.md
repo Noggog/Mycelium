@@ -343,7 +343,7 @@ unresolved"*, so it shows in the panel.
 > | Matching rules | `DeezerEditionMatcher`, a pure function |
 > | Gathering, pass, report | `ArtistDiscographyBuilder` |
 > | Schedule | `DiscographyService`: daily, 90 minutes after startup. It builds artists with no discography and rebuilds expired ones |
-> | Endpoints | `POST /api/dev/discography/match?count=N&all=`, `GET /api/dev/discography/report`, `GET` and `POST /api/dev/discography/artist/{mbid}` (read one; rebuild one now) |
+> | Endpoints | `POST /api/dev/discography/match?count=N&all=`, `GET /api/dev/discography/report`, `GET /api/dev/discography/artists?limit=N` (built artists in brief, worst matched first), `GET` and `POST /api/dev/discography/artist/{mbid}` (read one; rebuild one now) |
 >
 > Deviations from the text below:
 >
@@ -361,6 +361,12 @@ unresolved"*, so it shows in the panel.
 > - **No Deezer page for a shared name.** When a library name covers several
 >   Plex artists, the name's Deezer page may be the other act's, so it isn't
 >   used. Links and barcodes still find editions.
+> - **Links and barcodes are checked against titles.** If a Deezer album tied by
+>   a link or barcode shares no title word with the group or any of its
+>   releases, it is kept but flagged `titleDisagrees`, at low confidence. Found
+>   in the first live sample: MusicBrainz links the *Otherness* EP to the box
+>   set that holds it, and *Aikea-Guinea*'s barcode came back as *Gentle
+>   Creatures*.
 > - **Loose titles.** A near match is: every word of the shorter title (two
 >   words at least) is in the longer, or 80% of the words are shared. A word
 >   that marks a different recording ("live", "remix" and so on) on one side

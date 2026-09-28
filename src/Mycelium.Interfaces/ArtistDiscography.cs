@@ -35,10 +35,10 @@ public enum EditionMatchMethod
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum EditionConfidence
 {
-    /// <summary>A MusicBrainz link or a barcode: an identifier ties the two, not a title.</summary>
+    /// <summary>A MusicBrainz link or a barcode, with titles that agree: an identifier ties the two.</summary>
     High,
 
-    /// <summary>Titles alone. Links the album, but is listed for review.</summary>
+    /// <summary>Titles alone, or an identifier whose titles disagree. Links the album, but is listed for review.</summary>
     Low,
 }
 
@@ -46,6 +46,11 @@ public enum EditionConfidence
 /// <param name="AlbumId">The id Deezer answers to now. An old id MusicBrainz links to is followed to it.</param>
 /// <param name="Upc">The barcode, when it is known (a barcode match, or a Deezer album lookup).</param>
 /// <param name="Available">Whether it can be streamed in this region. Null when Deezer didn't say.</param>
+/// <param name="TitleDisagrees">
+/// A link or barcode placed it, but its title shares no word with any title of the release group:
+/// MusicBrainz links the Otherness EP to the box set that holds it, and a barcode can come back as
+/// another record. Kept, but at low confidence, so a person confirms it.
+/// </param>
 public record DeezerEdition(
     long AlbumId,
     string? Title,
@@ -54,10 +59,13 @@ public record DeezerEdition(
     int Tracks,
     string? Upc,
     bool? Available,
-    EditionMatchMethod Method)
+    EditionMatchMethod Method,
+    bool TitleDisagrees = false)
 {
     public EditionConfidence Confidence =>
-        Method is EditionMatchMethod.MbLink or EditionMatchMethod.Upc ? EditionConfidence.High : EditionConfidence.Low;
+        Method is EditionMatchMethod.MbLink or EditionMatchMethod.Upc && !TitleDisagrees
+            ? EditionConfidence.High
+            : EditionConfidence.Low;
 }
 
 /// <summary>One album as MusicBrainz knows it, with the Deezer albums that are editions of it.</summary>
