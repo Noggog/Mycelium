@@ -77,24 +77,23 @@ public interface IArtistCatalogRepo
     Task<Dictionary<string, Dictionary<string, int>>> GetAlbumPlexRatingKeys(IReadOnlyCollection<string> artists);
 
     /// <summary>
-    /// The release group recorded for each of an artist's owned albums, by title (case-insensitive). A
-    /// null value is an album that was matched against the discography and fitted nothing.
+    /// What is recorded for each of an artist's owned albums, by title (case-insensitive): the release
+    /// group it is, or that nothing fitted, and whether a person decided it.
     /// </summary>
-    Task<Dictionary<string, string?>> GetAlbumReleaseGroups(ArtistKey artist);
+    Task<Dictionary<string, AlbumIdentity>> GetAlbumIdentities(ArtistKey artist);
 
     /// <summary>
-    /// Records the release group of each album given, replacing what was recorded for those titles and
-    /// leaving the artist's other albums alone (a name shared by two acts is written once per act). A
-    /// null MBID records that nothing fitted.
+    /// Records each album given, replacing what was recorded for those titles and leaving the artist's
+    /// other albums alone (a name shared by two acts is written once per act).
     ///
     /// <para>Written to its own field rather than into the album list, so a Plex sync, which rewrites
     /// the titles and their quality on every pass, can't wipe it.</para>
     /// </summary>
-    Task SetAlbumReleaseGroups(ArtistKey artist, IReadOnlyDictionary<string, string?> releaseGroups);
+    Task SetAlbumIdentities(ArtistKey artist, IReadOnlyCollection<AlbumIdentity> identities);
 
     /// <summary>
-    /// Forgets every album release group recorded for an artist. For when the artist's MBID changes:
-    /// each was matched against the old one's discography.
+    /// Forgets every album identity recorded for an artist, a person's choices included. For when the
+    /// artist's MBID changes: each was made against the old one's discography.
     /// </summary>
     Task ClearAlbumReleaseGroups(ArtistKey artist);
 
@@ -182,6 +181,21 @@ public interface IArtistCatalogRepo
     /// </summary>
     Task SetMusicBrainzUnlinked(ArtistKey artist);
 }
+
+/// <summary>
+/// The release group one owned album is, as recorded in the catalog's <c>albumIdentities</c>.
+/// </summary>
+/// <param name="Mbid">The release group MBID. Null when nothing fitted, or a person said it isn't on MusicBrainz.</param>
+/// <param name="Manual">
+/// A person decided it on the reconciliation page: picked or pasted the group, confirmed a loose match, or
+/// said the album isn't on MusicBrainz (with a null <paramref name="Mbid"/>). No rebuild overrides it.
+/// </param>
+/// <param name="Rejected">Release groups a person unlinked from this album. Never matched to it again.</param>
+public record AlbumIdentity(
+    string Title,
+    string? Mbid,
+    bool Manual = false,
+    IReadOnlyList<string>? Rejected = null);
 
 /// <summary>
 /// What one <see cref="IArtistCatalogRepo.SyncFromLibrary"/> pass did. <paramref name="Upserted"/> counts

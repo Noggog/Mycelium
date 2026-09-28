@@ -44,6 +44,8 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
     private const string FieldAlbumIdentities = "albumIdentities";
     private const string FieldAlbumIdentityTitle = "title";
     private const string FieldAlbumIdentityMbid = "mbid";
+    private const string FieldAlbumIdentityManual = "manual";
+    private const string FieldAlbumIdentityRejected = "rejected";
 
     private readonly IMongoDbProvider _mongoDbProvider;
 
@@ -513,29 +515,37 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         { FieldAlbumKeyQuality, album.Quality!.Value.ToString() },
     };
 
-    public async Task<Dictionary<string, string?>> GetAlbumReleaseGroups(ArtistKey artist)
+    public async Task<Dictionary<string, AlbumIdentity>> GetAlbumIdentities(ArtistKey artist)
     {
         var doc = await Collection
             .Find(Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName))
             .Project(Builders<BsonDocument>.Projection.Include(FieldAlbumIdentities))
             .FirstOrDefaultAsync();
-        return doc is null ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) : Identities(doc);
+        return doc is null ? new Dictionary<string, AlbumIdentity>(StringComparer.OrdinalIgnoreCase) : Identities(doc);
     }
 
-    public async Task SetAlbumReleaseGroups(ArtistKey artist, IReadOnlyDictionary<string, string?> releaseGroups)
+    public async Task SetAlbumIdentities(ArtistKey artist, IReadOnlyCollection<AlbumIdentity> identities)
     {
-        if (releaseGroups.Count == 0)
+        if (identities.Count == 0)
         {
             return;
         }
 
         var filter = Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName);
-        var entries = releaseGroups.Select(e =>
+        var entries = identities.Select(e =>
         {
-            var entry = new BsonDocument { { FieldAlbumIdentityTitle, e.Key } };
-            if (!string.IsNullOrWhiteSpace(e.Value))
+            var entry = new BsonDocument { { FieldAlbumIdentityTitle, e.Title } };
+            if (!string.IsNullOrWhiteSpace(e.Mbid))
             {
-                entry[FieldAlbumIdentityMbid] = e.Value;
+                entry[FieldAlbumIdentityMbid] = e.Mbid;
+            }
+            if (e.Manual)
+            {
+                entry[FieldAlbumIdentityManual] = true;
+            }
+            if (e.Rejected is { Count: > 0 } rejected)
+            {
+                entry[FieldAlbumIdentityRejected] = new BsonArray(rejected);
             }
             return entry;
         });
@@ -546,7 +556,7 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             filter,
             Builders<BsonDocument>.Update.PullFilter(
                 FieldAlbumIdentities,
-                Builders<BsonDocument>.Filter.In(FieldAlbumIdentityTitle, releaseGroups.Keys)));
+                Builders<BsonDocument>.Filter.In(FieldAlbumIdentityTitle, identities.Select(e => e.Title))));
         await Collection.UpdateOneAsync(
             filter,
             Builders<BsonDocument>.Update.PushEach(FieldAlbumIdentities, entries));
@@ -557,10 +567,10 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
             Builders<BsonDocument>.Filter.Eq("_id", artist.ArtistName),
             Builders<BsonDocument>.Update.Unset(FieldAlbumIdentities));
 
-    /// <summary>Album title -> resolved release-group MBID (null where the lookup came back empty).</summary>
-    private static Dictionary<string, string?> Identities(BsonDocument doc)
+    /// <summary>Album title -> what is recorded for it.</summary>
+    private static Dictionary<string, AlbumIdentity> Identities(BsonDocument doc)
     {
-        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, AlbumIdentity>(StringComparer.OrdinalIgnoreCase);
         if (!doc.TryGetValue(FieldAlbumIdentities, out var value) || value is not BsonArray entries)
         {
             return result;
@@ -570,10 +580,13 @@ public class ArtistCatalogRepo : IArtistCatalogRepo
         {
             if (entry.TryGetValue(FieldAlbumIdentityTitle, out var title) && title.IsString)
             {
-                result[title.AsString] =
-                    entry.TryGetValue(FieldAlbumIdentityMbid, out var mbid) && mbid.IsString
-                        ? mbid.AsString
-                        : null;
+                result[title.AsString] = new AlbumIdentity(
+                    title.AsString,
+                    entry.TryGetValue(FieldAlbumIdentityMbid, out var mbid) && mbid.IsString ? mbid.AsString : null,
+                    entry.TryGetValue(FieldAlbumIdentityManual, out var manual) && manual.IsBoolean && manual.AsBoolean,
+                    entry.TryGetValue(FieldAlbumIdentityRejected, out var rejected) && rejected is BsonArray ids
+                        ? ids.Where(i => i.IsString).Select(i => i.AsString).ToList()
+                        : null);
             }
         }
 

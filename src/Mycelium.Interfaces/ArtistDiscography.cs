@@ -112,16 +112,27 @@ public enum OwnedAlbumMatchMethod
     /// backfill, and the group is on this artist's discography. Kept rather than thrown away.
     /// </summary>
     Earlier,
+
+    /// <summary>
+    /// A person decided it on the reconciliation page (<see cref="AlbumIdentity.Manual"/>). With no release
+    /// group, they said the album isn't on MusicBrainz. No rebuild overrides it.
+    /// </summary>
+    Manual,
 }
 
 /// <summary>One album the library owns, and the release group it is, if any.</summary>
 /// <param name="LibraryArtist">The library artist it is filed under (<see cref="ArtistResolution.Id"/>).</param>
 /// <param name="ReleaseGroup">The release group MBID. Null when nothing on the discography fits.</param>
+/// <param name="Candidates">
+/// When the title fits several release groups and nothing settles it: their MBIDs, likeliest first, for a
+/// person to pick from. Null otherwise.
+/// </param>
 public record OwnedAlbumMatch(
     string Title,
     string LibraryArtist,
     string? ReleaseGroup,
-    OwnedAlbumMatchMethod? Method);
+    OwnedAlbumMatchMethod? Method,
+    IReadOnlyList<string>? Candidates = null);
 
 /// <summary>A Deezer album on the artist's Deezer page that matched no release group.</summary>
 public record UnmatchedDeezerAlbum(long AlbumId, string? Title, string? RecordType, string? ReleaseDate);

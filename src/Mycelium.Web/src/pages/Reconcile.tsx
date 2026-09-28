@@ -1,11 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
 import {
   acceptArtist,
+  getAlbumReconcileList,
   getIdentityReport,
   getReconcileList,
+  harmonyImportUrl,
+  leaveAlbum,
+  linkAlbum,
   MUSICBRAINZ_ADD_ARTIST_URL,
+  MUSICBRAINZ_ADD_RELEASE_URL,
+  musicBrainzReleaseGroupSearchUrl,
+  musicBrainzReleaseGroupUrl,
+  parseReleaseGroupMbid,
+  RECONCILE_ALBUMS_KEY,
+  recheckDiscography,
+  unlinkAlbum,
+  type AlbumReconcileArtist,
+  type AlbumReconcileItem,
+  type AlbumReconcileKind,
+  type ReleaseGroupBrief,
   musicBrainzArtistUrl,
   musicBrainzSearchUrl,
   parseArtistMbid,
@@ -51,6 +66,7 @@ export default function Reconcile() {
       <h1>Reconcile</h1>
       <Summary />
       <AttentionList />
+      <AlbumList />
     </section>
   )
 }
@@ -387,6 +403,256 @@ function CandidateRow({
           {c.matchedAlbums.join(', ')}
         </div>
       )}
+    </li>
+  )
+}
+
+// ---- Owned albums the discography build couldn't settle, one collapsed row per artist ----
+
+const KIND_LABELS: Record<AlbumReconcileKind, { title: string; blurb: string }> = {
+  Pick: {
+    title: 'Pick the release group',
+    blurb: 'The title fits several release groups. Pick the one you own.',
+  },
+  Missing: {
+    title: 'Not on MusicBrainz',
+    blurb:
+      'No release group fits. Import it through Harmony when Deezer has it, or add it on MusicBrainz, then re-check. Or paste the release group, or leave it.',
+  },
+  Loose: {
+    title: 'Loose matches',
+    blurb: 'Linked on a near title only. Confirm it, or unlink it.',
+  },
+}
+
+const KINDS: AlbumReconcileKind[] = ['Pick', 'Missing', 'Loose']
+
+function AlbumList() {
+  const [filter, setFilter] = useState('')
+  const [kind, setKind] = useState<AlbumReconcileKind | 'All'>('All')
+  const { data, error, isLoading } = useQuery({ queryKey: RECONCILE_ALBUMS_KEY, queryFn: getAlbumReconcileList })
+
+  const visible = useMemo(() => {
+    const needle = filter.trim().toLowerCase()
+    return (data ?? [])
+      .filter((a) => !needle || (a.name ?? '').toLowerCase().includes(needle))
+      .filter((a) => kind === 'All' || a[kindCount(kind)] > 0)
+  }, [data, filter, kind])
+
+  const total = (k: AlbumReconcileKind) => (data ?? []).reduce((n, a) => n + a[kindCount(k)], 0)
+
+  return (
+    <div className="dev-tool">
+      <h2>Albums that need a look</h2>
+      <p>
+        Owned albums the discography build couldn’t tie to a MusicBrainz release group. Whatever you
+        choose here is kept: no rebuild overrides it. Mycelium never edits MusicBrainz itself; the
+        Harmony and MusicBrainz links open an editor for you to review and submit.
+      </p>
+
+      {data && (
+        <dl className="takeout-counts">
+          {KINDS.map((k) => (
+            <div className="takeout-count" key={k} title={KIND_LABELS[k].blurb}>
+              <dt>{KIND_LABELS[k].title}</dt>
+              <dd>{total(k)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      <div className="controls">
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter artists" />
+        <select value={kind} onChange={(e) => setKind(e.target.value as AlbumReconcileKind | 'All')}>
+          <option value="All">Every kind</option>
+          {KINDS.map((k) => (
+            <option key={k} value={k}>
+              {KIND_LABELS[k].title}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {isLoading && <p className="dev-status">Loading…</p>}
+      {error && <p className="error">{(error as Error).message}</p>}
+      {data && data.length === 0 && <p className="dev-muted">Every owned album has a release group.</p>}
+
+      {visible.map((a) => (
+        <AlbumArtistRow key={a.mbid} artist={a} kind={kind} />
+      ))}
+    </div>
+  )
+}
+
+const KIND_COUNTS = { Pick: 'pick', Missing: 'missing', Loose: 'loose' } as const
+const kindCount = (k: AlbumReconcileKind) => KIND_COUNTS[k]
+
+function AlbumArtistRow({ artist: a, kind }: { artist: AlbumReconcileArtist; kind: AlbumReconcileKind | 'All' }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const recheck = useMutation({
+    mutationFn: () => recheckDiscography(a.mbid),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: RECONCILE_ALBUMS_KEY }),
+  })
+
+  const counts = KINDS.filter((k) => a[kindCount(k)] > 0)
+    .map((k) => `${a[kindCount(k)]} ${KIND_LABELS[k].title.toLowerCase()}`)
+    .join(' · ')
+
+  return (
+    <details className="reconcile-row" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="reconcile-head">
+        <strong>{a.name ?? a.mbid}</strong>
+        <span className="dev-muted">{counts}</span>
+      </summary>
+      {open && (
+        <>
+          <div className="controls reconcile-actions">
+            <a href={musicBrainzArtistUrl(a.mbid)} target="_blank" rel="noreferrer">
+              On MusicBrainz
+            </a>
+            <button
+              onClick={() => recheck.mutate()}
+              disabled={recheck.isPending}
+              title="Rebuild this artist’s discography, asking MusicBrainz again: after an import or an edit there"
+            >
+              {recheck.isPending ? 'Checking…' : 'Re-check'}
+            </button>
+          </div>
+          {recheck.isError && <p className="error">{(recheck.error as Error).message}</p>}
+          {KINDS.filter((k) => kind === 'All' || kind === k).map((k) => {
+            const albums = a.albums.filter((album) => album.kind === k)
+            if (albums.length === 0) return null
+            return (
+              <div key={k}>
+                <h3 className="reconcile-album-kind">
+                  {KIND_LABELS[k].title} <span className="dev-muted">({albums.length})</span>
+                </h3>
+                {albums.map((album) => (
+                  <AlbumRow key={`${album.libraryArtist}|${album.title}`} artist={a} album={album} />
+                ))}
+              </div>
+            )
+          })}
+        </>
+      )}
+    </details>
+  )
+}
+
+function AlbumRow({ artist, album }: { artist: AlbumReconcileArtist; album: AlbumReconcileItem }) {
+  const queryClient = useQueryClient()
+  const [pasted, setPasted] = useState('')
+  const done = { onSuccess: () => queryClient.invalidateQueries({ queryKey: RECONCILE_ALBUMS_KEY }) }
+
+  const link = useMutation({ mutationFn: (mbid: string) => linkAlbum(artist.mbid, album, mbid), ...done })
+  const leave = useMutation({ mutationFn: () => leaveAlbum(artist.mbid, album), ...done })
+  const unlink = useMutation({ mutationFn: () => unlinkAlbum(artist.mbid, album), ...done })
+
+  const busy = link.isPending || leave.isPending || unlink.isPending
+  const pastedMbid = parseReleaseGroupMbid(pasted)
+  const failure = [link, leave, unlink].find((m) => m.isError)?.error as Error | undefined
+
+  return (
+    <div className="reconcile-album">
+      <div className="reconcile-head">
+        <strong>{album.title}</strong>
+        {album.libraryArtist !== artist.name && <span className="reconcile-chip">{album.libraryArtist}</span>}
+      </div>
+
+      {album.kind === 'Loose' && album.linked && (
+        <ul className="reconcile-candidates">
+          <ReleaseGroupRow group={album.linked} busy={busy} action="Confirm" onAction={() => link.mutate(album.linked!.mbid)}>
+            <button onClick={() => unlink.mutate()} disabled={busy}>
+              Unlink
+            </button>
+          </ReleaseGroupRow>
+        </ul>
+      )}
+
+      {album.kind === 'Pick' && (
+        <ul className="reconcile-candidates">
+          {album.candidates.map((g) => (
+            <ReleaseGroupRow key={g.mbid} group={g} busy={busy} action="This one" onAction={() => link.mutate(g.mbid)} />
+          ))}
+        </ul>
+      )}
+
+      {album.kind !== 'Loose' && (
+        <div className="controls reconcile-actions">
+          {album.deezerAlbumId !== null && (
+            <a href={harmonyImportUrl(album.deezerAlbumId)} target="_blank" rel="noreferrer">
+              Import from Deezer (Harmony)
+            </a>
+          )}
+          <a
+            href={musicBrainzReleaseGroupSearchUrl(artist.name ?? '', album.title)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Search MusicBrainz
+          </a>
+          {album.kind === 'Missing' && (
+            <a href={MUSICBRAINZ_ADD_RELEASE_URL} target="_blank" rel="noreferrer">
+              Add release
+            </a>
+          )}
+          <input
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            placeholder="Release group URL or id"
+          />
+          <button onClick={() => pastedMbid && link.mutate(pastedMbid)} disabled={!pastedMbid || busy}>
+            Link
+          </button>
+          {album.kind === 'Missing' && (
+            <button
+              onClick={() => leave.mutate()}
+              disabled={busy}
+              title="It isn’t on MusicBrainz, and that’s fine: take it off this page for good"
+            >
+              Leave it
+            </button>
+          )}
+        </div>
+      )}
+      {pasted && !pastedMbid && (
+        <p className="dev-muted">Paste a release group (musicbrainz.org/release-group/…), not a release.</p>
+      )}
+      {failure && <p className="error">{failure.message}</p>}
+    </div>
+  )
+}
+
+function ReleaseGroupRow({
+  group: g,
+  busy,
+  action,
+  onAction,
+  children,
+}: {
+  group: ReleaseGroupBrief
+  busy: boolean
+  action: string
+  onAction: () => void
+  children?: ReactNode
+}) {
+  const type = [g.primaryType, ...g.secondaryTypes].filter(Boolean).join(' + ')
+  return (
+    <li className="reconcile-candidate">
+      <a href={musicBrainzReleaseGroupUrl(g.mbid)} target="_blank" rel="noreferrer">
+        {g.title ?? g.mbid}
+      </a>
+      <span className="reconcile-overlap">
+        {[type || 'no type', g.firstReleaseDate?.slice(0, 4), g.tracks !== null && `${g.tracks} tracks`]
+          .filter(Boolean)
+          .join(' · ')}
+      </span>
+      {g.hasDeezer && <span className="reconcile-chip">on Deezer</span>}
+      <button onClick={onAction} disabled={busy}>
+        {action}
+      </button>
+      {children}
     </li>
   )
 }

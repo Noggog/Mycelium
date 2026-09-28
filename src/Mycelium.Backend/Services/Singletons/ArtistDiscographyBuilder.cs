@@ -55,7 +55,9 @@ public record DiscographyReport(
 /// <summary>How the library's own albums matched release groups, across every built discography.</summary>
 /// <param name="Albums">Owned albums by settled artists that have a discography.</param>
 /// <param name="Earlier">Nothing fitted, but the older backfill's release group is on the discography and was kept.</param>
-public record OwnedAlbumReport(int Albums, int Title, int TitleFuzzy, int Earlier, int Unmatched)
+/// <param name="Manual">Decided by a person, including albums they said aren't on MusicBrainz.</param>
+/// <param name="Tied">Unmatched because the title fits several release groups; a person picks.</param>
+public record OwnedAlbumReport(int Albums, int Title, int TitleFuzzy, int Earlier, int Unmatched, int Manual = 0, int Tied = 0)
 {
     public static OwnedAlbumReport Of(IEnumerable<OwnedAlbumMatch> owned)
     {
@@ -65,7 +67,9 @@ public record OwnedAlbumReport(int Albums, int Title, int TitleFuzzy, int Earlie
             all.Count(o => o.Method == OwnedAlbumMatchMethod.Title),
             all.Count(o => o.Method == OwnedAlbumMatchMethod.TitleFuzzy),
             all.Count(o => o.Method == OwnedAlbumMatchMethod.Earlier),
-            all.Count(o => o.ReleaseGroup is null));
+            all.Count(o => o.ReleaseGroup is null),
+            all.Count(o => o.Method == OwnedAlbumMatchMethod.Manual),
+            all.Count(o => o.Candidates is { Count: > 0 }));
     }
 }
 
@@ -307,13 +311,16 @@ public partial class ArtistDiscographyBuilder
     }
 
     /// <summary>
-    /// Builds one artist's discography now, at interactive priority, from what is cached. Null when the
-    /// library resolves no artist to <paramref name="mbid"/>, or a source didn't answer.
+    /// Builds one artist's discography now, at interactive priority. Null when the library resolves no
+    /// artist to <paramref name="mbid"/>, or a source didn't answer.
     /// </summary>
-    public async Task<ArtistDiscography?> Rebuild(string mbid)
+    /// <param name="fresh">
+    /// Ask MusicBrainz again rather than use what is cached: a Re-check, straight after an edit there.
+    /// </param>
+    public async Task<ArtistDiscography?> Rebuild(string mbid, bool fresh = false)
     {
         var target = (await Targets()).FirstOrDefault(t => string.Equals(t.Mbid, mbid, StringComparison.OrdinalIgnoreCase));
-        return target is null ? null : await Build(target, fresh: false);
+        return target is null ? null : await Build(target, fresh);
     }
 
     /// <summary>
@@ -421,7 +428,7 @@ public partial class ArtistDiscographyBuilder
             groups, releases, listing, searchOnly, linked, byBarcode, rejected);
 
         owned ??= await _catalog.GetOwnedAlbumArtists();
-        var ownedMatches = new List<(ArtistKey Artist, List<OwnedAlbumMatch> Matches)>();
+        var ownedMatches = new List<(ArtistKey Artist, List<OwnedAlbumMatch> Matches, Dictionary<string, AlbumIdentity> Earlier)>();
         foreach (var libraryArtist in target.LibraryArtists)
         {
             var library = LibraryArtist.For(libraryArtist.Name, owned.GetValueOrDefault(libraryArtist.Name) ?? [])
@@ -432,8 +439,8 @@ public partial class ArtistDiscographyBuilder
             }
 
             var key = new ArtistKey(libraryArtist.Name);
-            var earlier = await _catalog.GetAlbumReleaseGroups(key);
-            ownedMatches.Add((key, OwnedAlbumMatcher.Match(library.Id, library.Albums, matched, earlier)));
+            var earlier = await _catalog.GetAlbumIdentities(key);
+            ownedMatches.Add((key, OwnedAlbumMatcher.Match(library.Id, library.Albums, matched, earlier), earlier));
         }
 
         var now = _time.GetUtcNow();
@@ -448,10 +455,14 @@ public partial class ArtistDiscographyBuilder
             ownedMatches.SelectMany(o => o.Matches).ToList());
         await _discographies.Put(discography);
 
-        foreach (var (artist, matches) in ownedMatches)
+        // A person's decision is written back as it was; the rest as matched, keeping what they unlinked.
+        foreach (var (artist, matches, earlier) in ownedMatches)
         {
-            await _catalog.SetAlbumReleaseGroups(
-                artist, matches.ToDictionary(m => m.Title, m => m.ReleaseGroup, StringComparer.OrdinalIgnoreCase));
+            await _catalog.SetAlbumIdentities(artist, matches
+                .Select(m => earlier.GetValueOrDefault(m.Title) is { } before
+                    ? before.Manual ? before : before with { Mbid = m.ReleaseGroup }
+                    : new AlbumIdentity(m.Title, m.ReleaseGroup))
+                .ToList());
         }
         return discography;
     }

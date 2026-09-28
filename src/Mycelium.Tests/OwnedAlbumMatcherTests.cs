@@ -9,7 +9,7 @@ namespace Mycelium.Tests;
 public class OwnedAlbumMatcherTests
 {
     private readonly List<DiscographyReleaseGroup> _groups = new();
-    private readonly Dictionary<string, string?> _earlier = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AlbumIdentity> _earlier = new(StringComparer.OrdinalIgnoreCase);
 
     private void Group(
         string mbid, string title, string type = "Album", string[]? secondary = null,
@@ -69,6 +69,70 @@ public class OwnedAlbumMatcherTests
 
         match.ReleaseGroup.Should().BeNull();
         match.Method.Should().BeNull();
+        match.Candidates.Should().Equal("rg-a", "rg-b");
+    }
+
+    [Fact]
+    public void The_exact_title_settles_a_tie_with_a_bracketed_one()
+    {
+        Group("rg-sampler", "Sun (sampler)", "EP");
+        Group("rg-sun", "Sun");
+
+        var match = One("Sun");
+
+        match.ReleaseGroup.Should().Be("rg-sun");
+        match.Method.Should().Be(OwnedAlbumMatchMethod.Title);
+    }
+
+    [Fact]
+    public void Tied_groups_are_ranked_album_first_then_with_a_Deezer_edition()
+    {
+        Group("rg-single", "NE-HI", "Single");
+        Group("rg-ep", "NE-HI", "EP");
+        Group("rg-album", "NE-HI (Remastered)");
+        Group("rg-album-deezer", "NE-HI (Deluxe)", deezerTitles: ["NE-HI"]);
+
+        var match = One("NE-HI (2017)");
+
+        match.ReleaseGroup.Should().BeNull();
+        match.Candidates.Should().Equal("rg-album-deezer", "rg-album", "rg-ep", "rg-single");
+    }
+
+    [Fact]
+    public void A_manual_choice_is_kept_even_off_the_discography()
+    {
+        Group("rg-relaxin", "Relaxin'");
+        _earlier["Relaxin' With the Miles Davis Quintet"] =
+            new("Relaxin' With the Miles Davis Quintet", "rg-quintet", Manual: true);
+
+        var match = One("Relaxin' With the Miles Davis Quintet");
+
+        match.ReleaseGroup.Should().Be("rg-quintet");
+        match.Method.Should().Be(OwnedAlbumMatchMethod.Manual);
+    }
+
+    [Fact]
+    public void An_album_left_off_MusicBrainz_stays_unmatched()
+    {
+        Group("rg-home", "Home");
+        _earlier["Home"] = new("Home", null, Manual: true);
+
+        var match = One("Home");
+
+        match.ReleaseGroup.Should().BeNull();
+        match.Method.Should().Be(OwnedAlbumMatchMethod.Manual);
+    }
+
+    [Fact]
+    public void An_unlinked_group_is_never_matched_again()
+    {
+        Group("rg-england", "Maiden England");
+        _earlier["Maiden England '88"] = new("Maiden England '88", null, Rejected: ["rg-england"]);
+
+        var match = One("Maiden England '88");
+
+        match.ReleaseGroup.Should().BeNull();
+        match.Candidates.Should().BeNull();
     }
 
     [Fact]
@@ -83,7 +147,7 @@ public class OwnedAlbumMatcherTests
     public void An_earlier_id_on_the_discography_is_kept()
     {
         Group("rg-x", "The X Factor");
-        _earlier["X Factor Sessions"] = "rg-x";
+        _earlier["X Factor Sessions"] = new("X Factor Sessions", "rg-x");
 
         var match = One("X Factor Sessions");
 
@@ -95,7 +159,7 @@ public class OwnedAlbumMatcherTests
     public void An_earlier_id_from_another_act_is_dropped()
     {
         Group("rg-x", "The X Factor");
-        _earlier["A Mix I Made"] = "rg-from-the-wrong-band";
+        _earlier["A Mix I Made"] = new("A Mix I Made", "rg-from-the-wrong-band");
 
         One("A Mix I Made").ReleaseGroup.Should().BeNull();
     }

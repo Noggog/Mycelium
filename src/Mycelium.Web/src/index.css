@@ -3866,3 +3866,19 @@ a.playlist-badge.is-link:hover {
 .controls.reconcile-actions a {
   color: var(--cyan);
 }
+
+/* Albums: one collapsed row per artist, its albums listed under their kind once opened. */
+details.reconcile-row > summary {
+  cursor: pointer;
+}
+.reconcile-album-kind {
+  font-size: 0.95rem;
+  margin: 0.9rem 0 0.25rem;
+}
+.reconcile-album {
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 0;
+}
+.reconcile-candidate button + button {
+  margin-left: 0;
+}

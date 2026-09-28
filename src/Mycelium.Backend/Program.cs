@@ -1374,12 +1374,49 @@ devDiscography.MapGet("/artist/{mbid}", async (string mbid, IArtistDiscographyRe
         await stored.Get(mbid) is { } discography ? Results.Ok(discography) : Results.NotFound())
     .WithName("DevDiscographyArtist");
 
-// Rebuild one artist now from what is cached — for checking a matcher change against a real artist.
-devDiscography.MapPost("/artist/{mbid}", async (string mbid, ArtistDiscographyBuilder discographies) =>
-        await discographies.Rebuild(mbid) is { } discography
+// Rebuild one artist now — for checking a matcher change against a real artist. It uses what is
+// cached unless fresh=true, the reconciliation page's Re-check after an edit on MusicBrainz.
+devDiscography.MapPost("/artist/{mbid}", async (string mbid, bool? fresh, ArtistDiscographyBuilder discographies) =>
+        await discographies.Rebuild(mbid, fresh ?? false) is { } discography
             ? Results.Ok(discography)
             : Results.Problem("No settled library artist has this MBID, or a source didn't answer.", statusCode: 503))
     .WithName("DevDiscographyRebuild");
+
+// ---- Album reconciliation: owned albums the discography build couldn't settle (see AlbumReconciliation,
+// MUSICBRAINZ-IDENTITY.md §6.1). Each answer is stored as a manual choice no rebuild overrides. Re-check
+// is the discography rebuild above with fresh=true. ----
+devIdentity.MapGet("/albums", async (AlbumReconciliation albums) =>
+        Results.Ok(await albums.List()))
+    .WithName("DevIdentityAlbums");
+
+// Link an album to a release group: a pick among tied groups, a pasted group, or a confirmed loose match.
+devIdentity.MapPost("/albums/link", async (string artistMbid, string libraryArtist, string title, string releaseGroup,
+        AlbumReconciliation albums) =>
+        !Guid.TryParse(releaseGroup, out var mbid)
+            ? Results.BadRequest(new { error = $"\"{releaseGroup}\" isn't a release group MBID." })
+            : await albums.Link(artistMbid, libraryArtist, title, mbid.ToString()) is null
+                ? AlbumNotFound(title)
+                : Results.NoContent())
+    .WithName("DevIdentityAlbumLink");
+
+// The album isn't on MusicBrainz, and that is fine: off the page for good.
+devIdentity.MapPost("/albums/leave", async (string artistMbid, string libraryArtist, string title,
+        AlbumReconciliation albums) =>
+        await albums.Leave(artistMbid, libraryArtist, title) is null
+            ? AlbumNotFound(title)
+            : Results.NoContent())
+    .WithName("DevIdentityAlbumLeave");
+
+// A loose match was wrong: unlink it, and never match the album to that group again.
+devIdentity.MapPost("/albums/unlink", async (string artistMbid, string libraryArtist, string title,
+        AlbumReconciliation albums) =>
+        await albums.Unlink(artistMbid, libraryArtist, title) is null
+            ? AlbumNotFound(title)
+            : Results.NoContent())
+    .WithName("DevIdentityAlbumUnlink");
+
+static IResult AlbumNotFound(string title) =>
+    Results.NotFound(new { error = $"\"{title}\" isn't an owned album on that artist's discography." });
 
 // Hand-entered recommendations — pairings no similarity source will ever make (see
 // ManualRecommendations). Each write rebuilds every user's queue, because the queue is precomputed:

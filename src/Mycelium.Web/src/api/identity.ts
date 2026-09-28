@@ -139,3 +139,95 @@ export const musicBrainzArtistUrl = (mbid: string) => `https://musicbrainz.org/a
 export const musicBrainzSearchUrl = (name: string) =>
   `https://musicbrainz.org/search?${new URLSearchParams({ query: name, type: 'artist', method: 'indexed' })}`
 export const MUSICBRAINZ_ADD_ARTIST_URL = 'https://musicbrainz.org/artist/create'
+
+// ---- Albums: owned albums the discography build couldn't settle (AlbumReconciliation on the backend,
+// MUSICBRAINZ-IDENTITY.md §6.1) ----
+
+export const RECONCILE_ALBUMS_KEY = ['dev', 'identity', 'albums']
+
+// Pick: the title fits several release groups. Missing: none fits. Loose: linked on a near title only.
+export type AlbumReconcileKind = 'Pick' | 'Missing' | 'Loose'
+
+export interface ReleaseGroupBrief {
+  mbid: string
+  title: string | null
+  primaryType: string | null
+  secondaryTypes: string[]
+  firstReleaseDate: string | null
+  // The most tracks any of its Deezer editions has; null when it has none.
+  tracks: number | null
+  hasDeezer: boolean
+}
+
+export interface AlbumReconcileItem {
+  title: string
+  // The library artist it is filed under (ArtistResolution.id).
+  libraryArtist: string
+  kind: AlbumReconcileKind
+  // Loose: the group it is linked to.
+  linked: ReleaseGroupBrief | null
+  // Pick: the tied groups, likeliest first.
+  candidates: ReleaseGroupBrief[]
+  // Missing: a Deezer album of the same title that fits no release group, for a Harmony import.
+  deezerAlbumId: number | null
+}
+
+export interface AlbumReconcileArtist {
+  mbid: string
+  name: string | null
+  pick: number
+  missing: number
+  loose: number
+  albums: AlbumReconcileItem[]
+}
+
+export async function getAlbumReconcileList(): Promise<AlbumReconcileArtist[]> {
+  return json(await fetch('/api/dev/identity/albums'), 'Failed to load the albums to reconcile')
+}
+
+async function albumAction(
+  action: 'link' | 'leave' | 'unlink',
+  artistMbid: string,
+  album: AlbumReconcileItem,
+  extra: Record<string, string> = {},
+): Promise<void> {
+  const params = new URLSearchParams({
+    artistMbid,
+    libraryArtist: album.libraryArtist,
+    title: album.title,
+    ...extra,
+  })
+  const res = await fetch(`/api/dev/identity/albums/${action}?${params}`, { method: 'POST' })
+  if (!res.ok) await json(res, `Could not update ${album.title}`)
+}
+
+export const linkAlbum = (artistMbid: string, album: AlbumReconcileItem, releaseGroup: string) =>
+  albumAction('link', artistMbid, album, { releaseGroup })
+export const leaveAlbum = (artistMbid: string, album: AlbumReconcileItem) => albumAction('leave', artistMbid, album)
+export const unlinkAlbum = (artistMbid: string, album: AlbumReconcileItem) => albumAction('unlink', artistMbid, album)
+
+// Rebuilds the artist's discography, asking MusicBrainz again: for straight after an edit there.
+export async function recheckDiscography(artistMbid: string): Promise<void> {
+  const res = await fetch(`/api/dev/discography/artist/${artistMbid}?fresh=true`, { method: 'POST' })
+  if (!res.ok) await json(res, 'Re-check failed')
+}
+
+// Pulls a release group MBID out of a musicbrainz.org/release-group/… URL or a bare id. A release URL is
+// refused: its id is a release's, not the group's.
+export function parseReleaseGroupMbid(text: string): string | null {
+  if (/\/release\//i.test(text)) return null
+  return parseArtistMbid(text)
+}
+
+export const musicBrainzReleaseGroupUrl = (mbid: string) => `https://musicbrainz.org/release-group/${mbid}`
+export const musicBrainzReleaseGroupSearchUrl = (artist: string, title: string) =>
+  `https://musicbrainz.org/search?${new URLSearchParams({
+    query: `releasegroup:"${title}" AND artist:"${artist}"`,
+    type: 'release_group',
+    method: 'advanced',
+  })}`
+export const MUSICBRAINZ_ADD_RELEASE_URL = 'https://musicbrainz.org/release/add'
+export const harmonyImportUrl = (deezerAlbumId: number) =>
+  `https://harmony.pulsewidth.org.uk/release?${new URLSearchParams({
+    url: `https://www.deezer.com/album/${deezerAlbumId}`,
+  })}`

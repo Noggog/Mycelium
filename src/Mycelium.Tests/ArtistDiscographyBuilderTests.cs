@@ -73,7 +73,7 @@ public class ArtistDiscographyBuilderTests
         _deezer.GetAlbum(100).Returns(Album(101, "Somewhere in Time (2015 Remaster)"));
         _deezer.GetAlbumByUpc(Arg.Any<string>()).Returns(new DeezerUpcLookup(null));
         _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>());
-        _catalog.GetAlbumReleaseGroups(Arg.Any<ArtistKey>()).Returns(new Dictionary<string, string?>());
+        _catalog.GetAlbumIdentities(Arg.Any<ArtistKey>()).Returns(new Dictionary<string, AlbumIdentity>());
     }
 
     private void Resolve(
@@ -285,11 +285,31 @@ public class ArtistDiscographyBuilderTests
             new OwnedAlbumMatch("Powerslave (Remastered)", "Iron Maiden", "rg-powerslave", OwnedAlbumMatchMethod.Title),
             new OwnedAlbumMatch("Home Tapes", "Iron Maiden", null, null),
         });
-        await _catalog.Received(1).SetAlbumReleaseGroups(
+        await _catalog.Received(1).SetAlbumIdentities(
             new ArtistKey("Iron Maiden"),
-            Arg.Is<IReadOnlyDictionary<string, string?>>(d =>
-                d["Powerslave (Remastered)"] == "rg-powerslave" && d["Home Tapes"] == null));
+            Arg.Is<IReadOnlyCollection<AlbumIdentity>>(d =>
+                d.Contains(new AlbumIdentity("Powerslave (Remastered)", "rg-powerslave", false, null))
+                && d.Contains(new AlbumIdentity("Home Tapes", null, false, null))));
         (await _sut.Report()).Owned.Should().Be(new OwnedAlbumReport(2, 1, 0, 0, 1));
+    }
+
+    [Fact]
+    public async Task A_rebuild_writes_a_persons_choice_back_as_it_was()
+    {
+        var left = new AlbumIdentity("Powerslave", null, Manual: true, Rejected: ["rg-sit"]);
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>
+        {
+            ["Iron Maiden"] = [new("Powerslave", null)],
+        });
+        _catalog.GetAlbumIdentities(new ArtistKey("Iron Maiden"))
+            .Returns(new Dictionary<string, AlbumIdentity> { ["Powerslave"] = left });
+
+        var discography = await BuildMaiden();
+
+        discography.Owned.Should().Equal(new OwnedAlbumMatch("Powerslave", "Iron Maiden", null, OwnedAlbumMatchMethod.Manual));
+        await _catalog.Received(1).SetAlbumIdentities(
+            new ArtistKey("Iron Maiden"),
+            Arg.Is<IReadOnlyCollection<AlbumIdentity>>(d => d.Single() == left));
     }
 
     [Fact]

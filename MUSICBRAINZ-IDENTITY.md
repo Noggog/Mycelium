@@ -1,8 +1,9 @@
 # MusicBrainz as the identity authority
 
 > **Status (2026-09-28): Phases 0 and 1 built and deployed, and the library is
-> reconciled. Phase 2 has started: the discography store, the matcher and the
-> report are built (§5); owned albums and the panel's album groups are next.**
+> reconciled. Phase 2 is built: every settled artist has a discography, Deezer
+> editions are matched, 91% of owned albums have a release group (§5, §13),
+> and the panel's album groups are built but not yet deployed (§6.1).**
 > Work is on `main`. §12 is the handoff for picking this up. §3 and §4 describe what shipped. See
 > `PLAN.md` for the product vision, `METADATA-ARCHIVE.md` §9.3 for the earlier
 > decision to give owned albums MusicBrainz release-group ids, and
@@ -82,13 +83,29 @@ different pressings of the same record.
 
 Browse and Discover only say *"I want this album"*, which adds a wanted row with
 no source. The Downloads page is where a source is picked: a Deezer edition, a
-pasted Deezer URL, slskd, and later others.
+pasted Deezer URL, slskd, and later others. (The same picker on Browse and
+Discover is a follow-up, after Phase 4.)
 
-- **Exactly one candidate, high confidence:** it is picked automatically, so the
-  common case still needs no clicks.
-- **Several candidates:** there is **no default edition**. The user picks one,
-  either in the edition subpanel on Browse or in the Downloads page.
-- **Only low-confidence candidates:** they are never picked automatically.
+**Assume matching is loose.** A wanted album may have several possible sources,
+none of which matches it exactly. The matcher's job is to put the right
+candidate near the top, with its reasons, not to be certain. A person chooses.
+
+- **Picked automatically only when MusicBrainz says so directly:** exactly one
+  candidate that a release of the group links to (a url-rel, `MbLink`), whose
+  title agrees with the group (not `TitleDisagrees`), and that is available in
+  the region. A barcode match is *not* enough: in the first full run, barcodes
+  came back as other records (§13).
+- **Everything else is a suggestion:** barcode, title, near title, search, and
+  every result from a second source. Shown ranked, with the evidence for each;
+  never picked unasked.
+- **Several direct links:** no default edition either. The user picks.
+- **A pick is remembered.** Choosing a source records it on the release group
+  as a `manual` edition, which counts as certain from then on: a re-download or
+  an upgrade of that album doesn't ask again.
+- **A pick can be fed back.** For a Deezer pick with no MusicBrainz link, the
+  panel offers to add the link to MusicBrainz (through Harmony, §6.1). Once
+  MusicBrainz has it, the album is a direct-link match for everyone, so each
+  confirmation makes the next one automatic.
 
 ### D5: Mongo backs the memory cache
 
@@ -353,7 +370,8 @@ unresolved"*, so it shows in the panel.
 >   `expiresAt` also at the top level as a date. The method is an enum sent and
 >   stored by name (`MbLink`, `Upc`, `Title`, `TitleFuzzy`, `Search`).
 >   Confidence is derived from the method, not stored: link and barcode are
->   high, everything else low. `manual` waits for the panel's album groups.
+>   high, everything else low. A person's choice lives on the owned album
+>   (`OwnedAlbumMatchMethod.Manual`, §6.1), not on editions yet.
 > - **Deezer search is not a separate step.** The Deezer side is the artist's
 >   listing plus the albums `SearchArtistAlbums` credits to the same Deezer
 >   artist, as the missing-album diff already does. A title match on one of the
@@ -486,9 +504,36 @@ A page with an in-app badge count on the nav. No push notifications for now.
 
 ### 6.1 Albums, and feeding MusicBrainz through Harmony (Phase 2)
 
-> **Planned, not built.** It is part of Phase 2: the album attempts (D2) need
-> the Deezer ↔ release-group matching, and the Harmony links are cheap to add
-> once they exist.
+> **Built (not yet deployed): the three album groups.** Where things live:
+>
+> | Piece | Code |
+> |---|---|
+> | A person's answer | `AlbumIdentity` in the catalog's `albumIdentities`: `manual: true` with an `mbid` (picked, pasted, confirmed) or without one ("leave it"), and `rejected` (groups unlinked from the album). `IArtistCatalogRepo.Get/SetAlbumIdentities` |
+> | Ties and tie-breaks | `OwnedAlbumMatcher`: tied groups go on `OwnedAlbumMatch.Candidates`, ranked |
+> | Groups and answers | `AlbumReconciliation`; `GET /api/dev/identity/albums`, `POST /api/dev/identity/albums/{link,leave,unlink}?artistMbid=&libraryArtist=&title=` (`link` also takes `releaseGroup`) |
+> | Re-check | `POST /api/dev/discography/artist/{mbid}?fresh=true`: the rebuild, asking MusicBrainz again |
+> | Page | The "Albums that need a look" section of `Reconcile.tsx` |
+>
+> Deviations from the text below:
+>
+> - **Tie-breaks.** Among tied groups, the one core group still wins; among
+>   several core groups, the one whose title is the album's at listing level
+>   (`Normalize`) settles it (*Sun* over *Sun (sampler)*). Album over EP only
+>   ranks the suggestions, it never settles. The Plex album year isn't used:
+>   the catalog doesn't store it yet.
+> - **One request for the list.** Every artist comes back with its albums
+>   (about 1,100 albums), and the page renders an artist's albums when it is
+>   opened. No separate per-artist request.
+> - **Owned albums only.** Wanted, queued and downloaded albums aren't listed
+>   yet; they have no release group attempt until Phase 4.
+> - **A pasted group isn't checked** against MusicBrainz, only for the shape of
+>   an MBID (the page refuses a release URL). It need not be on the artist's
+>   discography: the record may be credited to another artist.
+> - **An answer patches the stored discography** as well as the catalog, so the
+>   page updates without a rebuild.
+> - **Not built:** undoing an answer (clear the entry in `albumIdentities`),
+>   the "Contribute to MusicBrainz" group, and the artist page's "Other Deezer
+>   releases".
 
 **Album reconciliation.** When an album that is clearly yours fails to link,
 it becomes a panel item:
@@ -501,12 +546,21 @@ it becomes a panel item:
   `unmatchedDeezer` stays on the artist page ("Other Deezer releases"), still
   with a Harmony link, but out of the panel.
 
-The panel gets two album groups, each ordered by artist, most-owned first:
+The panel gets three album groups:
 
 | Group | What | Actions |
 |---|---|---|
-| **Albums not on MusicBrainz** | Failed attempts on albums that are clearly yours | Harmony import, when there is a Deezer album. Otherwise MusicBrainz search and "add release". Paste a release-group URL to link it by hand. Re-check |
-| **Loose album matches** | `title-fuzzy` links, lower priority | Confirm, or unlink (sends it back to "not on MusicBrainz") |
+| **Pick the release group** | Albums whose title fits several release groups (a tie, §13: ~334 owned) | The tied groups as ranked suggestions (type, year, track count, whether it has a Deezer edition). One click links the album |
+| **Albums not on MusicBrainz** | Failed attempts on albums that are clearly yours (~730 owned) | Harmony import, when there is a Deezer album. Otherwise MusicBrainz search and "add release". Paste a release-group URL to link it by hand. "Not on MusicBrainz, leave it". Re-check |
+| **Loose album matches** | `TitleFuzzy` links, lower priority (17 owned) | Confirm, or unlink (sends it back to "not on MusicBrainz") |
+
+- **One row per artist, collapsed**, ordered by how many of the artist's albums
+  need a person. Hearts of Space alone has 69 and Sinitus Tempo 52; one card
+  per album would bury everything else.
+- **A person's answer sticks.** A pick, a pasted release group, a confirm and
+  "leave it" are stored as manual choices and no rebuild overrides them. Today
+  the builder rewrites every owned album's `albumIdentities` entry on each
+  build, so this needs a manual marker the builder respects (§12).
 
 [Harmony](https://harmony.pulsewidth.org.uk/) takes a store release (a Deezer
 URL or a barcode) and prepares a MusicBrainz import from it. Wherever
@@ -571,10 +625,24 @@ builds the link and re-checks afterwards.
   - *Done*
   - *Failed*: pick another source
 - **In *Needs source*, the row offers:**
-  - a list of candidate editions (track count, quality, date, availability)
+  - a ranked list of candidates (below), each with its evidence and track
+    count, quality, date, availability
   - pasting a Deezer URL (reuses `DeezerAlbumLink`)
   - **Open in slskd** (`slskd.noggog.ing`), with "artist album" copied to the
     clipboard, or pre-filled if slskd supports it
+- **Where candidates come from.** Gathered per wanted release group when the
+  row needs a source, from every source there is:
+  - the stored discography's Deezer editions (§5), with their match method
+  - a live Deezer album search by artist and title, for what the artist's
+    Deezer page doesn't list (another artist credit, a duplicate Deezer
+    artist page)
+  - later, an slskd search: folders, with format and file count
+- **Ranking is a guide, not a decision.** Candidates are ordered by evidence,
+  strongest first: direct MusicBrainz link; barcode of one of the group's
+  releases; title at listing level; title at record level with the same year
+  and track count; near title; search only. Each shows why it is there
+  ("MusicBrainz links it", "barcode of the 2015 CD", "12 tracks, same year").
+  Only the rule in D4 picks unasked.
 - `DownloadService` only processes rows that have a chosen source.
 - The manual paste-a-link path (`PurchaseService.AddManual`) becomes just
   another way to choose a source.
@@ -656,7 +724,7 @@ decision wins, and any conflict is logged.
 | 1 | Artist resolution + reconciliation panel + inventory of every name-keyed store **(done; inventory is §1)** | Adds data, no re-key | **Report:** resolved, ambiguous and missing artists |
 | 2 | Discography + matcher (by MBID); every album attempted, failures and loose matches in the panel, Harmony import links (§6.1) | Adds a collection | **Report:** match rates per method across the library, via `POST /api/dev/discography/match?count=N` and `GET /api/dev/discography/report` |
 | 3 | Re-key migration (§8) | **Yes** | Stores keyed by MBID; pending store |
-| 4 | Wanted list + Downloads page source picking | Yes | D4 |
+| 4 | Wanted list + Downloads page source picking: ranked candidates from every source, auto-pick only on a direct MusicBrainz link, picks remembered as `manual` editions | Yes | D4, §7 |
 | 5 | Browse and Discover on release groups with editions | No | §7 |
 | 6 | Later: Navidrome adapter; slskd as a real source; the panel's "Contribute to MusicBrainz" group (Harmony release actions, §6.1) | — | — |
 | — | **Write MBID tags into downloaded files.** Proposed to move earlier, alongside Phase 4 (see §11) | — | — |
@@ -704,46 +772,60 @@ Resolved:
 
 - **Hearts of Space** is pinned to MusicBrainz artist
   `bf2b19b7-9c0b-497f-bf4f-e9517c717279`, not treated as an umbrella artist.
-- **Auto-picking a source:** yes, but only when there is exactly one
-  high-confidence candidate (D4).
+- **Auto-picking a source:** only on exactly one direct MusicBrainz link whose
+  title agrees and that is available (D4). Barcodes and titles are
+  suggestions (decided 2026-09-28, after barcodes returned other records).
 - **Default edition:** none. When there are several, the user picks (D4).
 - **Deezer-only albums** (`deezer:` keys): never in Discover. They only appear
   in the collapsed "Other Deezer releases" section on the artist page (§7).
 
-## 12. Handoff: picking up Phase 2
+## 12. Handoff: finishing Phase 2
 
-For whoever continues this. Read §5 (discography and matching), D2 to D4, and
-§6.1 (album reconciliation) first. The Phase 2 deliverable is the match-rate
-report in §10.
+For whoever continues this. Read D2 to D4, §5 (the built discography, including
+its "Built" block), §6.1 (album reconciliation) and §13 (what the first full
+run found) first.
 
-**Where things stand**
+**Where things stand (2026-09-28)**
 
 - **Artists are settled.** `artistResolutions` holds one resolution per library
   artist: per name, or per Plex artist when a name is shared
-  (`{name}#plex:{key}`, `LibraryArtist`). The MBID to use for an artist is
-  `ArtistResolution.Mbid` whenever the status is `Resolved` (High or Medium)
-  or `Pinned`.
-- **Today's app still runs on names and the old links.** Nothing reads
-  resolutions except the Reconcile page. Phase 2 must not change what Browse,
-  Discover or downloads do; it adds the discography and the report beside
-  them.
-- **The cache is warm.** Release groups (`musicbrainz:release-groups:{mbid}`),
-  releases (`musicbrainz:releases:{mbid}`, with barcodes and url-rels) and URL
-  lookups are already in `sourceCache` for every resolved artist. The first
-  Phase 2 pass should cost few MusicBrainz requests.
+  (`{name}#plex:{key}`, `LibraryArtist`). An artist's MBID is
+  `ArtistResolution.Mbid` when the status is `Pinned`, or `Resolved` at High
+  or Medium.
+- **Every settled artist has a discography** (`artistDiscography`, 4,110 docs),
+  built by `ArtistDiscographyBuilder`, rebuilt daily as each expires by
+  `DiscographyService`. Each doc holds the release groups with their Deezer
+  editions (`DeezerEditionMatcher`), the unmatched Deezer albums, and `owned`:
+  each owned album with its release group or null, and the tied groups when
+  there is a tie (`OwnedAlbumMatcher`).
+- **Owned albums are 91% matched** (10,656 of 11,726), also written to the
+  catalog's `albumIdentities`, which the metadata archive reads. §13 has why
+  the rest missed.
+- **The panel's album groups are built** (§6.1): pick among tied groups,
+  Harmony import or paste for albums not on MusicBrainz, confirm or unlink
+  loose matches. A person's answer is a manual `albumIdentities` entry that no
+  rebuild overrides.
+- **Nothing user-facing reads discographies yet.** Browse, Discover and
+  downloads still run on names and the old Deezer links. Phase 2 must keep it
+  that way; the switch is Phases 4 and 5.
+- **Deployed:** everything up to commit `a347e1b` (owned matching). The album
+  groups are not deployed.
 
-**Suggested order for Phase 2**
+**Next**
 
-1. ~~The `artistDiscography` store~~ **done** (§5).
-2. ~~The Deezer ↔ release-group matcher~~ **done** (§5). Run
-   `POST /api/dev/discography/match` against the live library and read the
-   report before tuning anything.
-3. ~~Owned albums → `albumIdentities`~~ **done** (§5), and the old backfill
-   is deleted.
-4. ~~The report endpoints~~ **done**. Next come the panel's album groups and
-   the Harmony import links (§6.1).
-5. **Optional, cheap:** artist-id verification against merges (§8.2.1),
-   added to the monthly identity check.
+1. **Deploy, then rebuild everything** (`POST /api/dev/discography/match?all=true`,
+   about 85 minutes). Until each artist is rebuilt, its tied albums show as
+   "not on MusicBrainz": the tie candidates are only recorded by a build. The
+   report's `owned` section gains `manual` and `tied`; expect the listing-level
+   tie-break to settle some of the ~334 ties.
+2. **Work the panel**, most-affected artists first.
+3. **Optional, cheap:** artist-id verification against MusicBrainz merges
+   (§8.2.1), added to the monthly identity check. And the Plex album year as a
+   tie-break, which needs the catalog sync to store it.
+
+**After Phase 2:** Phase 3 (the re-key, §8) before Phase 4 (source picking,
+D4 and §7), so picks are stored against MBIDs. The Miley Cyrus → MILEY rename
+(§11) is the argument.
 
 **Conventions in this codebase that bit us**
 
@@ -756,6 +838,10 @@ report in §10.
   passes in `using var _ = MusicBrainzGate.Background();`.
 - **"No answer" is not "nothing".** A null from a client means the source didn't
   answer. It must never be stored as a miss.
+- **Stored records must read back.** `artistDiscography` is System.Text.Json
+  under `data`; add new fields as optional constructor parameters so older
+  docs still deserialise (`ArtistDiscographyRepo.FromDocument` returns null on
+  a shape it can't read, and that artist silently waits for its next rebuild).
 - **Plex tests flake.** One `Plex*Tests` failure in roughly eight full runs is
   pre-existing; re-run before chasing it.
 - **HTTP clients are tested with `LoopbackHttpServer`** (tests project) against
@@ -763,9 +849,28 @@ report in §10.
 
 **Verifying against the live deployment**
 
-- The dev panel (Other page) can mint an API token. With it, an agent can call
-  `/api/dev/identity/report` and `/api/dev/identity/reconcile`, and the Phase 2
-  report endpoints once they exist, to read real numbers without screenshots.
+- **Address:** `http://192.168.1.232:43105`, plain HTTP on the LAN. The public
+  URL `https://mycelium.noggog.ing` sits behind Pangolin's SSO and answers any
+  script with a 302 to its login, whatever token it carries.
+- **Token:** `Authorization: Bearer <token>`. Dev endpoints need a dev user's
+  token, minted on the dev panel (Other page). The owner keeps one at
+  `/mnt/bigssd/Repos/LifeWiki/tidal-to-plex/.secrets/myc-dev-token.txt`; ask
+  before reading it. Strip the file's trailing newline.
+- **Useful calls:**
+  - `GET /api/dev/discography/report`: rates, the `owned` section, and the pass
+    status
+  - `GET /api/dev/discography/artists?limit=N`: every artist in brief, worst
+    matched first
+  - `GET /api/dev/discography/artist/{mbid}`: one discography;
+    `POST` rebuilds it now
+  - `POST /api/dev/discography/match?count=N&all=true`: a pass. `all=true`
+    rebuilds everything from the cache in about 85 minutes; a first build
+    without the cache took 13 hours
+  - `GET /api/artists/sources?artist=<name>`: an artist's Deezer and
+    MusicBrainz links, to find an MBID by name
+- **Auditing.** The §13 analyses downloaded every discography through the two
+  endpoints above and classified misses offline. That is cheap (a few minutes,
+  no source requests) and is the way to check a matcher change.
 
 ## 13. Findings from the first full run (2026-09-28)
 
@@ -830,9 +935,33 @@ candidates (§6.1).
 **Roughly a third of official records are not on Deezer at all.** That argues
 for slskd as a real second source alongside Phase 4, not "later".
 
-**Not yet done:** the same audit for owned albums (Plex only), once owned
-matching (§5) has run across the library. That is the audit that concerns the
-library directly.
+**Owned albums** (after the rebuild with owned matching, 2026-09-28 21:43 UTC;
+a rebuild of all 4,110 artists from the cache took 85 minutes): 10,656 of
+11,726 have a release group (90.9%): 10,639 by title, 17 by near title, 0 kept
+from the old backfill. Why the other 1,070 didn't match:
+
+| Cause | Albums | Share |
+|---|---|---|
+| On the artist's Deezer page, not on MusicBrainz | 511 | 48% |
+| A tie between release groups | 334 | 31% |
+| Not found on either | 173 | 16% |
+| Artist has 3 or fewer release groups on MusicBrainz | 46 | 4% |
+| Near-title and spacing cases | 6 | 1% |
+
+- **Ties are the fixable part.** `NormalizeRecord` drops any trailing bracket
+  that isn't a different recording, so *Sun* ties with the EP *Sun
+  (sampler)* and *Torches* with *Torches (Redux)*, both core. Other ties are an
+  album and an EP of one name (*NE-HI*, *Power of the Dragonflame*), or
+  MusicBrainz duplicates (*The Beatles* 1968 against *The Beatles (White
+  Album)* 2000). Proposed tie-breaks, in order: an exact title at listing
+  level (`Normalize`) before record level; the album year from Plex, which the
+  catalog doesn't store yet; Album over EP.
+- **On Deezer, not on MusicBrainz** (305 artists) are Harmony import candidates:
+  Deezer-only singles, meditation and frequency albums (Sinitus Tempo 52, Sat-Chit).
+  Some are on MusicBrainz under another artist credit (*Relaxin' With the
+  Miles Davis Quintet* belongs to "The Miles Davis Quintet").
+- **Hearts of Space** accounts for 69: its radio programmes ("PGM 920 -
+  Bhajan") aren't release groups of the pinned artist.
 
 Scripts used (read-only, over the dev endpoints): download every discography
 from `GET /api/dev/discography/artists` and `/artist/{mbid}`, then classify
