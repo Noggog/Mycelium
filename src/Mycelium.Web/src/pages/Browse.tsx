@@ -12,6 +12,7 @@ import {
   getRatings,
   getRecommendedBy,
   rate,
+  removeLibraryAlbum,
   seedArtist,
   unblockAlbum,
   type AlbumVerdict,
@@ -39,7 +40,7 @@ import { MergeAlbumPane } from '../components/MergeAlbumPane'
 import { PlexRatingStats } from '../components/PlexRatingStats'
 import {
   IconApprove, IconBlock, IconCheck, IconClear, IconDownload, IconIndifferent, IconReject, IconSkip,
-  IconWrench, Spinner,
+  IconTrash, IconWrench, Spinner,
 } from '../components/icons'
 import { isDeezerBusy } from '../api/deezer'
 import { getCollections } from '../api/collections'
@@ -618,6 +619,8 @@ function AlbumSubRow({
   onMerge,
   onBlock,
   onUnblock,
+  onRemove,
+  removed,
 }: {
   a: ArtistAlbumItem
   busy: boolean
@@ -629,6 +632,11 @@ function AlbumSubRow({
   onMerge: (a: ArtistAlbumItem) => void
   onBlock: (a: ArtistAlbumItem) => void
   onUnblock: (a: ArtistAlbumItem) => void
+  // Dev only — absent for everyone else, which is what hides the button.
+  onRemove?: (a: ArtistAlbumItem) => void
+  // Removed this session. The row still reads as owned until the next catalog sync notices the files
+  // are gone, so it's marked here instead of offering the remove again.
+  removed: boolean
 }) {
   const accent = useArtAccent(a.imageUrl)
   const accentStyle = accent ? ({ '--art-accent': accent } as CSSProperties) : undefined
@@ -647,25 +655,39 @@ function AlbumSubRow({
           {a.year && <span className="album-year">{a.year}</span>}
         </div>
         <div className="disc-actions" onClick={(e) => e.stopPropagation()}>
-          {a.owned ? (
-            // The marker doubles as the way into the copy we have — a new tab, so the discography (and
-            // any preview playing under it) stays put. Plain text when the album's Plex rating key
-            // isn't captured yet, or Plex couldn't be reached to build the link.
-            a.plexUrl ? (
-              <a
-                className="album-owned album-owned-link"
-                href={a.plexUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={`Open “${a.album}” in Plex`}
-              >
-                <IconCheck size={15} /> In library ↗
-              </a>
-            ) : (
-              <span className="album-owned" title="Already in your library">
-                <IconCheck size={15} /> In library
-              </span>
-            )
+          {a.owned && removed ? (
+            <span className="album-state">Removed</span>
+          ) : a.owned ? (
+            <>
+              {/* The marker doubles as the way into the copy we have — a new tab, so the discography
+                  (and any preview playing under it) stays put. Plain text when the album's Plex rating
+                  key isn't captured yet, or Plex couldn't be reached to build the link. */}
+              {a.plexUrl ? (
+                <a
+                  className="album-owned album-owned-link"
+                  href={a.plexUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Open “${a.album}” in Plex`}
+                >
+                  <IconCheck size={15} /> In library ↗
+                </a>
+              ) : (
+                <span className="album-owned" title="Already in your library">
+                  <IconCheck size={15} /> In library
+                </span>
+              )}
+              {onRemove && (
+                <button
+                  className="disc-btn block"
+                  title="Remove from library — trash the files, withdraw likes, block for everyone"
+                  disabled={busy}
+                  onClick={() => onRemove(a)}
+                >
+                  <IconTrash size={15} />
+                </button>
+              )}
+            </>
           ) : a.blocked ? (
             // Blocked for everyone — it's filtered out of all the feeds, and shown here (the one place
             // a block is reviewable) purely so it can be lifted again.
@@ -802,7 +824,31 @@ function ArtistAlbums({ artist }: { artist: string }) {
       queryClient.invalidateQueries({ queryKey: ['feed'] })
     },
   })
-  const busy = rateAlbum.isPending || clearAlbum.isPending || setBlocked.isPending
+  // Dev only: take an owned album out of the library. Confirmed first — it moves files on disk (to the
+  // trash, so it's undoable by hand, but not from here).
+  const { user } = useAuth()
+  const [removed, setRemoved] = useState<Set<string>>(() => new Set())
+  const removeAlbum = useMutation({
+    mutationFn: (a: ArtistAlbumItem) => removeLibraryAlbum(a.artist.artistName, a.album),
+    onSuccess: (_, a) => {
+      setRemoved((cur) => new Set(cur).add(a.album))
+      invalidate()
+      queryClient.invalidateQueries({ queryKey: ['feed'] })
+    },
+    onError: (e) => window.alert(e instanceof Error ? e.message : String(e)),
+  })
+  const confirmRemove = (a: ArtistAlbumItem) => {
+    if (
+      window.confirm(
+        `Remove “${a.album}” from the library?\n\nIts files move to the library trash, everyone's likes ` +
+          'on it are withdrawn, and it is blocked so it won’t be offered or downloaded again.',
+      )
+    ) {
+      removeAlbum.mutate(a)
+    }
+  }
+
+  const busy = rateAlbum.isPending || clearAlbum.isPending || setBlocked.isPending || removeAlbum.isPending
 
   // Reading the discography is a live Deezer call (the listing, plus a lookup per unowned release), so
   // it can take a few seconds on a cold artist — a spinner, not a static line, or the wait reads as a
@@ -887,6 +933,8 @@ function ArtistAlbums({ artist }: { artist: string }) {
               onMerge={setMerging}
               onBlock={(album) => setBlocked.mutate({ a: album, blocked: true })}
               onUnblock={(album) => setBlocked.mutate({ a: album, blocked: false })}
+              onRemove={user?.isDev ? confirmRemove : undefined}
+              removed={removed.has(a.album)}
             />
           ))}
         </section>

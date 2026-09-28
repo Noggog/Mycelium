@@ -1636,6 +1636,29 @@ api.MapDelete("/albums/block", async (string artist, string album, DiscoveryEngi
     .RequireAuthorization()
     .WithName("UnblockAlbum");
 
+// Take an owned album out of the library for good (dev only — it moves library files). Its files go to
+// the library trash, every like on it is withdrawn, and it's blocked for everyone. Deleting the files by
+// hand isn't enough: the likes survive, and the reconcile reads a liked album that has left the library
+// as one to download again.
+api.MapPost("/dev/albums/remove", async (
+        string artist, string album, HttpContext http, LibraryAlbumRemover remover, DiscoveryEngine engine) =>
+    {
+        if (string.IsNullOrWhiteSpace(artist) || string.IsNullOrWhiteSpace(album))
+        {
+            return Results.BadRequest("Artist and album are both required.");
+        }
+        var username = http.User.FindFirst("preferred_username")?.Value;
+        var removal = await remover.Remove(artist, album, username);
+        if (!removal.Removed)
+        {
+            return Results.Conflict(removal.Refusal);
+        }
+        await engine.BlockAlbum(username, artist, album);
+        return Results.Ok(new { removal.FilesMoved, removal.MovedTo, removal.LikesCleared });
+    })
+    .RequireAuthorization("DevUser")
+    .WithName("RemoveLibraryAlbum");
+
 // --- Plex account linking -------------------------------------------------------------------
 // Playlists, star ratings and play history are all per-Plex-account. Creating playlists with the
 // server's own token would file every user's playlists in the owner's sidebar and filter them by the

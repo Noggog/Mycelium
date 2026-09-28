@@ -376,6 +376,27 @@ export async function unblockAlbum(artist: string, album: string): Promise<void>
   }
 }
 
+// What removing an album from the library did (mirrors POST /api/dev/albums/remove).
+export interface AlbumRemoval {
+  filesMoved: number
+  // The trash folder the files went to — where to look to undo it.
+  movedTo: string | null
+  likesCleared: number
+}
+
+// Take an owned album out of the library for good (dev only). Its files go to the library trash, every
+// user's like on it is withdrawn so the downloader doesn't fetch it straight back, and it's blocked for
+// everyone. A refusal (path map missing, files unreachable, …) moves nothing and comes back as the error.
+export async function removeLibraryAlbum(artist: string, album: string): Promise<AlbumRemoval> {
+  const params = new URLSearchParams({ artist, album })
+  const res = await fetch(`/api/dev/albums/remove?${params}`, { method: 'POST' })
+  if (!res.ok) {
+    const why = res.status === 409 ? await res.text() : `${res.status} ${res.statusText}`
+    throw new Error(`Couldn’t remove ${album}: ${why.replace(/^"|"$/g, '')}`)
+  }
+  return (await res.json()) as AlbumRemoval
+}
+
 // Merge a missing album into one already in the library under a different title. Records a durable
 // match override (honoured by the reconcile and the missing-album diff), so the album stops being
 // offered anywhere and never reaches the downloader.

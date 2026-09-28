@@ -262,14 +262,22 @@ public class UpgradeMatchKeeper
     /// The album's Plex rating key, looked up under the act the library files it under (which for a
     /// collaboration differs from the artist whose discography surfaced it). Null when it isn't listed.
     /// </summary>
-    internal static async Task<int?> AlbumRatingKey(IArtistCatalogRepo catalog, PurchaseItem item)
+    internal static Task<int?> AlbumRatingKey(IArtistCatalogRepo catalog, PurchaseItem item) =>
+        AlbumRatingKey(
+            catalog, new[] { item.AlbumArtist ?? item.Artist.ArtistName, item.Artist.ArtistName }, item.Album);
+
+    /// <summary>
+    /// The same lookup for an album named directly: the first of <paramref name="acts"/> that files a
+    /// record matching <paramref name="album"/> wins.
+    /// </summary>
+    internal static async Task<int?> AlbumRatingKey(
+        IArtistCatalogRepo catalog, IReadOnlyCollection<string> acts, string? album)
     {
-        var acts = new[] { item.AlbumArtist ?? item.Artist.ArtistName, item.Artist.ArtistName };
         var keys = await catalog.GetAlbumPlexRatingKeys(acts);
 
         // The stored titles are Plex's; the row's is Deezer's. Match the way ownership does — at record
         // granularity, since the copy is filed under whatever name Plex gave it, decoration and all.
-        var wanted = AlbumTitleMatcher.NormalizeRecord(item.Album ?? "");
+        var wanted = AlbumTitleMatcher.NormalizeRecord(album ?? "");
         foreach (var act in acts)
         {
             if (keys.TryGetValue(act, out var byTitle))

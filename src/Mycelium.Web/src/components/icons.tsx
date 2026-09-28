@@ -148,6 +148,18 @@ export function IconDownload(props: IconProps) {
   )
 }
 
+// Trash — a bin with a lid. Removing an owned album from the library (dev only): unlike the stop sign,
+// which says "don't offer this", it acts on files that are already on disk.
+export function IconTrash(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 7h16M9 7V4h6v3" />
+      <path d="M6 7l1 13h10l1-13" />
+      <path d="M10 11v5M14 11v5" />
+    </Svg>
+  )
+}
+
 // Undo — a curved arrow doubling back, the "move an ordered album back to queued" action.
 export function IconUndo(props: IconProps) {
   return (

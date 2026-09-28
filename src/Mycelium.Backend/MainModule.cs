@@ -117,6 +117,8 @@ public class MainModule : Autofac.Module
         builder.RegisterType<LibraryTrash>().AsSelf().SingleInstance();
         builder.RegisterType<UpgradeMatchKeeper>().AsSelf().SingleInstance();
         builder.RegisterType<UpgradeSwap>().AsSelf().SingleInstance();
+        // Taking an owned album out of the library for good — the same path map and trash as an upgrade.
+        builder.RegisterType<LibraryAlbumRemover>().AsSelf().SingleInstance();
 
         // Post-download Plex rescan (PlexLibraryScanner auto-registers as ILibraryScanner via the
         // assembly scan below). Off unless PLEX_RESCAN_AFTER_DOWNLOAD is set; debounce defaults to 5m,

@@ -190,13 +190,13 @@ public class UpgradeSwap
         }
 
         // Read before the move: afterwards the files aren't there to locate it by.
-        var albumDir = AlbumFolder(present);
+        var albumDir = AlbumFolders.FolderOf(present, _paths);
 
         // An album outside the main library root came from a drop folder, so it is consolidated
         // rather than upgraded in place — see the class summary. Falling back to in-place when no
         // destination can be named keeps a nameable case from becoming a scatter across the root.
         var consolidating = albumDir is not null && _config.DownloadDir is { Length: > 0 }
-                            && !IsUnder(albumDir, _config.DownloadDir);
+                            && !AlbumFolders.IsUnder(albumDir, _config.DownloadDir);
         var promoteInto = consolidating
             ? DownloadStaging.ConsolidationTarget(stagedDir, _config.DownloadDir) ?? albumDir
             : albumDir;
@@ -209,7 +209,7 @@ public class UpgradeSwap
         // Consolidating empties the old folder for good, so what Plex doesn't list — cover art, a
         // .cue, a stray log — goes with it rather than being left behind as a husk. An in-place
         // upgrade promotes back into that same folder, so its extras are left exactly where they are.
-        var moving = consolidating ? WholeFolder(albumDir!, present) : present;
+        var moving = consolidating ? AlbumFolders.Owning(albumDir!, present, _logger) : present;
 
         var result = _trash.MoveAside(
             moving,
@@ -241,7 +241,7 @@ public class UpgradeSwap
         {
             // The folder is empty now and nothing will be promoted back into it. Leaving it would
             // leave the drop folder full of hollow artist trees.
-            PruneEmptyFolders(albumDir!);
+            AlbumFolders.PruneEmpty(albumDir!, _paths, _logger);
         }
 
         _logger.LogInformation(
@@ -260,109 +260,6 @@ public class UpgradeSwap
             PreviousFolder = consolidating ? albumDir : null,
         });
         return SwapOutcome.Ok(promoteInto);
-    }
-
-    /// <summary>
-    /// Everything in the folder the old copy occupied, when the album owns that folder outright — so
-    /// a consolidation takes the cover art and the stray .cue along with the tracks. Another album's
-    /// audio sitting in the same folder means this one doesn't own it, and only the files Plex listed
-    /// are taken; our own dot-directories are never swept up either way.
-    /// </summary>
-    private IReadOnlyList<string> WholeFolder(string albumDir, IReadOnlyList<string> present)
-    {
-        try
-        {
-            var all = Directory.EnumerateFiles(albumDir, "*", SearchOption.AllDirectories)
-                .Where(f => !IsOurs(albumDir, f))
-                .ToArray();
-            var known = present.ToHashSet(StringComparer.Ordinal);
-            return all.Any(f => DownloadStaging.IsAudio(f) && !known.Contains(f)) ? present : all;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex, "Could not list {Dir}; moving only the files the library knows about", albumDir);
-            return present;
-        }
-    }
-
-    /// <summary>
-    /// Whether a file under <paramref name="albumDir"/> is Mycelium's own bookkeeping — a previous
-    /// removal's trash, or staging. Moving a trash folder into a trash folder is not a tidy-up.
-    /// </summary>
-    private static bool IsOurs(string albumDir, string file) =>
-        Path.GetRelativePath(albumDir, file)
-            .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar })
-            .Any(segment => segment is LibraryTrash.TrashFolder or DownloadStaging.StagingFolder);
-
-    /// <summary>
-    /// Removes the emptied folder and any parent it leaves empty, stopping below the library root it
-    /// sits in — a drop folder organised by contributor should lose the album and the artist, never
-    /// the contributor's own folder if something else of theirs is still in it, and never the root.
-    /// Only ever removes directories that are already empty.
-    /// </summary>
-    private void PruneEmptyFolders(string albumDir)
-    {
-        var root = _paths.LocalPrefixes
-            .Where(prefix => IsUnder(albumDir, prefix))
-            .OrderByDescending(prefix => prefix.Length)
-            .FirstOrDefault();
-        if (root is null)
-        {
-            return;
-        }
-
-        var dir = albumDir;
-        while (IsUnder(dir, root))
-        {
-            try
-            {
-                if (Directory.EnumerateFileSystemEntries(dir).Any())
-                {
-                    return;
-                }
-                Directory.Delete(dir);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Could not remove the emptied folder {Dir}", dir);
-                return;
-            }
-
-            var parent = Path.GetDirectoryName(dir);
-            if (string.IsNullOrEmpty(parent) || parent == dir)
-            {
-                return;
-            }
-            dir = parent;
-        }
-    }
-
-    /// <summary>Whether <paramref name="path"/> lies strictly inside <paramref name="root"/>.</summary>
-    private static bool IsUnder(string? path, string root) =>
-        path is not null
-        && Normalize(path).StartsWith(Normalize(root) + "/", StringComparison.Ordinal);
-
-    private static string Normalize(string path) => path.Replace('\\', '/').TrimEnd('/');
-
-    /// <summary>
-    /// The folder the held copy lives in, to promote the upgrade back into — or null if its files
-    /// share nothing narrower than a library root. Promoting "into" a root would scatter the new
-    /// tracks loose at the top of the library, so that case falls back to the normal promote.
-    /// </summary>
-    private string? AlbumFolder(IReadOnlyList<string> files)
-    {
-        var common = DownloadStaging.CommonDirectory(files);
-        if (common is null)
-        {
-            return null;
-        }
-
-        var normalized = common.Replace('\\', '/').TrimEnd('/');
-        var isRootOrAbove = _paths.LocalPrefixes.Any(root =>
-            root.Equals(normalized, StringComparison.Ordinal)
-            || root.StartsWith(normalized + "/", StringComparison.Ordinal));
-        return isRootOrAbove ? null : common;
     }
 
     /// <summary>
