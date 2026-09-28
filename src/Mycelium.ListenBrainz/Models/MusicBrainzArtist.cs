@@ -99,10 +99,3 @@ public class MusicBrainzReleaseGroupBrowse
     [JsonProperty("release-groups")]
     public List<MusicBrainzReleaseGroup> ReleaseGroups { get; set; } = new();
 }
-
-/// <summary>Envelope of a <c>/ws/2/release-group</c> search: <c>{ "release-groups": [ ... ] }</c>.</summary>
-public class MusicBrainzReleaseGroupSearchResult
-{
-    [JsonProperty("release-groups")]
-    public List<MusicBrainzReleaseGroup> ReleaseGroups { get; set; } = new();
-}

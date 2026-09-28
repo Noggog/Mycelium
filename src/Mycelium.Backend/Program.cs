@@ -1219,19 +1219,6 @@ api.MapPost("/dev/archive/harvest-playlists", async (PlaylistHarvester harvester
     .RequireAuthorization("DevUser")
     .WithName("DevHarvestPlaylists");
 
-// --- Dev panel: album identity backfill ---
-// Runs a slice of the MusicBrainz release-group backfill now rather than waiting for the daily pass.
-// Deliberately bounded and dev-gated: MusicBrainz allows about one request a second, so the slice
-// size is also roughly its duration in seconds. Safe to press repeatedly — an album already answered
-// for, hit or miss, is never asked about again.
-api.MapPost("/dev/archive/resolve-album-ids", async (AlbumIdentityResolver resolver, int? count) =>
-    {
-        var result = await resolver.ResolveSome(Math.Clamp(count ?? 50, 1, 5000));
-        return Results.Ok(new { resolved = result.Resolved, missed = result.Missed });
-    })
-    .RequireAuthorization("DevUser")
-    .WithName("DevResolveAlbumIds");
-
 // --- Dev panel: per-user download quality ---
 // Who is allowed to pull down lossless. The list is the app's own user store, which is populated on
 // login — so a user who has never signed in cannot appear here or be given a tier until they do

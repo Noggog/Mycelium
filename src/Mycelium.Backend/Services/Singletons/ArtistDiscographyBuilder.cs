@@ -49,7 +49,25 @@ public record DiscographyReport(
     int DeezerUnmatched,
     IReadOnlyDictionary<string, int> EditionsByMethod,
     int TitleDisagrees,
+    OwnedAlbumReport Owned,
     DiscographyPassStatus Pass);
+
+/// <summary>How the library's own albums matched release groups, across every built discography.</summary>
+/// <param name="Albums">Owned albums by settled artists that have a discography.</param>
+/// <param name="Earlier">Nothing fitted, but the older backfill's release group is on the discography and was kept.</param>
+public record OwnedAlbumReport(int Albums, int Title, int TitleFuzzy, int Earlier, int Unmatched)
+{
+    public static OwnedAlbumReport Of(IEnumerable<OwnedAlbumMatch> owned)
+    {
+        var all = owned.ToList();
+        return new OwnedAlbumReport(
+            all.Count,
+            all.Count(o => o.Method == OwnedAlbumMatchMethod.Title),
+            all.Count(o => o.Method == OwnedAlbumMatchMethod.TitleFuzzy),
+            all.Count(o => o.Method == OwnedAlbumMatchMethod.Earlier),
+            all.Count(o => o.ReleaseGroup is null));
+    }
+}
 
 /// <summary>One built discography in brief, for finding the artists whose matching went worst.</summary>
 public record DiscographySummary(
@@ -64,7 +82,9 @@ public record DiscographySummary(
     int DeezerHigh,
     int DeezerLow,
     int DeezerUnmatched,
-    int TitleDisagrees)
+    int TitleDisagrees,
+    int OwnedAlbums,
+    int OwnedUnmatched)
 {
     public static DiscographySummary Of(ArtistDiscography d)
     {
@@ -82,7 +102,9 @@ public record DiscographySummary(
             editions.Count(e => e.Confidence == EditionConfidence.High),
             editions.Count(e => e.Confidence == EditionConfidence.Low),
             d.UnmatchedDeezer.Count,
-            editions.Count(e => e.TitleDisagrees));
+            editions.Count(e => e.TitleDisagrees),
+            d.Owned?.Count ?? 0,
+            d.Owned?.Count(o => o.ReleaseGroup is null) ?? 0);
     }
 }
 
@@ -90,13 +112,22 @@ public record DiscographySummary(
 /// One MusicBrainz artist to build a discography for, and the Deezer pages whose albums go on it.
 /// Several library artists can resolve to the same MusicBrainz artist; they share one discography.
 /// </summary>
-public record DiscographyTarget(string Mbid, string Name, IReadOnlyList<DeezerIdentity> Deezer);
+/// <param name="LibraryArtists">The library artists resolved to it, whose albums are matched against it.</param>
+public record DiscographyTarget(
+    string Mbid,
+    string Name,
+    IReadOnlyList<DeezerIdentity> Deezer,
+    IReadOnlyList<DiscographyLibraryArtist> LibraryArtists);
+
+/// <summary>A library artist by name, and by Plex artist when the name is shared (see <see cref="LibraryArtist"/>).</summary>
+public record DiscographyLibraryArtist(string Name, int? PlexArtistKey);
 
 /// <summary>
 /// Builds and stores each resolved artist's discography (<see cref="ArtistDiscography"/>): MusicBrainz's
-/// release groups, with the Deezer albums that are editions of them. Read-only as far as the rest of the
-/// app goes, for now: Browse, Discover and downloads still run on names and Deezer until later phases
-/// switch them over.
+/// release groups, with the Deezer albums that are editions of them. Each build also records which
+/// release group every owned album by the artist is (<see cref="OwnedAlbumMatcher"/>), in the catalog's
+/// <c>albumIdentities</c>, which the metadata archive reads. Nothing else reads discographies yet: Browse,
+/// Discover and downloads still run on names and Deezer until later phases switch them over.
 ///
 /// <para><b>Sources.</b> Release groups and releases come through <see cref="SourceCache"/>, under the same
 /// keys the identity check fills, so the first build of an already-checked artist costs no MusicBrainz
@@ -221,6 +252,7 @@ public partial class ArtistDiscographyBuilder
         {
             var targets = await Targets();
             await _discographies.DeleteAllExcept(targets.Select(t => t.Mbid).ToList());
+            var owned = await _catalog.GetOwnedAlbumArtists();
 
             var expiresAt = await _discographies.GetExpiresAt();
             var now = _time.GetUtcNow();
@@ -245,7 +277,7 @@ public partial class ArtistDiscographyBuilder
                 {
                     // A rebuild that is due is due because its answers are old: ask again.
                     var fresh = expiresAt.TryGetValue(target.Mbid, out var at) && at <= now;
-                    if (await Build(target, fresh) is null)
+                    if (await Build(target, fresh, owned) is null)
                     {
                         Interlocked.Increment(ref _unreachable);
                     }
@@ -314,16 +346,22 @@ public partial class ArtistDiscographyBuilder
             }
 
             var first = artist.First();
-            targets.Add(new DiscographyTarget(artist.Key, first.Name ?? first.Artist, deezer));
+            targets.Add(new DiscographyTarget(
+                artist.Key,
+                first.Name ?? first.Artist,
+                deezer,
+                artist.Select(r => new DiscographyLibraryArtist(r.Artist, r.PlexArtistKey)).ToList()));
         }
         return targets;
     }
 
     /// <summary>
-    /// Gathers, matches and stores one artist's discography. Null, with nothing stored, when a source
-    /// didn't answer part of it.
+    /// Gathers, matches and stores one artist's discography, then records which release group each of
+    /// the library's albums by it is. Null, with nothing stored, when a source didn't answer part of it.
     /// </summary>
-    internal async Task<ArtistDiscography?> Build(DiscographyTarget target, bool fresh)
+    /// <param name="owned">The library's albums (<see cref="IArtistCatalogRepo.GetOwnedAlbumArtists"/>), read once per pass.</param>
+    internal async Task<ArtistDiscography?> Build(
+        DiscographyTarget target, bool fresh, IReadOnlyDictionary<string, IReadOnlyList<OwnedAlbumArtist>>? owned = null)
     {
         var groups = await _cache.GetOrFetch(
             $"musicbrainz:release-groups:{target.Mbid}",
@@ -382,6 +420,22 @@ public partial class ArtistDiscographyBuilder
         var (matched, unmatched) = DeezerEditionMatcher.Match(
             groups, releases, listing, searchOnly, linked, byBarcode, rejected);
 
+        owned ??= await _catalog.GetOwnedAlbumArtists();
+        var ownedMatches = new List<(ArtistKey Artist, List<OwnedAlbumMatch> Matches)>();
+        foreach (var libraryArtist in target.LibraryArtists)
+        {
+            var library = LibraryArtist.For(libraryArtist.Name, owned.GetValueOrDefault(libraryArtist.Name) ?? [])
+                .FirstOrDefault(a => a.PlexArtistKey == libraryArtist.PlexArtistKey);
+            if (library is null || library.Albums.Count == 0)
+            {
+                continue;
+            }
+
+            var key = new ArtistKey(libraryArtist.Name);
+            var earlier = await _catalog.GetAlbumReleaseGroups(key);
+            ownedMatches.Add((key, OwnedAlbumMatcher.Match(library.Id, library.Albums, matched, earlier)));
+        }
+
         var now = _time.GetUtcNow();
         var discography = new ArtistDiscography(
             target.Mbid,
@@ -390,8 +444,15 @@ public partial class ArtistDiscographyBuilder
             now,
             now + Lifetime(groups.Select(g => g.FirstReleaseDate)),
             matched,
-            unmatched);
+            unmatched,
+            ownedMatches.SelectMany(o => o.Matches).ToList());
         await _discographies.Put(discography);
+
+        foreach (var (artist, matches) in ownedMatches)
+        {
+            await _catalog.SetAlbumReleaseGroups(
+                artist, matches.ToDictionary(m => m.Title, m => m.ReleaseGroup, StringComparer.OrdinalIgnoreCase));
+        }
         return discography;
     }
 
@@ -520,6 +581,7 @@ public partial class ArtistDiscographyBuilder
             unmatched,
             Enum.GetValues<EditionMatchMethod>().ToDictionary(m => m.ToString(), m => editions.Count(e => e.Method == m)),
             editions.Count(e => e.TitleDisagrees),
+            OwnedAlbumReport.Of(built.SelectMany(d => d.Owned ?? [])),
             GetStatus());
     }
 

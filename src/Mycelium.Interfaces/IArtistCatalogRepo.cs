@@ -77,27 +77,24 @@ public interface IArtistCatalogRepo
     Task<Dictionary<string, Dictionary<string, int>>> GetAlbumPlexRatingKeys(IReadOnlyCollection<string> artists);
 
     /// <summary>
-    /// Albums that have no MusicBrainz release group resolved yet, on artists that <em>do</em> have an
-    /// MBID — the only ones worth asking about, since the lookup is scoped to the artist.
-    ///
-    /// <para>An album is a gap until it has been asked about once, hit or miss. A miss is recorded
-    /// like a hit (see <see cref="SetAlbumReleaseGroup"/>) so the backfill converges instead of
-    /// re-asking about the same unfindable records for ever.</para>
+    /// The release group recorded for each of an artist's owned albums, by title (case-insensitive). A
+    /// null value is an album that was matched against the discography and fitted nothing.
     /// </summary>
-    Task<AlbumIdentityGap[]> GetAlbumsWithoutReleaseGroup(int limit);
+    Task<Dictionary<string, string?>> GetAlbumReleaseGroups(ArtistKey artist);
 
     /// <summary>
-    /// Records the outcome of one lookup. A null <paramref name="releaseGroupMbid"/> is a recorded
-    /// miss, not a no-op: it is what stops the album coming back as a gap next pass.
+    /// Records the release group of each album given, replacing what was recorded for those titles and
+    /// leaving the artist's other albums alone (a name shared by two acts is written once per act). A
+    /// null MBID records that nothing fitted.
     ///
-    /// <para>Written to its own field rather than into the album list, so a Plex sync — which rewrites
-    /// the titles and their quality on every pass — can't wipe weeks of rate-limited lookups.</para>
+    /// <para>Written to its own field rather than into the album list, so a Plex sync, which rewrites
+    /// the titles and their quality on every pass, can't wipe it.</para>
     /// </summary>
-    Task SetAlbumReleaseGroup(string artist, string album, string? releaseGroupMbid);
+    Task SetAlbumReleaseGroups(ArtistKey artist, IReadOnlyDictionary<string, string?> releaseGroups);
 
     /// <summary>
-    /// Forgets every album release group resolved for an artist, hits and misses alike, so the backfill
-    /// asks again. For when the artist's MBID changes: each lookup was scoped to the old one.
+    /// Forgets every album release group recorded for an artist. For when the artist's MBID changes:
+    /// each was matched against the old one's discography.
     /// </summary>
     Task ClearAlbumReleaseGroups(ArtistKey artist);
 
@@ -196,11 +193,3 @@ public interface IArtistCatalogRepo
 public record CatalogSyncResult(
     int Upserted, int MarkedAbsent, int TotalPresent, IReadOnlyList<string> NewlyPresent);
 
-/// <summary>
-/// One artist's albums that still need a MusicBrainz release group looked up.
-/// </summary>
-/// <param name="ArtistMbid">
-/// The artist's own MBID. Always present — an artist without one produces no gaps, because the
-/// lookup is scoped by it and an unscoped album-title search is not trustworthy enough to store.
-/// </param>
-public record AlbumIdentityGap(string Artist, string ArtistMbid, IReadOnlyList<string> Albums);

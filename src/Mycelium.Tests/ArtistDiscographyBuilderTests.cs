@@ -72,6 +72,8 @@ public class ArtistDiscographyBuilderTests
         // Deezer renumbered the album MusicBrainz links to.
         _deezer.GetAlbum(100).Returns(Album(101, "Somewhere in Time (2015 Remaster)"));
         _deezer.GetAlbumByUpc(Arg.Any<string>()).Returns(new DeezerUpcLookup(null));
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>());
+        _catalog.GetAlbumReleaseGroups(Arg.Any<ArtistKey>()).Returns(new Dictionary<string, string?>());
     }
 
     private void Resolve(
@@ -266,5 +268,44 @@ public class ArtistDiscographyBuilderTests
         ArtistDiscographyRepo.FromDocument(doc).Should().BeEquivalentTo(discography);
         JsonSerializer.Serialize(discography, new JsonSerializerOptions(JsonSerializerDefaults.Web))
             .Should().Contain("\"method\":\"MbLink\"").And.Contain("\"confidence\":\"High\"");
+    }
+
+    [Fact]
+    public async Task Owned_albums_get_their_release_groups_on_the_discography_and_the_catalog()
+    {
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>
+        {
+            ["Iron Maiden"] = [new("Powerslave (Remastered)", null), new("Home Tapes", null)],
+        });
+
+        var discography = await BuildMaiden();
+
+        discography.Owned.Should().BeEquivalentTo(new[]
+        {
+            new OwnedAlbumMatch("Powerslave (Remastered)", "Iron Maiden", "rg-powerslave", OwnedAlbumMatchMethod.Title),
+            new OwnedAlbumMatch("Home Tapes", "Iron Maiden", null, null),
+        });
+        await _catalog.Received(1).SetAlbumReleaseGroups(
+            new ArtistKey("Iron Maiden"),
+            Arg.Is<IReadOnlyDictionary<string, string?>>(d =>
+                d["Powerslave (Remastered)"] == "rg-powerslave" && d["Home Tapes"] == null));
+        (await _sut.Report()).Owned.Should().Be(new OwnedAlbumReport(2, 1, 0, 0, 1));
+    }
+
+    [Fact]
+    public async Task Each_act_of_a_shared_name_matches_only_its_own_albums()
+    {
+        _resolutions.Seed(new ArtistResolution(
+            "Doldrums", ArtistResolutionStatus.Resolved, ResolutionConfidence.High, Maiden, "Doldrums", null, null,
+            1, [], "", Start, PlexArtistKey: 7));
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>
+        {
+            ["Doldrums"] = [new("Powerslave", 7), new("Somewhere in Time", 8)],
+        });
+
+        var target = (await _sut.Targets()).Single();
+        var discography = await _sut.Build(target, fresh: false);
+
+        discography!.Owned!.Select(o => o.Title).Should().Equal("Powerslave");
     }
 }

@@ -68,10 +68,8 @@ public class ArchiveWiringTests : IDisposable
     [InlineData(typeof(IUserPlaylistRepo))]
     // The library's track listing, which is what lets an album file carry a real one.
     [InlineData(typeof(ILibraryTrackRepo))]
-    // The album-identity backfill, which gives albums the only identifier on their file that is stable
-    // forever. Reached by the Backend scan; its config is registered by hand alongside the archive's.
-    [InlineData(typeof(AlbumIdentityResolver))]
-    [InlineData(typeof(AlbumIdentityConfig))]
+    // What gives albums the only identifier on their file that is stable forever (albumIdentities).
+    [InlineData(typeof(ArtistDiscographyBuilder))]
     [InlineData(typeof(IMusicBrainzApi))]
     public void Archive_services_resolve(Type service)
     {

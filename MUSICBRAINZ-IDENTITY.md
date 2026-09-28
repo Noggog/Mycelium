@@ -376,6 +376,15 @@ unresolved"*, so it shows in the panel.
 >   MusicBrainz again. Barcode lookups are cached as `deezer:upc:{barcode}`
 >   (90 days found, 30 missing) and followed album links as
 >   `deezer:album:{id}`. The Deezer listing is fetched fresh.
+> - **Owned albums are matched in the same build** (`OwnedAlbumMatcher`). A
+>   group answers to its own title, its releases' titles and its Deezer editions'
+>   titles, at record level. Several groups answering → the one core group, or
+>   unmatched. Then near titles. Results go on the discography (`owned`, with
+>   the method) and into the catalog's `albumIdentities`. An id from the old
+>   backfill is kept (`Earlier`) only if its group is on this discography.
+>   `AlbumIdentityService`, `AlbumIdentityResolver`, `AlbumIdentityConfig`,
+>   `/api/dev/archive/resolve-album-ids` and `SearchReleaseGroup` are deleted.
+>   The report has an `owned` section.
 > - **Invalidation isn't wired yet.** A changed MBID, a Deezer album that fits no
 >   group in the nightly sync, and a Re-check button don't expire anything yet.
 >   `all=true` on the pass rebuilds everything from the cache.
@@ -672,6 +681,24 @@ after Phase 2 (whether matching is good enough to drive downloads).
   fail to link, and MusicBrainz merges and deletions (§8.2.1). Library ids
   (Plex rating keys now, Navidrome ids later) are *addresses* the adapters
   keep, never keys in Mycelium's own data.
+- **What counts as "core".** Today it is Album or EP with no secondary type.
+  The first full run (§13) showed that this counts bootleg-only release groups
+  and 1960s regional editions, and leaves out studio albums MusicBrainz tags
+  Soundtrack (*Help!*, *Magical Mystery Tour*). Proposed: core means at least
+  one official release, and Soundtrack is allowed. Settle before Browse shows
+  it (Phase 5), since the default filter above depends on it.
+- **Classical composers.** MusicBrainz credits a composer on every recording of
+  their work, so Tchaikovsky's "discography" is 1,751 core release groups of
+  other people's performances. Leave them out of match rates, group them by
+  performer, or treat them as umbrella artists? Undecided.
+- **Artist renames break name keys, today.** On 2026-09-28 Plex's agent renamed
+  "Miley Cyrus" to "MILEY". The catalog refresh marked the old name absent,
+  and reconcile re-queued six liked albums that were still on disk, which
+  downloaded again over the same folders. The re-key (Phase 3) is the real fix.
+  Two guards proposed until then, deferred for now: detect a rename in the
+  catalog sync (same Plex artist rating key under a new name), and only
+  re-queue an InLibrary row once the album has been missing for two refreshes
+  and isn't owned under any artist.
 
 Resolved:
 
@@ -711,9 +738,8 @@ report in §10.
 2. ~~The Deezer ↔ release-group matcher~~ **done** (§5). Run
    `POST /api/dev/discography/match` against the live library and read the
    report before tuning anything.
-3. **Owned albums → `albumIdentities`** from the same data. Then retire
-   `AlbumIdentityService`, `AlbumIdentityResolver`, its dev endpoint and
-   `SearchReleaseGroup` (§5, owned albums).
+3. ~~Owned albums → `albumIdentities`~~ **done** (§5), and the old backfill
+   is deleted.
 4. ~~The report endpoints~~ **done**. Next come the panel's album groups and
    the Harmony import links (§6.1).
 5. **Optional, cheap:** artist-id verification against merges (§8.2.1),
@@ -741,3 +767,74 @@ report in §10.
   `/api/dev/identity/report` and `/api/dev/identity/reconcile`, and the Phase 2
   report endpoints once they exist, to read real numbers without screenshots.
 
+## 13. Findings from the first full run (2026-09-28)
+
+Numbers from the first library-wide discography pass (3,893 of 4,110 artists
+built when read), before owned albums were matched.
+
+**Cost.** First build about 5 artists a minute, so about 12 hours for the
+library, mostly one Deezer lookup per barcode. A rebuild from the cache takes
+about 1 second per artist. 11 artists went unanswered; none errored.
+
+**Match rates** (core = Album or EP, no secondary type):
+
+| | Count | Share |
+|---|---|---|
+| Core release groups | 47,544 | |
+| …with a high-confidence edition | 21,996 | 46% |
+| …with only title matches | 9,129 | 19% |
+| …with no Deezer edition | 16,419 | 35% |
+| Deezer albums unmatched | 48,343 | 34% of 143,680 |
+
+By method: MbLink 51,683, Upc 16,371, Title 22,957, TitleFuzzy 3,122, Search
+1,204. The title check demoted 1,225 link and barcode matches.
+
+**Wrong high-confidence matches exist.** Before the title check: *Otherness*
+(EP) linked by MusicBrainz to the box set "Lullabies To Violaine - Volume 2";
+*Aikea-Guinea* and *Hotel Amour* answered by barcode with other records. Links
+and barcodes are strong, not infallible.
+
+**Why core groups had no Deezer edition** (16,807 at the time of the analysis):
+
+| Cause | Share |
+|---|---|
+| No counterpart on the artist's Deezer page | 76% |
+| Non-Latin title, no counterpart | 6% |
+| Words of one title contained in the other (mostly classical noise) | 8% |
+| Same title placed on another group (an EP and an LP of one name) | 5% |
+| Half or more words shared (mostly different records) | 2% |
+| Same title left unplaced | 1% |
+| Differs only in brackets or spacing | 1% |
+| No Deezer page, or an empty one | 2% |
+| Numbering (Vol./Volume, II/2, Pt./Part) | 0.2% |
+
+- **Deezer really lacks them.** A Deezer album search by artist and title for 40
+  random records of the biggest bucket found 0.
+- **Concentrated.** Half of the misses come from 100 artists and a third from
+  25. Classical composers and orchestras alone are about 4,000 (Tchaikovsky
+  1,147, London Symphony Orchestra 832, Debussy 727, Ravel 641).
+- **Matcher fixes worth making, about 2% of misses:** fold accents and
+  apostrophes when comparing ("Everything's Alright" / "Everythings
+  Alright", "Andalucía" / "Andalucia"), normalise numbering, and compare with
+  spaces removed as a last step ("GreenSky BlueTree"). Looser containment rules
+  are not worth it: nearly all of those pairs are different records.
+- **An empty or missing Deezer page** (waterfront dining, Impossible Nothing)
+  usually means a wrong or missing Deezer artist link. They belong on the panel.
+
+**Unmatched Deezer albums** are mostly MusicBrainz's gaps, not the matcher's:
+in the 20-artist sample, 174 of 222 were singles (new releases, remixes,
+live cuts), and two artists MusicBrainz barely knows (Eamonn Watt: 1 release
+group against 91 Deezer releases) made up half. These are Harmony import
+candidates (§6.1).
+
+**Roughly a third of official records are not on Deezer at all.** That argues
+for slskd as a real second source alongside Phase 4, not "later".
+
+**Not yet done:** the same audit for owned albums (Plex only), once owned
+matching (§5) has run across the library. That is the audit that concerns the
+library directly.
+
+Scripts used (read-only, over the dev endpoints): download every discography
+from `GET /api/dev/discography/artists` and `/artist/{mbid}`, then classify
+each core group without an edition by its likeliest counterpart among the
+artist's unmatched Deezer albums.

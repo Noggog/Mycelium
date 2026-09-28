@@ -165,7 +165,14 @@ public static partial class DeezerEditionMatcher
                     .OrderBy(e => e.Method)
                     .ThenBy(e => e.ReleaseDate, StringComparer.Ordinal)
                     .ToList(),
-                rejected.GetValueOrDefault(g.Id!)?.Order().ToList() ?? []))
+                rejected.GetValueOrDefault(g.Id!)?.Order().ToList() ?? [],
+                editions
+                    .Where(r => r.ReleaseGroup!.Id == g.Id && r.Title is { Length: > 0 }
+                                && !string.Equals(r.Title, g.Title, StringComparison.OrdinalIgnoreCase))
+                    .Select(r => r.Title!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.Ordinal)
+                    .ToList()))
             .ToList();
 
         var unmatched = listing
@@ -219,7 +226,7 @@ public static partial class DeezerEditionMatcher
     /// A word only one of them has may not mark a different recording: "Aces High (Live)" is not a near
     /// "Aces High".
     /// </summary>
-    private static bool Near(IReadOnlySet<string> a, IReadOnlySet<string> b)
+    internal static bool Near(IReadOnlySet<string> a, IReadOnlySet<string> b)
     {
         var (shorter, longer) = a.Count <= b.Count ? (a, b) : (b, a);
         if (shorter.Count == 0
@@ -237,7 +244,7 @@ public static partial class DeezerEditionMatcher
         return (double)shared / (a.Count + b.Count - shared) >= NearTitleOverlap;
     }
 
-    private static IReadOnlySet<string> Words(string key) =>
+    internal static IReadOnlySet<string> Words(string key) =>
         NonWord().Split(key).Where(w => w.Length > 0).ToHashSet();
 
     private static int? Year(string? date) =>

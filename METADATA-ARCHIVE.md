@@ -551,26 +551,23 @@ handle that can be withdrawn, renumbered, or region-locked, and the whole point 
 identifier is that it can be trusted years from now. MBID is the only identifier in the system that
 is stable forever, which is the same argument that already justified keeping the artist's.
 
-Three constraints shaped the implementation:
+**How the ids are found (since 2026-09-28).** Each artist's discography is built from MusicBrainz
+(`ArtistDiscographyBuilder`, see `MUSICBRAINZ-IDENTITY.md` §5), and owned albums are matched against
+its release groups locally by record-level title (`OwnedAlbumMatcher`). That costs no request per
+album. It replaced a one-search-per-album backfill (`AlbumIdentityService`, removed), which searched
+under whatever MBID the artist's name resolved to at the time, and so could file an album under the
+wrong act. An id that backfill found is kept only when the release group is on the artist's
+discography.
 
-- **1 request/second.** MusicBrainz's published limit, enforced by the existing client. A library of
-  any size is therefore *hours*. So this is a backfill that converges over days
-  (`AlbumIdentityService`, daily, `ALBUM_MBID_BATCH` albums per pass, default 2000 ≈ 37 minutes) and
-  not a sweep that completes. There is no cursor: a gap is defined as "not asked about yet", so a pass
-  simply picks up where the last one stopped, and a crash mid-pass costs nothing.
-- **A wrong id is worse than no id** — it is invisible, permanent, and would send a future migration
-  to the wrong record. Two guards: the search is scoped by the artist's own MBID (*Greatest Hits*
-  matches thousands globally and one within a discography), and a hit whose title isn't an exact
-  match is discarded. MusicBrainz scores loosely; taking the top hit would file *OK Computer* under
-  *Kid A*.
-- **A miss must be recorded, a failure must not.** MusicBrainz genuinely lacks some records; left
-  unrecorded they would be re-asked every pass for ever and the albums behind them would never come
-  up. But a *transport* failure says nothing about whether the record exists, so it leaves the album
-  as a gap — writing a miss on a network blip would retire it from the backfill permanently.
+- **A wrong id is worse than no id**: it is invisible, permanent, and would send a future migration
+  to the wrong record. So matching is scoped to the artist's own discography (*Greatest Hits* matches
+  thousands of records globally and one within a discography), and a title that fits several of its
+  release groups is left unmatched.
+- **A miss is recorded, a failure is not.** An album nothing fits is stored without an MBID. If
+  MusicBrainz or Deezer doesn't answer, nothing is stored for the artist at all.
 
 Stored in its own `albumIdentities` field on the artist doc, deliberately not folded into `albums` or
-`albumQuality`: those are rewritten wholesale by every Plex sync, which would erase weeks of
-rate-limited lookups.
+`albumQuality`: those are rewritten wholesale by every Plex sync.
 
 ### Not done
 

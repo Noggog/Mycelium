@@ -141,7 +141,7 @@ public class MusicBrainzArtistResolver
         await _catalog.SetMusicBrainzIdentity(new ArtistKey(artistName), identity, isOverride: true);
         if (previous != null && previous.Value.Identity.Mbid != identity.Mbid)
         {
-            // Resolved under the old artist's MBID, so they belong to the old artist.
+            // Matched against the old artist's discography, so they belong to the old artist.
             await _catalog.ClearAlbumReleaseGroups(new ArtistKey(artistName));
         }
         await _cache.RemoveAsync(NameCacheKey(artistName));

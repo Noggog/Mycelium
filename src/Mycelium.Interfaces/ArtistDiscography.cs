@@ -74,6 +74,10 @@ public record DeezerEdition(
 /// <param name="SecondaryTypes">"Live", "Compilation", "Remix" and so on. Empty for a plain studio record.</param>
 /// <param name="FirstReleaseDate">"2024-04-12", "2024-04", "2024", or null.</param>
 /// <param name="Rejected">Deezer album ids a person said are not this album. Never matched to it again.</param>
+/// <param name="ReleaseTitles">
+/// Titles its releases carry that differ from the group's own: a group is named after one edition, and a
+/// library may hold another ("Firewatch Original Soundtrack" in the group "Firewatch Original Score").
+/// </param>
 public record DiscographyReleaseGroup(
     string Mbid,
     string? Title,
@@ -81,7 +85,8 @@ public record DiscographyReleaseGroup(
     IReadOnlyList<string> SecondaryTypes,
     string? FirstReleaseDate,
     IReadOnlyList<DeezerEdition> Editions,
-    IReadOnlyList<long> Rejected)
+    IReadOnlyList<long> Rejected,
+    IReadOnlyList<string>? ReleaseTitles = null)
 {
     /// <summary>
     /// An official album or EP with no secondary type: what an artist page shows open, and what the
@@ -91,6 +96,32 @@ public record DiscographyReleaseGroup(
     public bool IsCore =>
         PrimaryType is "Album" or "EP" && SecondaryTypes.Count == 0;
 }
+
+/// <summary>How an owned album was tied to a release group.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum OwnedAlbumMatchMethod
+{
+    /// <summary>The record-level title equals the group's, one of its releases', or one of its Deezer editions'.</summary>
+    Title,
+
+    /// <summary>A near title, by the same rule Deezer albums are held to. Listed for review.</summary>
+    TitleFuzzy,
+
+    /// <summary>
+    /// Nothing matched now, but the album already had this release group from the older one-search-per-album
+    /// backfill, and the group is on this artist's discography. Kept rather than thrown away.
+    /// </summary>
+    Earlier,
+}
+
+/// <summary>One album the library owns, and the release group it is, if any.</summary>
+/// <param name="LibraryArtist">The library artist it is filed under (<see cref="ArtistResolution.Id"/>).</param>
+/// <param name="ReleaseGroup">The release group MBID. Null when nothing on the discography fits.</param>
+public record OwnedAlbumMatch(
+    string Title,
+    string LibraryArtist,
+    string? ReleaseGroup,
+    OwnedAlbumMatchMethod? Method);
 
 /// <summary>A Deezer album on the artist's Deezer page that matched no release group.</summary>
 public record UnmatchedDeezerAlbum(long AlbumId, string? Title, string? RecordType, string? ReleaseDate);
@@ -106,6 +137,10 @@ public record UnmatchedDeezerAlbum(long AlbumId, string? Title, string? RecordTy
 /// artist shares its name with another act, since the name's Deezer page may be the other act's.
 /// Links and barcodes still find editions without one.
 /// </param>
+/// <param name="Owned">
+/// The library's albums by this artist, each with the release group it is. Also written to the catalog's
+/// <c>albumIdentities</c>, which the metadata archive reads.
+/// </param>
 public record ArtistDiscography(
     string Mbid,
     string? Name,
@@ -113,7 +148,8 @@ public record ArtistDiscography(
     DateTimeOffset BuiltAt,
     DateTimeOffset ExpiresAt,
     IReadOnlyList<DiscographyReleaseGroup> ReleaseGroups,
-    IReadOnlyList<UnmatchedDeezerAlbum> UnmatchedDeezer);
+    IReadOnlyList<UnmatchedDeezerAlbum> UnmatchedDeezer,
+    IReadOnlyList<OwnedAlbumMatch>? Owned = null);
 
 /// <summary>Stored <see cref="ArtistDiscography"/>s, one per MusicBrainz artist.</summary>
 public interface IArtistDiscographyRepo

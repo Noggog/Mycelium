@@ -28,17 +28,6 @@ public interface IMusicBrainzApi
     Task<MusicBrainzArtist?> GetArtist(string mbid);
 
     /// <summary>
-    /// Resolve one of an artist's albums to its release-group MBID, or null on a miss or error.
-    ///
-    /// <para>Scoped to <paramref name="artistMbid"/> rather than searched by title alone, which is
-    /// what makes the answer trustworthy: "Greatest Hits" matches thousands of records globally and
-    /// exactly one within a given act's discography. An artist we have no MBID for therefore has no
-    /// album MBIDs either — a wrong id is worse than none, since the whole point of storing one is
-    /// that it can be trusted years later.</para>
-    /// </summary>
-    Task<MusicBrainzReleaseGroup?> SearchReleaseGroup(string artistMbid, string title);
-
-    /// <summary>
     /// Every release group credited to the artist — its whole discography as MusicBrainz knows it, with
     /// primary and secondary types and first release dates. Walks every page. Empty when MusicBrainz
     /// has nothing (or no such artist); null when any page went unanswered, never a partial list.
