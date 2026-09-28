@@ -418,6 +418,12 @@ public static partial class AlbumTitleMatcher
     /// must not satisfy a purchase of the other. Everything else in a trailing bracket is dropped at
     /// record granularity, because sources parenthesise the same record every way there is.
     /// </summary>
+    /// <summary>
+    /// Whether a lower-cased word marks a different recording ("live", "remix", "acoustic"): what a loose
+    /// title comparison must not let one title have and the other lack.
+    /// </summary>
+    public static bool IsDistinctRecordingWord(string word) => DistinctRecordings.Contains(word);
+
     private static bool IsDistinctRecording(ReadOnlySpan<char> tail)
     {
         var trimmed = tail.Trim();

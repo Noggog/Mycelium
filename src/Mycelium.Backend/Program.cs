@@ -67,6 +67,10 @@ builder.Services.AddHostedService<AlbumSyncService>();
 // reconciliation page, ahead of keying artists by MBID. Daily; each artist re-checked monthly.
 builder.Services.AddHostedService<ArtistIdentityService>();
 
+// Builds each resolved artist's discography: MusicBrainz release groups with their Deezer editions.
+// Daily, after the identity pass; each artist rebuilt weekly while it is releasing, else every 60-90 days.
+builder.Services.AddHostedService<DiscographyService>();
+
 // Periodically tops up each user's recommendation queue (additive — grows the frontier and refreshes
 // stale similarity edges without clearing pending). Cadence via QUEUE_REPLENISH_INTERVAL_HOURS.
 builder.Services.AddHostedService<QueueReplenishService>();
@@ -1359,6 +1363,31 @@ devIdentity.MapPost("/accept", async (HttpContext http, string artist, string mb
         return Results.Ok(await auditor.Check(artist, null, fresh: false));
     })
     .WithName("DevIdentityAccept");
+
+// ---- Discographies: MusicBrainz release groups matched to Deezer albums (see ArtistDiscographyBuilder).
+// Phase 2 of MUSICBRAINZ-IDENTITY.md. Nothing outside these endpoints reads them yet. ----
+var devDiscography = api.MapGroup("/dev/discography").RequireAuthorization("DevUser");
+
+// Start a pass (single-flight; a second POST returns the running one's status). count caps how many
+// artists it builds; all=true rebuilds every artist, not only the ones never built or due.
+devDiscography.MapPost("/match", (ArtistDiscographyBuilder discographies, int? count, bool? all) =>
+        Results.Ok(discographies.Start(all ?? false, count)))
+    .WithName("DevDiscographyMatch");
+
+devDiscography.MapGet("/report", async (ArtistDiscographyBuilder discographies) =>
+        Results.Ok(await discographies.Report()))
+    .WithName("DevDiscographyReport");
+
+devDiscography.MapGet("/artist/{mbid}", async (string mbid, IArtistDiscographyRepo stored) =>
+        await stored.Get(mbid) is { } discography ? Results.Ok(discography) : Results.NotFound())
+    .WithName("DevDiscographyArtist");
+
+// Rebuild one artist now from what is cached — for checking a matcher change against a real artist.
+devDiscography.MapPost("/artist/{mbid}", async (string mbid, ArtistDiscographyBuilder discographies) =>
+        await discographies.Rebuild(mbid) is { } discography
+            ? Results.Ok(discography)
+            : Results.Problem("No settled library artist has this MBID, or a source didn't answer.", statusCode: 503))
+    .WithName("DevDiscographyRebuild");
 
 // Hand-entered recommendations — pairings no similarity source will ever make (see
 // ManualRecommendations). Each write rebuilds every user's queue, because the queue is precomputed:

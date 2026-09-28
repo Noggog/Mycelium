@@ -1,7 +1,9 @@
 # MusicBrainz as the identity authority
 
-> **Status: Phases 0 and 1 built (2026-09-24); Phases 2+ not started.** See §3
-> and §4 for what shipped. See
+> **Status (2026-09-28): Phases 0 and 1 built and deployed, and the library is
+> reconciled. Phase 2 has started: the discography store, the matcher and the
+> report are built (§5); owned albums and the panel's album groups are next.**
+> Work is on `main`. §12 is the handoff for picking this up. §3 and §4 describe what shipped. See
 > `PLAN.md` for the product vision, `METADATA-ARCHIVE.md` §9.3 for the earlier
 > decision to give owned albums MusicBrainz release-group ids, and
 > `QUALITY-TIERS.md` for the upgrade flow this replaces parts of.
@@ -303,8 +305,16 @@ One queue and one worker for every MusicBrainz call.
 > - **Low:** a name alone. Also a Deezer link whose discography holds none of the
 >   owned albums.
 > - **Tied overlap:** broken by the Deezer link, otherwise Ambiguous.
-> - **Pass rule:** only 5 candidates' discographies are fetched per artist, and
->   if any MusicBrainz call goes unanswered, nothing is stored for that artist.
+> - **Pass rule:** every name-matching candidate's discography is checked, from
+>   a name search that asks for up to 25 acts (`MaxCandidates`). An earlier cap
+>   of 5 hid the right Iconoclast, which came sixth. If any MusicBrainz call
+>   goes unanswered, nothing is stored for that artist.
+> - **Releases as well as release groups.** A release group is named after one
+>   edition. So an owned album that isn't found among the release groups is
+>   looked for among the candidate's releases too ("Firewatch Original
+>   Soundtrack" is a release in the group "Firewatch Original Score"). Releases
+>   come from `BrowseReleases` and are cached as `musicbrainz:releases:{mbid}`.
+>   Phase 2 can reuse that cache: it holds barcodes and url-rels.
 
 Evidence, strongest first:
 
@@ -324,6 +334,45 @@ User pins still win. Unlinking an artist now means *"this artist is
 unresolved"*, so it shows in the panel.
 
 ## 5. Discography and matching (Phase 2)
+
+> **Built: the store, the matcher and the report.** Where things live:
+>
+> | Piece | Code |
+> |---|---|
+> | Model and store | `ArtistDiscography` (Interfaces), `ArtistDiscographyRepo` → Mongo `artistDiscography` |
+> | Matching rules | `DeezerEditionMatcher`, a pure function |
+> | Gathering, pass, report | `ArtistDiscographyBuilder` |
+> | Schedule | `DiscographyService`: daily, 90 minutes after startup. It builds artists with no discography and rebuilds expired ones |
+> | Endpoints | `POST /api/dev/discography/match?count=N&all=`, `GET /api/dev/discography/report`, `GET` and `POST /api/dev/discography/artist/{mbid}` (read one; rebuild one now) |
+>
+> Deviations from the text below:
+>
+> - **Which artists.** Settled resolutions only: Pinned, or Resolved at High or
+>   Medium. Library artists that resolve to one MBID share one discography.
+> - **Stored shape.** The doc sits under `data` as nested fields, with
+>   `expiresAt` also at the top level as a date. The method is an enum sent and
+>   stored by name (`MbLink`, `Upc`, `Title`, `TitleFuzzy`, `Search`).
+>   Confidence is derived from the method, not stored: link and barcode are
+>   high, everything else low. `manual` waits for the panel's album groups.
+> - **Deezer search is not a separate step.** The Deezer side is the artist's
+>   listing plus the albums `SearchArtistAlbums` credits to the same Deezer
+>   artist, as the missing-album diff already does. A title match on one of the
+>   search-only albums is recorded as `Search`.
+> - **No Deezer page for a shared name.** When a library name covers several
+>   Plex artists, the name's Deezer page may be the other act's, so it isn't
+>   used. Links and barcodes still find editions.
+> - **Loose titles.** A near match is: every word of the shorter title (two
+>   words at least) is in the longer, or 80% of the words are shared. A word
+>   that marks a different recording ("live", "remix" and so on) on one side
+>   only rules it out.
+> - **Caching.** Release groups and releases use the identity check's cache
+>   keys, with the activity-based lifetime. A rebuild that is due asks
+>   MusicBrainz again. Barcode lookups are cached as `deezer:upc:{barcode}`
+>   (90 days found, 30 missing) and followed album links as
+>   `deezer:album:{id}`. The Deezer listing is fetched fresh.
+> - **Invalidation isn't wired yet.** A changed MBID, a Deezer album that fits no
+>   group in the nightly sync, and a Re-check button don't expire anything yet.
+>   `all=true` on the pass rebuilds everything from the cache.
 
 New `artistDiscography` collection, one doc per artist MBID:
 
@@ -594,7 +643,8 @@ decision wins, and any conflict is logged.
 | 3 | Re-key migration (§8) | **Yes** | Stores keyed by MBID; pending store |
 | 4 | Wanted list + Downloads page source picking | Yes | D4 |
 | 5 | Browse and Discover on release groups with editions | No | §7 |
-| 6 | Later: Navidrome adapter; write MBID tags into downloaded files; slskd as a real source; the panel's "Contribute to MusicBrainz" group (Harmony release actions, §6.1) | — | — |
+| 6 | Later: Navidrome adapter; slskd as a real source; the panel's "Contribute to MusicBrainz" group (Harmony release actions, §6.1) | — | — |
+| — | **Write MBID tags into downloaded files.** Proposed to move earlier, alongside Phase 4 (see §11) | — | — |
 
 Go/no-go points: after Phase 1 (how many library artists would disappear), and
 after Phase 2 (whether matching is good enough to drive downloads).
@@ -604,11 +654,84 @@ after Phase 2 (whether matching is good enough to drive downloads).
 - **Default MusicBrainz filter** for Browse: official Album/EP/Single open,
   Live/Compilation collapsed. Confirm once real artists are visible.
 - **slskd:** can a pre-filled search be opened by URL? Check before Phase 4.
+- **Move MBID file tagging earlier (proposed, not yet agreed).** Write the
+  MusicBrainz artist and release-group ids into every file Mycelium downloads,
+  as Picard and beets do. The files then carry their own identity to any
+  player: Navidrome reads the tags, and Plex can use them with local
+  metadata. Every album downloaded before this lands is one more file to match
+  later, which argues for doing it with Phase 4 rather than in "later".
+- **The reconciliation panel is permanent.** It is not a migration tool. After
+  the re-key it is the inbox for anything that arrives without an MBID: new
+  library artists, recommendations from sources that lack MBIDs, albums that
+  fail to link, and MusicBrainz merges and deletions (§8.2.1). Library ids
+  (Plex rating keys now, Navidrome ids later) are *addresses* the adapters
+  keep, never keys in Mycelium's own data.
 
 Resolved:
 
+- **Hearts of Space** is pinned to MusicBrainz artist
+  `bf2b19b7-9c0b-497f-bf4f-e9517c717279`, not treated as an umbrella artist.
 - **Auto-picking a source:** yes, but only when there is exactly one
   high-confidence candidate (D4).
 - **Default edition:** none. When there are several, the user picks (D4).
 - **Deezer-only albums** (`deezer:` keys): never in Discover. They only appear
   in the collapsed "Other Deezer releases" section on the artist page (§7).
+
+## 12. Handoff: picking up Phase 2
+
+For whoever continues this. Read §5 (discography and matching), D2 to D4, and
+§6.1 (album reconciliation) first. The Phase 2 deliverable is the match-rate
+report in §10.
+
+**Where things stand**
+
+- **Artists are settled.** `artistResolutions` holds one resolution per library
+  artist: per name, or per Plex artist when a name is shared
+  (`{name}#plex:{key}`, `LibraryArtist`). The MBID to use for an artist is
+  `ArtistResolution.Mbid` whenever the status is `Resolved` (High or Medium)
+  or `Pinned`.
+- **Today's app still runs on names and the old links.** Nothing reads
+  resolutions except the Reconcile page. Phase 2 must not change what Browse,
+  Discover or downloads do; it adds the discography and the report beside
+  them.
+- **The cache is warm.** Release groups (`musicbrainz:release-groups:{mbid}`),
+  releases (`musicbrainz:releases:{mbid}`, with barcodes and url-rels) and URL
+  lookups are already in `sourceCache` for every resolved artist. The first
+  Phase 2 pass should cost few MusicBrainz requests.
+
+**Suggested order for Phase 2**
+
+1. ~~The `artistDiscography` store~~ **done** (§5).
+2. ~~The Deezer ↔ release-group matcher~~ **done** (§5). Run
+   `POST /api/dev/discography/match` against the live library and read the
+   report before tuning anything.
+3. **Owned albums → `albumIdentities`** from the same data. Then retire
+   `AlbumIdentityService`, `AlbumIdentityResolver`, its dev endpoint and
+   `SearchReleaseGroup` (§5, owned albums).
+4. ~~The report endpoints~~ **done**. Next come the panel's album groups and
+   the Harmony import links (§6.1).
+5. **Optional, cheap:** artist-id verification against merges (§8.2.1),
+   added to the monthly identity check.
+
+**Conventions in this codebase that bit us**
+
+- **Enum names on the wire.** Every enum returned to the web app needs its own
+  `[JsonConverter(typeof(JsonStringEnumConverter))]`; there is no global
+  setting. `ArtistResolutionJsonTests` is the pattern.
+- **Build UI mocks from the real C# types**, never hand-written JSON. A
+  hand-written mock hid the enum bug above.
+- **Every MusicBrainz call goes through `MusicBrainzGate`.** Wrap background
+  passes in `using var _ = MusicBrainzGate.Background();`.
+- **"No answer" is not "nothing".** A null from a client means the source didn't
+  answer. It must never be stored as a miss.
+- **Plex tests flake.** One `Plex*Tests` failure in roughly eight full runs is
+  pre-existing; re-run before chasing it.
+- **HTTP clients are tested with `LoopbackHttpServer`** (tests project) against
+  the real client.
+
+**Verifying against the live deployment**
+
+- The dev panel (Other page) can mint an API token. With it, an agent can call
+  `/api/dev/identity/report` and `/api/dev/identity/reconcile`, and the Phase 2
+  report endpoints once they exist, to read real numbers without screenshots.
+

@@ -44,6 +44,8 @@ public class MusicBrainzWiringTests : IDisposable
     [InlineData(typeof(ISourceCacheStore))]
     [InlineData(typeof(ArtistIdentityAuditor))]
     [InlineData(typeof(IArtistResolutionRepo))]
+    [InlineData(typeof(ArtistDiscographyBuilder))]
+    [InlineData(typeof(IArtistDiscographyRepo))]
     public void Resolves(Type service)
     {
         _container.Invoking(c => c.Resolve(service)).Should().NotThrow();
