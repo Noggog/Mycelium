@@ -85,13 +85,12 @@ public class AlbumReconciliation
         _catalog = catalog;
     }
 
-    /// <summary>Every artist with an owned album that needs a person, the most such albums first.</summary>
+    /// <summary>Every artist with an owned album that needs a person, by name.</summary>
     public async Task<IReadOnlyList<AlbumReconcileArtist>> List() =>
         (await _discographies.GetAll())
             .Select(Items)
             .OfType<AlbumReconcileArtist>()
-            .OrderByDescending(a => a.Albums.Count)
-            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(a => a.Name ?? a.Mbid, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
     /// <summary>One artist's albums that need a person, or null when none do.</summary>

@@ -566,9 +566,9 @@ The panel gets three album groups:
 | **Albums not on MusicBrainz** | Failed attempts on albums that are clearly yours (~730 owned) | Harmony import, when there is a Deezer album. Otherwise MusicBrainz search and "add release". Paste a release-group URL to link it by hand. "Not on MusicBrainz, leave it". Re-check |
 | **Loose album matches** | `TitleFuzzy` links, lower priority (17 owned) | Confirm, or unlink (sends it back to "not on MusicBrainz") |
 
-- **One row per artist, collapsed**, ordered by how many of the artist's albums
-  need a person. Hearts of Space alone has 69 and Sinitus Tempo 52; one card
-  per album would bury everything else.
+- **One row per artist, collapsed**, ordered by artist name. Hearts of Space
+  alone has 69 and Sinitus Tempo 52; one card per album would bury everything
+  else.
 - **A person's answer sticks.** A pick, a pasted release group, a confirm and
   "leave it" are stored as manual choices and no rebuild overrides them. Today
   the builder rewrites every owned album's `albumIdentities` entry on each
@@ -830,7 +830,8 @@ run found) first.
    "not on MusicBrainz": the tie candidates are only recorded by a build. The
    report's `owned` section gains `manual` and `tied`; expect the listing-level
    tie-break to settle some of the ~334 ties.
-2. **Work the panel**, most-affected artists first.
+2. **Work the panel.** Artists are listed by name; Hearts of Space (69) and
+   Sinitus Tempo (52) clear the most with a few "Leave it" clicks.
 3. **Optional, cheap:** artist-id verification against MusicBrainz merges
    (§8.2.1), added to the monthly identity check. And the Plex album year as a
    tie-break, which needs the catalog sync to store it.
