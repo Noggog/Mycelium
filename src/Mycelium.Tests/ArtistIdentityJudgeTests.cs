@@ -201,5 +201,8 @@ public class ArtistIdentityJudgeTests
         result.Mbid.Should().Be("german-metal");
         result.CurrentMbid.Should().Be("danish-indie");
         result.DisagreesWithCurrent.Should().BeTrue();
+        // Confident, but the link still names the other act until a person accepts one of them.
+        result.Confidence.Should().Be(ResolutionConfidence.High);
+        result.NeedsAttention.Should().BeTrue();
     }
 }

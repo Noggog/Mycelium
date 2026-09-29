@@ -200,9 +200,15 @@ const GROUPS: { title: string; blurb: string; test: (r: ArtistResolution) => boo
     test: (r) => r.status === 'Ambiguous',
   },
   {
+    title: 'Not the artist linked today',
+    blurb:
+      'The check found a different MusicBrainz artist than the one Mycelium uses now (the "linked today" candidate). Nothing changes until you Accept one of them.',
+    test: (r) => r.status === 'Resolved' && r.confidence !== 'Low' && r.disagreesWithCurrent,
+  },
+  {
     title: 'Name only',
     blurb: 'Matched on the name and nothing else, or on evidence that disagrees. Confirm or correct it.',
-    test: (r) => r.status === 'Resolved',
+    test: (r) => r.status === 'Resolved' && (r.confidence === 'Low' || !r.disagreesWithCurrent),
   },
   {
     title: 'Not on MusicBrainz',

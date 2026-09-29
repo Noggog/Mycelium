@@ -118,13 +118,16 @@ public record ArtistResolution(
         plexArtistKey is { } key ? $"{artist}#plex:{key}" : artist;
 
     /// <summary>
-    /// Whether a person should look at it: anything without an answer, and any answer resting on
-    /// nothing but a name. The reconciliation panel is exactly these.
+    /// Whether a person should look at it: anything without an answer, any answer resting on nothing
+    /// but a name, and any answer that isn't the artist linked today: the check never changes the link
+    /// itself, so until a person accepts one of the two, whatever reads the link uses the other.
+    /// The reconciliation panel is exactly these.
     /// </summary>
     public bool NeedsAttention =>
         Status is ArtistResolutionStatus.Ambiguous or ArtistResolutionStatus.Mixed
             or ArtistResolutionStatus.Missing or ArtistResolutionStatus.Unlinked
-        || Confidence == ResolutionConfidence.Low;
+        || Confidence == ResolutionConfidence.Low
+        || DisagreesWithCurrent;
 
     /// <summary>Whether it resolved to a different artist than the one linked today.</summary>
     public bool DisagreesWithCurrent =>

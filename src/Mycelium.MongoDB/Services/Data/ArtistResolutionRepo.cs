@@ -71,8 +71,21 @@ public class ArtistResolutionRepo : IArtistResolutionRepo
             d => new DateTimeOffset(d[FieldCheckedAt].ToUniversalTime()));
     }
 
+    // Disagreeing with the current link counts too. Records written before it did carry a stored flag
+    // that says otherwise, so the disagreement is asked of the fields themselves.
     public Task<long> CountNeedingAttention() =>
-        Collection.CountDocumentsAsync(Builders<BsonDocument>.Filter.Eq(FieldNeedsAttention, true));
+        Collection.CountDocumentsAsync(Builders<BsonDocument>.Filter.Or(
+            Builders<BsonDocument>.Filter.Eq(FieldNeedsAttention, true),
+            new BsonDocument("$expr", new BsonDocument("$and", new BsonArray
+            {
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + FieldMbid), "string" }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + FieldCurrentMbid), "string" }),
+                new BsonDocument("$ne", new BsonArray
+                {
+                    new BsonDocument("$toLower", "$" + FieldMbid),
+                    new BsonDocument("$toLower", "$" + FieldCurrentMbid),
+                }),
+            }))));
 
     public Task Put(ArtistResolution resolution) =>
         Collection.ReplaceOneAsync(

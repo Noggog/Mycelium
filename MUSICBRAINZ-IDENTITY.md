@@ -500,6 +500,11 @@ A page with an in-app badge count on the nav. No push notifications for now.
 
 - Library artists with no MBID
 - Ambiguous artist candidates (accept with one click)
+- Confident answers that aren't the artist linked today ("Not the artist
+  linked today"). The check never changes the link itself, so until a person
+  accepts one of the two, the discography build reads one and everything else
+  the other. A pin in the Sources tab re-checks the artist, as Accept does, so
+  a pin doesn't leave the old verdict behind
 - Recommended artists dropped because they have no MBID
 - MBIDs that now redirect (MusicBrainz merges): re-key them
 - Owned albums with no release group

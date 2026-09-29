@@ -414,10 +414,13 @@ api.MapGet("/sources/{source}/search",
 
 // Pin an artist to a specific id on one source (sticky override). The pin lands before the response;
 // re-deriving that artist's similarity edges from the corrected id and rebuilding the caller's queue —
-// so the old (wrong) edges drop off — is queued, since a rebuild re-walks every liked artist.
+// so the old (wrong) edges drop off — is queued, since a rebuild re-walks every liked artist. A
+// MusicBrainz or Deezer pin also re-checks the artist's identity (as Accept does), so the stored
+// verdict, which the discography build reads, doesn't go on naming the artist the pin replaced.
 api.MapPost("/artists/sources/{source}",
         async (HttpContext http, string source, string artist, string id,
-            IEnumerable<ISourceIdentityCorrector> correctors, ArtistFollowUpService followUps) =>
+            IEnumerable<ISourceIdentityCorrector> correctors, ArtistFollowUpService followUps,
+            ArtistIdentityAuditor auditor) =>
         {
             var corrector = correctors.FirstOrDefault(c => c.Source == source);
             if (corrector is null) return Results.NotFound();
@@ -426,6 +429,7 @@ api.MapPost("/artists/sources/{source}",
             if (identity is null) return Results.NotFound();
 
             followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
+            await RecheckIdentity(auditor, source, artist);
             return Results.Ok(identity);
         })
     .RequireAuthorization()
@@ -436,13 +440,15 @@ api.MapPost("/artists/sources/{source}",
 // (pinned/detached) identity behind.
 api.MapDelete("/artists/sources/{source}",
         async (HttpContext http, string source, string artist,
-            IEnumerable<ISourceIdentityCorrector> correctors, ArtistFollowUpService followUps) =>
+            IEnumerable<ISourceIdentityCorrector> correctors, ArtistFollowUpService followUps,
+            ArtistIdentityAuditor auditor) =>
         {
             var corrector = correctors.FirstOrDefault(c => c.Source == source);
             if (corrector is null) return Results.NotFound();
 
             await corrector.Clear(new ArtistKey(artist));
             followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
+            await RecheckIdentity(auditor, source, artist);
             return Results.NoContent();
         })
     .RequireAuthorization()
@@ -454,7 +460,7 @@ api.MapDelete("/artists/sources/{source}",
 api.MapPost("/artists/sources/{source}/unlink",
         async (HttpContext http, string source, string artist,
             IEnumerable<ISourceIdentityCorrector> correctors,
-            IRelatedArtistRepo relatedRepo, ArtistFollowUpService followUps) =>
+            IRelatedArtistRepo relatedRepo, ArtistFollowUpService followUps, ArtistIdentityAuditor auditor) =>
         {
             var corrector = correctors.FirstOrDefault(c => c.Source == source);
             if (corrector is null) return Results.NotFound();
@@ -462,6 +468,7 @@ api.MapPost("/artists/sources/{source}/unlink",
             await corrector.Unlink(new ArtistKey(artist));
             await relatedRepo.DeleteAllSources(new ArtistKey(artist));
             followUps.QueueIdentityRefresh(http.User.GetSubject()!, artist);
+            await RecheckIdentity(auditor, source, artist);
             return Results.NoContent();
         })
     .RequireAuthorization()
@@ -1414,6 +1421,16 @@ devIdentity.MapPost("/albums/unlink", async (string artistMbid, string libraryAr
             ? AlbumNotFound(title)
             : Results.NoContent())
     .WithName("DevIdentityAlbumUnlink");
+
+// The identity check reads the MusicBrainz link (a pin is its answer) and the Deezer link (its evidence).
+// It doesn't have to answer: the monthly check still catches the artist up, and the source change stands.
+static async Task RecheckIdentity(ArtistIdentityAuditor auditor, string source, string artist)
+{
+    if (source is "musicbrainz" or "deezer")
+    {
+        await auditor.Check(artist, null, fresh: false);
+    }
+}
 
 static IResult AlbumNotFound(string title) =>
     Results.NotFound(new { error = $"\"{title}\" isn't an owned album on that artist's discography." });
