@@ -115,6 +115,19 @@ public class MusicBrainzApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Looking_up_a_release_brings_its_release_group()
+    {
+        _server.Respond = _ => new Reply(200, """
+            {"id":"r1","title":"Lipphead","release-group":{"id":"rg1","title":"Lipphead","primary-type":"EP"}}
+            """);
+
+        var release = await _sut.GetRelease("r1");
+
+        release!.ReleaseGroup!.Id.Should().Be("rg1");
+        _server.Requests.Single().PathAndQuery.Should().Contain("/ws/2/release/r1?inc=release-groups");
+    }
+
+    [Fact]
     public async Task Looking_up_a_url_finds_the_artist_linked_to_it()
     {
         _server.Respond = _ => new Reply(200, """

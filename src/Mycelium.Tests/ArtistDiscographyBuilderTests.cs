@@ -313,6 +313,111 @@ public class ArtistDiscographyBuilderTests
     }
 
     [Fact]
+    public async Task A_release_credited_to_the_artist_brings_its_group_credited_elsewhere()
+    {
+        // Campfire Songs: the reissue credits Animal Collective, the group the band's earlier name.
+        _musicBrainz.BrowseReleases(Maiden).Returns(
+        [
+            new MusicBrainzRelease
+            {
+                Id = "r-early", Title = "Early Days",
+                ReleaseGroup = new MusicBrainzReleaseGroup { Id = "rg-early", Title = "Early Days", PrimaryType = "Album" },
+            },
+        ]);
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>
+        {
+            ["Iron Maiden"] = [new("Early Days", null)],
+        });
+
+        var discography = await BuildMaiden();
+
+        discography.ReleaseGroups.Select(g => g.Mbid).Should().Contain("rg-early");
+        discography.Owned.Should().Equal(
+            new OwnedAlbumMatch("Early Days", "Iron Maiden", "rg-early", OwnedAlbumMatchMethod.Title));
+    }
+
+    private void LinkDeezerAlbum(long albumId, string releaseId, string groupId, string groupTitle)
+    {
+        _musicBrainz.LookupUrl($"https://www.deezer.com/album/{albumId}").Returns(new MusicBrainzUrl
+        {
+            Relations =
+            [
+                new MusicBrainzRelation { TargetType = "release", Release = new MusicBrainzRelease { Id = releaseId } },
+            ],
+        });
+        _musicBrainz.GetRelease(releaseId).Returns(new MusicBrainzRelease
+        {
+            Id = releaseId, ReleaseGroup = new MusicBrainzReleaseGroup { Id = groupId, Title = groupTitle },
+        });
+    }
+
+    private void OwnCollab(string title = "Side Project")
+    {
+        _deezer.GetAlbums(DeezerMaiden).Returns([Album(200, "Powerslave (2015 Remaster)"), Album(400, title)]);
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>
+        {
+            ["Iron Maiden"] = [new(title, null)],
+        });
+    }
+
+    [Fact]
+    public async Task An_album_nothing_fits_follows_its_Deezer_album_to_a_group_credited_to_someone_else()
+    {
+        // Lipphead: the EP is on Blockhead's Deezer page, and credited on MusicBrainz to the duo.
+        OwnCollab();
+        LinkDeezerAlbum(400, "r-duo", "rg-duo", "Side Project");
+
+        var discography = await BuildMaiden();
+
+        discography.Owned.Should().Equal(
+            new OwnedAlbumMatch("Side Project", "Iron Maiden", "rg-duo", OwnedAlbumMatchMethod.DeezerLink));
+        discography.ReleaseGroups.Select(g => g.Mbid).Should().NotContain("rg-duo");
+        await _catalog.Received(1).SetAlbumIdentities(
+            new ArtistKey("Iron Maiden"),
+            Arg.Is<IReadOnlyCollection<AlbumIdentity>>(d => d.Single() == new AlbumIdentity("Side Project", "rg-duo", false, null)));
+        (await _sut.Report()).Owned.DeezerLink.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_Deezer_link_to_a_group_with_nothing_in_its_title_is_not_followed()
+    {
+        OwnCollab();
+        LinkDeezerAlbum(400, "r-box", "rg-box", "The Complete Recordings");
+
+        var discography = await BuildMaiden();
+
+        discography.Owned!.Single().ReleaseGroup.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_Deezer_link_to_a_group_a_person_unlinked_is_not_followed()
+    {
+        OwnCollab();
+        LinkDeezerAlbum(400, "r-duo", "rg-duo", "Side Project");
+        _catalog.GetAlbumIdentities(new ArtistKey("Iron Maiden")).Returns(new Dictionary<string, AlbumIdentity>
+        {
+            ["Side Project"] = new("Side Project", null, false, ["rg-duo"]),
+        });
+
+        var discography = await BuildMaiden();
+
+        discography.Owned!.Single().ReleaseGroup.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task An_album_the_discography_fits_is_not_looked_up()
+    {
+        _catalog.GetOwnedAlbumArtists().Returns(new Dictionary<string, IReadOnlyList<OwnedAlbumArtist>>
+        {
+            ["Iron Maiden"] = [new("Powerslave", null)],
+        });
+
+        await BuildMaiden();
+
+        await _musicBrainz.DidNotReceive().LookupUrl(Arg.Any<string>());
+    }
+
+    [Fact]
     public async Task Each_act_of_a_shared_name_matches_only_its_own_albums()
     {
         _resolutions.Seed(new ArtistResolution(

@@ -394,6 +394,18 @@ unresolved"*, so it shows in the panel.
 >   MusicBrainz again. Barcode lookups are cached as `deezer:upc:{barcode}`
 >   (90 days found, 30 missing) and followed album links as
 >   `deezer:album:{id}`. The Deezer listing is fetched fresh.
+> - **Groups credited elsewhere.** The release-group browse finds only groups
+>   credited to the artist, so the groups of the artist's own releases are
+>   added (*Campfire Songs*: the reissue credits Animal Collective, the group
+>   the band's earlier name). An owned album that still fits nothing, a tie
+>   included, is looked up by the unmatched Deezer album of the same title:
+>   when MusicBrainz links it to releases of exactly one group, and that
+>   group's title shares a word with the album's, the album is that group
+>   (`OwnedAlbumMatchMethod.DeezerLink`), whoever it is credited to: the duo
+>   *Lipphead* for Blockhead, Zola Jesus for Johnny Jewel's remix EP. Such a
+>   group is not added to the discography. Lookups are cached as
+>   `musicbrainz:url:{deezer url}` (90 days found, 7 missing) and
+>   `musicbrainz:release:{mbid}`.
 > - **Owned albums are matched in the same build** (`OwnedAlbumMatcher`). A
 >   group answers to its own title, its releases' titles and its Deezer editions'
 >   titles, at record level. Several groups answering → the one core group, or

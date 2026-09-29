@@ -43,6 +43,12 @@ public interface IMusicBrainzApi
     Task<MusicBrainzRelease[]?> BrowseReleases(string artistMbid);
 
     /// <summary>
+    /// One release with its release group, by MBID: what a <see cref="LookupUrl"/> hit on a store album
+    /// is an edition of. Null when MusicBrainz has no such release or didn't answer.
+    /// </summary>
+    Task<MusicBrainzRelease?> GetRelease(string mbid);
+
+    /// <summary>
     /// Which MusicBrainz artists and releases link to <paramref name="resource"/> (a Deezer artist or
     /// album page, say). Relations are empty when MusicBrainz has never heard of the URL; null means
     /// it didn't answer. MusicBrainz stores URLs in a normalised form (for Deezer,

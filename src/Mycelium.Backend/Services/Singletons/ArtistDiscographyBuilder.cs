@@ -57,7 +57,9 @@ public record DiscographyReport(
 /// <param name="Earlier">Nothing fitted, but the older backfill's release group is on the discography and was kept.</param>
 /// <param name="Manual">Decided by a person, including albums they said aren't on MusicBrainz.</param>
 /// <param name="Tied">Unmatched because the title fits several release groups; a person picks.</param>
-public record OwnedAlbumReport(int Albums, int Title, int TitleFuzzy, int Earlier, int Unmatched, int Manual = 0, int Tied = 0)
+/// <param name="DeezerLink">Found through MusicBrainz's link to the Deezer album of the same title.</param>
+public record OwnedAlbumReport(
+    int Albums, int Title, int TitleFuzzy, int Earlier, int Unmatched, int Manual = 0, int Tied = 0, int DeezerLink = 0)
 {
     public static OwnedAlbumReport Of(IEnumerable<OwnedAlbumMatch> owned)
     {
@@ -69,7 +71,8 @@ public record OwnedAlbumReport(int Albums, int Title, int TitleFuzzy, int Earlie
             all.Count(o => o.Method == OwnedAlbumMatchMethod.Earlier),
             all.Count(o => o.ReleaseGroup is null),
             all.Count(o => o.Method == OwnedAlbumMatchMethod.Manual),
-            all.Count(o => o.Candidates is { Count: > 0 }));
+            all.Count(o => o.Candidates is { Count: > 0 }),
+            all.Count(o => o.Method == OwnedAlbumMatchMethod.DeezerLink));
     }
 }
 
@@ -139,6 +142,13 @@ public record DiscographyLibraryArtist(string Name, int? PlexArtistKey);
 /// albums out), fetched fresh each build, as the nightly missing-album diff does. Barcode lookups and the
 /// old album ids MusicBrainz links to are cached: neither changes much.</para>
 ///
+/// <para><b>Groups credited elsewhere.</b> The release-group browse only finds groups credited to the
+/// artist. A release credited to the artist can sit in a group credited to an earlier band name or a
+/// project (<i>Campfire Songs</i>), so the groups of the artist's own releases are added too
+/// (<see cref="WithReleaseGroups"/>). An owned album that still fits nothing is looked up by the Deezer
+/// album of the same title: when MusicBrainz links that album to a release, the album is that release's
+/// group, whoever it is credited to (<see cref="FollowDeezerLinks"/>).</para>
+///
 /// <para><b>Lifetime.</b> An artist who released something in the last two years is rebuilt about weekly,
 /// anyone else every 60 to 90 days, with random spread so rebuilds don't all fall due together. A rebuild
 /// that is due asks MusicBrainz again rather than reusing what is cached.</para>
@@ -163,6 +173,12 @@ public partial class ArtistDiscographyBuilder
     private static readonly TimeSpan BarcodeMissingLifetime = TimeSpan.FromDays(30);
 
     private static readonly TimeSpan DeezerAlbumLifetime = TimeSpan.FromDays(90);
+
+    /// <summary>A Deezer album MusicBrainz links to a release, and that release: stable.</summary>
+    private static readonly TimeSpan LinkFoundLifetime = TimeSpan.FromDays(90);
+
+    /// <summary>A Deezer album MusicBrainz doesn't know yet: someone may import it, so asked again sooner.</summary>
+    private static readonly TimeSpan LinkMissingLifetime = TimeSpan.FromDays(7);
 
     private readonly IMusicBrainzApi _musicBrainz;
     private readonly IDeezerApi _deezer;
@@ -389,6 +405,7 @@ public partial class ArtistDiscographyBuilder
         {
             return null;
         }
+        groups = WithReleaseGroups(groups, releases);
 
         var listing = new List<DeezerAlbum>();
         var searchOnly = new HashSet<long>();
@@ -440,7 +457,9 @@ public partial class ArtistDiscographyBuilder
 
             var key = new ArtistKey(libraryArtist.Name);
             var earlier = await _catalog.GetAlbumIdentities(key);
-            ownedMatches.Add((key, OwnedAlbumMatcher.Match(library.Id, library.Albums, matched, earlier), earlier));
+            var matches = OwnedAlbumMatcher.Match(library.Id, library.Albums, matched, earlier);
+            await FollowDeezerLinks(matches, unmatched, earlier, fresh);
+            ownedMatches.Add((key, matches, earlier));
         }
 
         var now = _time.GetUtcNow();
@@ -527,6 +546,109 @@ public partial class ArtistDiscographyBuilder
             }
         }
         return linked;
+    }
+
+    /// <summary>
+    /// The artist's release groups, plus the groups of its own releases the browse left out: a group is
+    /// found by its credit, and a release credited to the artist can sit in a group credited to someone
+    /// else (an earlier band name, a project, the artist with a backing band).
+    /// </summary>
+    internal static MusicBrainzReleaseGroup[] WithReleaseGroups(
+        IReadOnlyList<MusicBrainzReleaseGroup> groups, IReadOnlyList<MusicBrainzRelease> releases)
+    {
+        var known = groups.Select(g => g.Id).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return groups
+            .Concat(releases
+                .Select(r => r.ReleaseGroup)
+                .OfType<MusicBrainzReleaseGroup>()
+                .Where(g => g.Id is { Length: > 0 } id && known.Add(id)))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Settles owned albums nothing on the discography fits, a tie included, by the Deezer album of the
+    /// same title: when MusicBrainz links it to releases of exactly one group, and that group's title
+    /// shares a word with the album's, the album is that group (<see cref="OwnedAlbumMatchMethod.DeezerLink"/>).
+    /// The group may be credited to another artist entirely: a duo the artist is half of, or the original
+    /// artist of a remix EP. A lookup MusicBrainz doesn't answer is skipped; the next build asks again.
+    /// </summary>
+    private async Task FollowDeezerLinks(
+        List<OwnedAlbumMatch> matches,
+        IReadOnlyList<UnmatchedDeezerAlbum> unmatched,
+        IReadOnlyDictionary<string, AlbumIdentity> earlier,
+        bool fresh)
+    {
+        var deezer = unmatched
+            .GroupBy(u => AlbumTitleMatcher.NormalizeRecord(u.Title))
+            .Where(g => g.Key.Length > 0)
+            .ToDictionary(g => g.Key, g => g.Select(u => u.AlbumId).Distinct().ToList());
+
+        for (var i = 0; i < matches.Count; i++)
+        {
+            var match = matches[i];
+            var key = AlbumTitleMatcher.NormalizeRecord(match.Title);
+            if (match.ReleaseGroup is not null
+                || match.Method == OwnedAlbumMatchMethod.Manual
+                || !deezer.TryGetValue(key, out var albumIds))
+            {
+                continue;
+            }
+
+            var rejected = (earlier.GetValueOrDefault(match.Title)?.Rejected ?? [])
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var found = new Dictionary<string, MusicBrainzReleaseGroup>(StringComparer.OrdinalIgnoreCase);
+            foreach (var albumId in albumIds)
+            {
+                foreach (var group in await LinkedReleaseGroups(albumId, fresh))
+                {
+                    if (!rejected.Contains(group.Id!))
+                    {
+                        found.TryAdd(group.Id!, group);
+                    }
+                }
+            }
+
+            if (found.Count == 1
+                && found.Values.Single() is var only
+                && DeezerEditionMatcher.Words(key)
+                    .Overlaps(DeezerEditionMatcher.Words(AlbumTitleMatcher.NormalizeRecord(only.Title))))
+            {
+                matches[i] = match with
+                {
+                    ReleaseGroup = only.Id, Method = OwnedAlbumMatchMethod.DeezerLink, Candidates = null,
+                };
+            }
+        }
+    }
+
+    /// <summary>The groups of the releases MusicBrainz links a Deezer album to. Empty when it links none.</summary>
+    private async Task<List<MusicBrainzReleaseGroup>> LinkedReleaseGroups(long albumId, bool fresh)
+    {
+        var resource = $"https://www.deezer.com/album/{albumId}";
+        var url = await _cache.GetOrFetch(
+            $"musicbrainz:url:{resource}",
+            () => _musicBrainz.LookupUrl(resource),
+            u => u.Relations.Count > 0 ? LinkFoundLifetime : LinkMissingLifetime,
+            fresh);
+
+        var groups = new List<MusicBrainzReleaseGroup>();
+        var releaseIds = (url?.Relations ?? [])
+            .Where(r => r is { TargetType: "release", Ended: false })
+            .Select(r => r.Release?.Id)
+            .OfType<string>()
+            .Distinct();
+        foreach (var releaseId in releaseIds)
+        {
+            var release = await _cache.GetOrFetch(
+                $"musicbrainz:release:{releaseId}",
+                () => _musicBrainz.GetRelease(releaseId),
+                _ => LinkFoundLifetime);
+            if (release?.ReleaseGroup is { Id.Length: > 0 } group)
+            {
+                groups.Add(group);
+            }
+        }
+        return groups;
     }
 
     /// <summary>The Deezer album ids a release links to, from links that haven't ended.</summary>

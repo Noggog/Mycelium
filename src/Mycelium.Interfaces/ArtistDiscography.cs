@@ -118,6 +118,13 @@ public enum OwnedAlbumMatchMethod
     /// group, they said the album isn't on MusicBrainz. No rebuild overrides it.
     /// </summary>
     Manual,
+
+    /// <summary>
+    /// Nothing on the discography fits, but MusicBrainz links the Deezer album of the same title to a
+    /// release, and this is that release's group. The group can be credited to another artist (a duo, a
+    /// project name, the original artist of a remix EP), so it need not be on the discography.
+    /// </summary>
+    DeezerLink,
 }
 
 /// <summary>One album the library owns, and the release group it is, if any.</summary>

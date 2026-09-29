@@ -91,6 +91,12 @@ public class MusicBrainzApi : IMusicBrainzApi
             url, page => page.Releases, page => page.Count);
     }
 
+    public async Task<MusicBrainzRelease?> GetRelease(string mbid)
+    {
+        var url = $"{_endpointInfo.MusicBrainzBaseUri}/ws/2/release/{Uri.EscapeDataString(mbid)}?inc=release-groups&fmt=json";
+        return await Get<MusicBrainzRelease>(url);
+    }
+
     public async Task<MusicBrainzUrl?> LookupUrl(string resource)
     {
         var qs = HttpUtility.ParseQueryString(string.Empty);
