@@ -498,7 +498,10 @@ function AlbumArtistRow({ artist: a, kind }: { artist: AlbumReconcileArtist; kin
   const [open, setOpen] = useState(false)
   const recheck = useMutation({
     mutationFn: () => recheckDiscography(a.mbid),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: RECONCILE_ALBUMS_KEY }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: RECONCILE_ALBUMS_KEY })
+      queryClient.invalidateQueries({ queryKey: RECONCILE_COUNT_KEY })
+    },
   })
 
   const counts = KINDS.filter((k) => a[kindCount(k)] > 0)
@@ -549,7 +552,12 @@ function AlbumArtistRow({ artist: a, kind }: { artist: AlbumReconcileArtist; kin
 function AlbumRow({ artist, album }: { artist: AlbumReconcileArtist; album: AlbumReconcileItem }) {
   const queryClient = useQueryClient()
   const [pasted, setPasted] = useState('')
-  const done = { onSuccess: () => queryClient.invalidateQueries({ queryKey: RECONCILE_ALBUMS_KEY }) }
+  const done = {
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: RECONCILE_ALBUMS_KEY })
+      queryClient.invalidateQueries({ queryKey: RECONCILE_COUNT_KEY })
+    },
+  }
 
   const link = useMutation({ mutationFn: (mbid: string) => linkAlbum(artist.mbid, album, mbid), ...done })
   const leave = useMutation({ mutationFn: () => leaveAlbum(artist.mbid, album), ...done })

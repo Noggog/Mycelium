@@ -101,12 +101,14 @@ export async function getReconcileList(): Promise<ArtistResolution[]> {
   return json(await fetch('/api/dev/identity/reconcile'), 'Failed to load the artists to reconcile')
 }
 
-export async function getReconcileCount(): Promise<number> {
-  const body = await json<{ count: number }>(
-    await fetch('/api/dev/identity/reconcile/count'),
-    'Failed to count the artists to reconcile',
-  )
-  return body.count
+// What the nav badge counts: artists and owned albums that need a person.
+export interface ReconcileCount {
+  artists: number
+  albums: number
+}
+
+export async function getReconcileCount(): Promise<ReconcileCount> {
+  return json(await fetch('/api/dev/identity/reconcile/count'), 'Failed to count what needs reconciling')
 }
 
 function artistParams(artist: string, plexArtistKey: number | null, extra: Record<string, string> = {}) {

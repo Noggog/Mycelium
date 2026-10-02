@@ -93,6 +93,10 @@ public class AlbumReconciliation
             .OrderBy(a => a.Name ?? a.Mbid, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    /// <summary>How many owned albums need a person, across every artist: the nav badge's share.</summary>
+    public async Task<int> Count() =>
+        (await _discographies.GetAll()).Sum(d => Items(d)?.Albums.Count ?? 0);
+
     /// <summary>One artist's albums that need a person, or null when none do.</summary>
     internal static AlbumReconcileArtist? Items(ArtistDiscography d)
     {

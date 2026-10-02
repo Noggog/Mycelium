@@ -1322,9 +1322,10 @@ devIdentity.MapGet("/reconcile", async (ArtistIdentityAuditor auditor) =>
         Results.Ok(await auditor.NeedingAttention()))
     .WithName("DevIdentityReconcile");
 
-// The nav badge: a count, so it can be polled from every page without loading the list.
-devIdentity.MapGet("/reconcile/count", async (IArtistResolutionRepo resolutions) =>
-        Results.Ok(new { count = await resolutions.CountNeedingAttention() }))
+// The nav badge: counts, so it can be polled from every page without loading the lists. Artists and
+// owned albums that need a person both land on the reconciliation page, so both count.
+devIdentity.MapGet("/reconcile/count", async (IArtistResolutionRepo resolutions, AlbumReconciliation albums) =>
+        Results.Ok(new { artists = await resolutions.CountNeedingAttention(), albums = await albums.Count() }))
     .WithName("DevIdentityReconcileCount");
 
 // Check one library artist again now, skipping the cache — for straight after an edit on MusicBrainz.

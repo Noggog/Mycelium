@@ -71,13 +71,15 @@ public class ArtistResolutionRepo : IArtistResolutionRepo
             d => new DateTimeOffset(d[FieldCheckedAt].ToUniversalTime()));
     }
 
-    // Disagreeing with the current link counts too. Records written before it did carry a stored flag
-    // that says otherwise, so the disagreement is asked of the fields themselves.
+    // Disagreeing with the current link counts too, except for a pin: a pin is the answer, and one on a
+    // Plex artist of a shared name differs from the name's link by design. Records written before this
+    // carry a stored flag that says otherwise, so the disagreement is asked of the fields themselves.
     public Task<long> CountNeedingAttention() =>
         Collection.CountDocumentsAsync(Builders<BsonDocument>.Filter.Or(
             Builders<BsonDocument>.Filter.Eq(FieldNeedsAttention, true),
             new BsonDocument("$expr", new BsonDocument("$and", new BsonArray
             {
+                new BsonDocument("$ne", new BsonArray { "$" + FieldStatus, nameof(ArtistResolutionStatus.Pinned) }),
                 new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + FieldMbid), "string" }),
                 new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + FieldCurrentMbid), "string" }),
                 new BsonDocument("$ne", new BsonArray

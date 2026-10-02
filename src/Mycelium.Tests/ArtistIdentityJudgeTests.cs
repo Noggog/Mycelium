@@ -205,4 +205,15 @@ public class ArtistIdentityJudgeTests
         result.Confidence.Should().Be(ResolutionConfidence.High);
         result.NeedsAttention.Should().BeTrue();
     }
+
+    [Fact]
+    public void A_pin_on_one_act_of_a_shared_name_is_not_flagged_for_differing_from_the_names_link()
+    {
+        var pin = new ArtistResolution(
+            "Teeth", ArtistResolutionStatus.Pinned, null, "this-act", "Teeth", null, "the-names-link",
+            2, [], "Pinned by hand.", Now, PlexArtistKey: 7);
+
+        pin.DisagreesWithCurrent.Should().BeTrue();
+        pin.NeedsAttention.Should().BeFalse();
+    }
 }

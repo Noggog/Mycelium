@@ -127,7 +127,7 @@ public record ArtistResolution(
         Status is ArtistResolutionStatus.Ambiguous or ArtistResolutionStatus.Mixed
             or ArtistResolutionStatus.Missing or ArtistResolutionStatus.Unlinked
         || Confidence == ResolutionConfidence.Low
-        || DisagreesWithCurrent;
+        || (DisagreesWithCurrent && Status != ArtistResolutionStatus.Pinned);
 
     /// <summary>Whether it resolved to a different artist than the one linked today.</summary>
     public bool DisagreesWithCurrent =>

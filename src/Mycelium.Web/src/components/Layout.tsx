@@ -203,8 +203,8 @@ function AuthBox() {
   )
 }
 
-// The Reconcile link, for maintainers only, badged with how many artists need a person — the
-// notification that MusicBrainz is missing someone, or can't tell two acts apart.
+// The Reconcile link, for maintainers only, badged with how many artists and owned albums need a
+// person — the notification that MusicBrainz is missing someone or something, or can't tell two apart.
 function ReconcileLink() {
   const { user } = useAuth()
   const isDev = user?.isDev === true
@@ -217,12 +217,13 @@ function ReconcileLink() {
   })
 
   if (!isDev) return null
+  const total = (count?.artists ?? 0) + (count?.albums ?? 0)
   return (
     <NavLink to="/reconcile" className={navClass}>
       Reconcile
-      {count ? (
-        <span className="nav-badge" title={`${count} artist(s) need a look`}>
-          {count}
+      {total ? (
+        <span className="nav-badge" title={`${count!.artists} artist(s) and ${count!.albums} album(s) need a look`}>
+          {total}
         </span>
       ) : null}
     </NavLink>

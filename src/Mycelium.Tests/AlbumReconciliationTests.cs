@@ -71,6 +71,16 @@ public class AlbumReconciliationTests
     }
 
     [Fact]
+    public async Task The_badge_counts_every_album_on_the_page_and_drops_one_once_answered()
+    {
+        (await _sut.Count()).Should().Be(4);
+
+        await _sut.Leave(Maiden, "Iron Maiden", "Garage Demos");
+
+        (await _sut.Count()).Should().Be(3);
+    }
+
+    [Fact]
     public async Task A_pick_is_stored_as_a_manual_choice_and_leaves_the_page()
     {
         await _sut.Link(Maiden, "Iron Maiden", "iron maiden", "rg-maiden");
