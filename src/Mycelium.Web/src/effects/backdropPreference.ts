@@ -38,7 +38,18 @@ function read(): boolean {
   return defaultEnabled()
 }
 
+/**
+ * Mirror the preference onto <html> so CSS-only effects can follow it too. The nebula is a CSS
+ * animation, not a canvas — left running it keeps every backdrop-filter'd panel re-blurring each
+ * frame, which is most of the GPU cost even with the canvases gone.
+ */
+function reflect(v: boolean): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.dataset.backdrop = v ? 'on' : 'off'
+}
+
 let enabled = read()
+reflect(enabled)
 const listeners = new Set<() => void>()
 
 export function getBackdropEnabled(): boolean {
@@ -47,6 +58,7 @@ export function getBackdropEnabled(): boolean {
 
 export function setBackdropEnabled(v: boolean): void {
   enabled = v
+  reflect(v)
   try {
     localStorage.setItem(KEY, v ? '1' : '0')
   } catch {

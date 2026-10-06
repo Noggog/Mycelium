@@ -2948,6 +2948,14 @@ button.detail-chip.via:hover {
   }
 }
 
+/* Effects toggle off (see effects/backdropPreference.ts): hold the nebula and other idle loops
+   still. The nebula sits under every backdrop-filter'd panel, so while it drifts the GPU re-blurs
+   them all every frame. */
+:root[data-backdrop='off'] body::before,
+:root[data-backdrop='off'] .disc-detail-empty .detail-empty-icon {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   body::before,
   .brand,
